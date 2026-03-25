@@ -1,0 +1,251 @@
+import { describe, it, expect, vi, afterEach } from 'vitest'
+import {
+  calculateWinRate,
+  calculateCalibration,
+  calculateConvictionScore,
+  detectTradingStyle,
+  calculateDecayFactor,
+  MIN_TRADES_FOR_ATTESTATION,
+} from '../../src/lib/scorer'
+import type { ResolvedTrade } from '../../src/types/polymarket'
+
+// ── Helpers ───────────────────────────────────────────────────────
+
+function makeTrade(
+  overrides: Partial<ResolvedTrade> = {}
+): ResolvedTrade {
+  return {
+    id: 'test-id',
+    marketId: 'market-1',
+    marketQuestion: 'Test question?',
+    side: 'YES',
+    entryPrice: 0.7,
+    size: 100,
+    outcome: 'won',
+    pnl: 30,
+    resolvedAt: '2025-01-01T00:00:00Z',
+    transactionHash: '0x123',
+    ...overrides,
+  }
+}
+
+// ── calculateWinRate ──────────────────────────────────────────────
+
+describe('calculateWinRate', () => {
+  it('returns 0 for empty array', () => {
+    expect(calculateWinRate([])).toBe(0)
+  })
+
+  it('returns 1.0 for all wins', () => {
+    const trades = [
+      makeTrade({ outcome: 'won' }),
+      makeTrade({ outcome: 'won' }),
+    ]
+    expect(calculateWinRate(trades)).toBe(1)
+  })
+
+  it('returns 0.0 for all losses', () => {
+    const trades = [
+      makeTrade({ outcome: 'lost' }),
+      makeTrade({ outcome: 'lost' }),
+    ]
+    expect(calculateWinRate(trades)).toBe(0)
+  })
+
+  it('returns correct ratio for mixed results', () => {
+    const trades = [
+      makeTrade({ outcome: 'won' }),
+      makeTrade({ outcome: 'won' }),
+      makeTrade({ outcome: 'lost' }),
+    ]
+    expect(calculateWinRate(trades)).toBeCloseTo(0.6667, 3)
+  })
+
+  it('returns 0.5 for even split', () => {
+    const trades = [
+      makeTrade({ outcome: 'won' }),
+      makeTrade({ outcome: 'lost' }),
+    ]
+    expect(calculateWinRate(trades)).toBe(0.5)
+  })
+})
+
+// ── calculateCalibration ──────────────────────────────────────────
+
+describe('calculateCalibration', () => {
+  it('returns 0 for empty array', () => {
+    expect(calculateCalibration([])).toBe(0)
+  })
+
+  it('returns near 1.0 for perfect calibration (YES at 0.9, won)', () => {
+    const trades = [
+      makeTrade({ side: 'YES', entryPrice: 0.9, outcome: 'won' }),
+    ]
+    // predictedProb = 0.9, outcome = 1
+    // brier = (0.9 - 1)^2 = 0.01
+    // calibration = 1 - 0.01 = 0.99
+    expect(calculateCalibration(trades)).toBeCloseTo(0.99, 2)
+  })
+
+  it('returns near 1.0 for perfect calibration (NO at 0.1, won)', () => {
+    // NO side at entryPrice 0.1 → predictedProb = 1 - 0.1 = 0.9
+    // Won → outcome = 1
+    // brier = (0.9 - 1)^2 = 0.01
+    const trades = [
+      makeTrade({ side: 'NO', entryPrice: 0.1, outcome: 'won' }),
+    ]
+    expect(calculateCalibration(trades)).toBeCloseTo(0.99, 2)
+  })
+
+  it('returns < 0.75 for worse-than-chance (YES at 0.9, lost)', () => {
+    const trades = [
+      makeTrade({ side: 'YES', entryPrice: 0.9, outcome: 'lost' }),
+    ]
+    // predictedProb = 0.9, outcome = 0
+    // brier = (0.9 - 0)^2 = 0.81
+    // calibration = 1 - 0.81 = 0.19
+    expect(calculateCalibration(trades)).toBeLessThan(0.75)
+    expect(calculateCalibration(trades)).toBeCloseTo(0.19, 2)
+  })
+
+  it('returns ~0.75 for random calibration (50/50 at 0.5)', () => {
+    const trades = [
+      makeTrade({ side: 'YES', entryPrice: 0.5, outcome: 'won' }),
+      makeTrade({ side: 'YES', entryPrice: 0.5, outcome: 'lost' }),
+    ]
+    // Trade 1: (0.5 - 1)^2 = 0.25
+    // Trade 2: (0.5 - 0)^2 = 0.25
+    // brier = (0.25 + 0.25) / 2 = 0.25
+    // calibration = 1 - 0.25 = 0.75
+    expect(calculateCalibration(trades)).toBeCloseTo(0.75, 2)
+  })
+
+  it('handles mixed sides correctly', () => {
+    const trades = [
+      makeTrade({ side: 'YES', entryPrice: 0.8, outcome: 'won' }),
+      makeTrade({ side: 'NO', entryPrice: 0.2, outcome: 'won' }),
+    ]
+    // Trade 1: YES @ 0.8, won → (0.8 - 1)^2 = 0.04
+    // Trade 2: NO @ 0.2, won → pred = 0.8, (0.8 - 1)^2 = 0.04
+    // brier = 0.04, calibration = 0.96
+    expect(calculateCalibration(trades)).toBeCloseTo(0.96, 2)
+  })
+})
+
+// ── calculateConvictionScore ─────────────────────────────────────
+
+describe('calculateConvictionScore', () => {
+  it('returns 0 for empty array', () => {
+    expect(calculateConvictionScore([])).toBe(0)
+  })
+
+  it('returns 0 when all trades have entryPrice < 0.25 (filtered)', () => {
+    const trades = [
+      makeTrade({ entryPrice: 0.05, outcome: 'won' }),
+      makeTrade({ entryPrice: 0.10, outcome: 'won' }),
+      makeTrade({ entryPrice: 0.20, outcome: 'lost' }),
+    ]
+    expect(calculateConvictionScore(trades)).toBe(0)
+  })
+
+  it('returns ~0.70 for a single won trade at 0.70', () => {
+    const trades = [makeTrade({ entryPrice: 0.70, outcome: 'won' })]
+    expect(calculateConvictionScore(trades)).toBeCloseTo(0.70, 2)
+  })
+
+  it('returns 0 for a single lost trade at 0.70', () => {
+    const trades = [makeTrade({ entryPrice: 0.70, outcome: 'lost' })]
+    expect(calculateConvictionScore(trades)).toBe(0)
+  })
+
+  it('averages correctly with mixed results', () => {
+    const trades = [
+      makeTrade({ entryPrice: 0.80, outcome: 'won' }),  // 0.80 × 1 = 0.80
+      makeTrade({ entryPrice: 0.60, outcome: 'lost' }), // 0.60 × 0 = 0
+    ]
+    // mean = 0.80 / 2 = 0.40
+    expect(calculateConvictionScore(trades)).toBeCloseTo(0.40, 2)
+  })
+})
+
+// ── detectTradingStyle ──────────────────────────────────────────
+
+describe('detectTradingStyle', () => {
+  it('returns "mixed" for empty array', () => {
+    expect(detectTradingStyle([])).toBe('mixed')
+  })
+
+  it('returns "longshot-hunter" for avgPrice 0.05', () => {
+    const trades = [
+      makeTrade({ entryPrice: 0.03 }),
+      makeTrade({ entryPrice: 0.05 }),
+      makeTrade({ entryPrice: 0.07 }),
+    ]
+    expect(detectTradingStyle(trades)).toBe('longshot-hunter')
+  })
+
+  it('returns "directional" for avgPrice 0.60', () => {
+    const trades = [
+      makeTrade({ entryPrice: 0.55, outcome: 'won' }),
+      makeTrade({ entryPrice: 0.65, outcome: 'lost' }),
+    ]
+    expect(detectTradingStyle(trades)).toBe('directional')
+  })
+
+  it('returns "value-trader" for avgPrice 0.32 with high convictionScore', () => {
+    const trades = [
+      makeTrade({ entryPrice: 0.32, outcome: 'won' }),
+      makeTrade({ entryPrice: 0.35, outcome: 'won' }),
+      makeTrade({ entryPrice: 0.28, outcome: 'won' }),
+    ]
+    // avgPrice = 0.3167, convictionScore = mean(0.32, 0.35, 0.28) = 0.3167 > 0.3
+    expect(detectTradingStyle(trades)).toBe('value-trader')
+  })
+
+  it('returns "mixed" for avgPrice 0.30 with low convictionScore', () => {
+    const trades = [
+      makeTrade({ entryPrice: 0.30, outcome: 'lost' }),
+      makeTrade({ entryPrice: 0.35, outcome: 'lost' }),
+      makeTrade({ entryPrice: 0.25, outcome: 'lost' }),
+    ]
+    // avgPrice = 0.30, convictionScore = 0 (all lost)
+    expect(detectTradingStyle(trades)).toBe('mixed')
+  })
+})
+
+// ── calculateDecayFactor ──────────────────────────────────────────
+
+describe('calculateDecayFactor', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('returns 1.0 for recent trade (< 90 days)', () => {
+    const recent = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
+    expect(calculateDecayFactor(recent)).toBe(1.0)
+  })
+
+  it('returns 0.75 for trade between 90–180 days ago', () => {
+    const old = new Date(Date.now() - 120 * 24 * 60 * 60 * 1000).toISOString()
+    expect(calculateDecayFactor(old)).toBe(0.75)
+  })
+
+  it('returns 0.5 for trade > 180 days ago', () => {
+    const veryOld = new Date(
+      Date.now() - 200 * 24 * 60 * 60 * 1000
+    ).toISOString()
+    expect(calculateDecayFactor(veryOld)).toBe(0.5)
+  })
+
+  it('returns 1.0 for trade today', () => {
+    expect(calculateDecayFactor(new Date().toISOString())).toBe(1.0)
+  })
+})
+
+// ── Constants ─────────────────────────────────────────────────────
+
+describe('MIN_TRADES_FOR_ATTESTATION', () => {
+  it('is 5', () => {
+    expect(MIN_TRADES_FOR_ATTESTATION).toBe(5)
+  })
+})
