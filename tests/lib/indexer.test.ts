@@ -120,8 +120,8 @@ beforeEach(() => {
       domain TEXT, side TEXT NOT NULL, entry_price REAL NOT NULL,
       simulated_usdc REAL NOT NULL, shares REAL NOT NULL,
       copied_from TEXT NOT NULL, copied_label TEXT,
-      status TEXT NOT NULL DEFAULT 'open', cur_price REAL, exit_price REAL,
-      pnl REAL, opened_at TEXT NOT NULL, resolved_at TEXT
+      status TEXT NOT NULL DEFAULT 'open', cur_price REAL, peak_price REAL,
+      exit_price REAL, pnl REAL, opened_at TEXT NOT NULL, resolved_at TEXT
     );
     CREATE TABLE IF NOT EXISTS paper_portfolio (
       key TEXT PRIMARY KEY, value TEXT NOT NULL

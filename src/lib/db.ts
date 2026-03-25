@@ -146,6 +146,7 @@ function initTables(db: Database.Database): void {
       copied_label TEXT,
       status TEXT NOT NULL DEFAULT 'open',
       cur_price REAL,
+      peak_price REAL,
       exit_price REAL,
       pnl REAL,
       opened_at TEXT NOT NULL,
@@ -157,6 +158,13 @@ function initTables(db: Database.Database): void {
       value TEXT NOT NULL
     );
   `)
+
+  // Migration: add peak_price column if missing
+  try {
+    db.exec('ALTER TABLE paper_trades ADD COLUMN peak_price REAL')
+  } catch {
+    // Column already exists — ignore
+  }
 }
 
 // ── Trade operations ──────────────────────────────────────────────
@@ -523,6 +531,7 @@ export type PaperTrade = {
   copiedLabel: string | null
   status: 'open' | 'won' | 'lost'
   curPrice: number | null
+  peakPrice: number | null
   exitPrice: number | null
   pnl: number | null
   openedAt: string
@@ -613,9 +622,12 @@ export function getAllPaperTrades(): PaperTrade[] {
 
 export function updatePaperTradePrice(conditionId: string, curPrice: number): void {
   const db = getDb()
+  // Update cur_price and peak_price (track highest favorable price)
   db.prepare(
-    "UPDATE paper_trades SET cur_price = ? WHERE condition_id = ? AND status = 'open'"
-  ).run(curPrice, conditionId)
+    `UPDATE paper_trades SET cur_price = ?,
+     peak_price = MAX(COALESCE(peak_price, cur_price), ?)
+     WHERE condition_id = ? AND status = 'open'`
+  ).run(curPrice, curPrice, conditionId)
 }
 
 export function resolvePaperTrade(
@@ -689,6 +701,7 @@ function mapPaperRows(rows: unknown[]): PaperTrade[] {
     copiedLabel: r.copied_label as string | null,
     status: r.status as 'open' | 'won' | 'lost',
     curPrice: r.cur_price as number | null,
+    peakPrice: r.peak_price as number | null,
     exitPrice: r.exit_price as number | null,
     pnl: r.pnl as number | null,
     openedAt: r.opened_at as string,

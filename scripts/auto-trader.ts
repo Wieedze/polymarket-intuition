@@ -30,6 +30,10 @@ const BET_SIZE = parseFloat(process.env.BET_SIZE_USDC ?? getPortfolioSetting('be
 const MIN_ENTRY = parseFloat(process.env.MIN_ENTRY_PRICE ?? '0.15')
 const MAX_ENTRY = parseFloat(process.env.MAX_ENTRY_PRICE ?? '0.90')
 const MAX_OPEN = parseInt(process.env.MAX_OPEN_TRADES ?? '50', 10)
+const STOP_LOSS = parseFloat(process.env.STOP_LOSS ?? '0.40')       // cut at -40%
+const TRAILING_ACTIVATE = parseFloat(process.env.TRAILING_ACTIVATE ?? '0.30') // activate trailing at +30%
+const TRAILING_STOP = parseFloat(process.env.TRAILING_STOP ?? '0.10')  // take profit if drops to +10% after peak
+const MAX_CAPITAL_PCT = parseFloat(process.env.MAX_CAPITAL_PCT ?? '0.60') // max 60% of balance invested
 
 // ── Auto-copy logic ──────────────────────────────────────────────
 
@@ -46,6 +50,15 @@ function shouldCopy(alert: PositionAlert): boolean {
   // Skip if too many open trades
   const openTrades = getOpenPaperTrades()
   if (openTrades.length >= MAX_OPEN) return false
+
+  // Capital guard: don't invest more than MAX_CAPITAL_PCT of balance
+  const startBal = parseFloat(getPortfolioSetting('starting_balance', '10000'))
+  const closedTrades = getAllPaperTrades().filter((t) => t.status !== 'open')
+  const realizedPnl = closedTrades.reduce((s, t) => s + (t.pnl ?? 0), 0)
+  const currentBalance = startBal + realizedPnl
+  const totalInvested = openTrades.reduce((s, t) => s + t.simulatedUsdc, 0)
+
+  if (totalInvested + BET_SIZE > currentBalance * MAX_CAPITAL_PCT) return false
 
   return true
 }
@@ -147,6 +160,78 @@ async function refreshOpenPrices(): Promise<number> {
   return updated
 }
 
+// ── Risk management ──────────────────────────────────────────────
+
+function runRiskManagement(): { stopped: number; trailed: number } {
+  const openTrades = getOpenPaperTrades()
+  let stopped = 0
+  let trailed = 0
+
+  for (const trade of openTrades) {
+    if (trade.curPrice == null) continue
+
+    // Current PnL % (relative to entry)
+    let pnlPct: number
+    if (trade.side === 'YES') {
+      pnlPct = (trade.curPrice - trade.entryPrice) / trade.entryPrice
+    } else {
+      pnlPct = (trade.entryPrice - trade.curPrice) / trade.entryPrice
+    }
+
+    // Peak PnL % (best the position has been)
+    const peakPrice = trade.peakPrice ?? trade.curPrice
+    let peakPnlPct: number
+    if (trade.side === 'YES') {
+      peakPnlPct = (peakPrice - trade.entryPrice) / trade.entryPrice
+    } else {
+      peakPnlPct = (trade.entryPrice - peakPrice) / trade.entryPrice
+      // For NO side, peak is actually the LOWEST price (most profitable)
+      // We need to reconsider: peakPrice tracks highest curPrice
+      // For NO side, the lowest curPrice is the most profitable
+      // So we need to check if peak was profitable differently
+    }
+
+    // STOP-LOSS: cut if losing more than threshold
+    if (pnlPct < -STOP_LOSS) {
+      resolvePaperTrade(trade.conditionId, trade.curPrice)
+      const pnl = trade.shares * (trade.curPrice - trade.entryPrice)
+      console.log(`  🛑 STOP | -${(Math.abs(pnlPct) * 100).toFixed(0)}% | ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)} | ${trade.title}`)
+      stopped++
+      continue
+    }
+
+    // TRAILING STOP: if position WAS up +30% and now dropped below +10%, take profit
+    // For YES: peak was high, now dropped. peakPnlPct > 30%, current < 10%
+    // For NO: more complex — skip trailing for NO side for simplicity
+    if (trade.side === 'YES' && peakPnlPct >= TRAILING_ACTIVATE && pnlPct <= TRAILING_STOP) {
+      resolvePaperTrade(trade.conditionId, trade.curPrice)
+      const pnl = trade.shares * (trade.curPrice - trade.entryPrice)
+      console.log(`  📈 TRAIL | was +${(peakPnlPct * 100).toFixed(0)}% → now +${(pnlPct * 100).toFixed(0)}% | +$${pnl.toFixed(2)} | ${trade.title}`)
+      trailed++
+      continue
+    }
+
+    // For NO side trailing: peakPrice is highest seen, but for NO we want LOWEST
+    // Since we track peak_price as MAX(curPrice), for NO side the best was the MIN
+    // We can approximate: if NO side is profitable (curPrice < entryPrice) and was very profitable
+    // but now less so, trail it. Use a simpler heuristic:
+    if (trade.side === 'NO' && pnlPct > 0) {
+      // Currently profitable. Check if it was much more profitable before
+      // Entry was high, curPrice dropped = profit. If curPrice bounces back up = losing profit
+      const entryToNow = trade.entryPrice - trade.curPrice
+      const entryToPeak = trade.entryPrice - peakPrice  // negative if peak > entry = loss direction
+      // If peak was above entry (bad for NO), that means position went against us then recovered
+      // Only trail if we've been at +30%+ and now at +10%
+      if (pnlPct >= 0 && entryToNow > 0) {
+        // We're profitable now. Was the profit ever higher?
+        // Hard to track with peak=MAX. Skip complex NO trailing for now.
+      }
+    }
+  }
+
+  return { stopped, trailed }
+}
+
 // ── Stats ────────────────────────────────────────────────────────
 
 function printStats(): void {
@@ -207,13 +292,16 @@ async function pollOnce(): Promise<void> {
     await new Promise((r) => setTimeout(r, 800))
   }
 
+  // Refresh prices first (needed for stop-loss)
+  const pricesUpdated = await refreshOpenPrices()
+
+  // Risk management (stop-loss + trailing stop)
+  const { stopped, trailed } = runRiskManagement()
+
   // Resolve completed markets
   const resolved = await resolveCompletedTrades()
 
-  // Refresh prices
-  const pricesUpdated = await refreshOpenPrices()
-
-  console.log(`  → ${newPositions} new positions | ${copied} copied | ${resolved} resolved | ${pricesUpdated} prices updated`)
+  console.log(`  → ${newPositions} new | ${copied} copied | ${stopped} stopped | ${trailed} trailed | ${resolved} resolved | ${pricesUpdated} prices`)
 
   printStats()
 }
@@ -242,6 +330,9 @@ async function main(): Promise<void> {
   console.log(`  Bet size:   $${BET_SIZE}`)
   console.log(`  Entry range: ${(MIN_ENTRY * 100).toFixed(0)}¢ - ${(MAX_ENTRY * 100).toFixed(0)}¢`)
   console.log(`  Max open:   ${MAX_OPEN}`)
+  console.log(`  Stop-loss:  -${(STOP_LOSS * 100).toFixed(0)}%`)
+  console.log(`  Trail:      activate +${(TRAILING_ACTIVATE * 100).toFixed(0)}%, stop +${(TRAILING_STOP * 100).toFixed(0)}%`)
+  console.log(`  Max capital: ${(MAX_CAPITAL_PCT * 100).toFixed(0)}%`)
   console.log(`  Poll every: ${POLL_INTERVAL_MS / 1000}s`)
   console.log('═══════════════════════════════════════════════')
 
