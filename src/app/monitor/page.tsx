@@ -4,6 +4,7 @@ import { useState } from 'react'
 import Link from 'next/link'
 
 type OpenPosition = {
+  conditionId: string
   title: string
   side: string
   avgPrice: number
@@ -76,6 +77,37 @@ export default function MonitorPage(): React.ReactElement {
   const [data, setData] = useState<MonitorData | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [expandedWallet, setExpandedWallet] = useState<string | null>(null)
+  const [copying, setCopying] = useState<string | null>(null)
+
+  async function copyPosition(walletAddr: string, walletLabel: string | null, p: OpenPosition): Promise<void> {
+    const key = `${p.conditionId}-${walletAddr}`
+    setCopying(key)
+    try {
+      const res = await fetch('/api/paper-trading', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'copy',
+          conditionId: p.conditionId,
+          title: p.title,
+          side: p.side,
+          entryPrice: p.curPrice,
+          copiedFrom: walletAddr,
+          copiedLabel: walletLabel,
+        }),
+      })
+      if (res.ok) {
+        alert(`Copied! ${p.side} "${p.title}" @ ${(p.curPrice * 100).toFixed(0)}c`)
+      } else {
+        const body = (await res.json().catch(() => ({}))) as { error?: string }
+        alert(body.error ?? 'Failed to copy')
+      }
+    } catch {
+      alert('Failed to copy')
+    } finally {
+      setCopying(null)
+    }
+  }
 
   async function fetchData(poll: boolean): Promise<void> {
     if (poll) setPolling(true)
@@ -253,6 +285,15 @@ export default function MonitorPage(): React.ReactElement {
                         <span className="text-zinc-600 text-xs w-16 text-right">
                           {p.size >= 1000 ? `${(p.size / 1000).toFixed(1)}K` : p.size.toFixed(0)} sh
                         </span>
+
+                        {/* Copy button */}
+                        <button
+                          onClick={(e) => { e.stopPropagation(); void copyPosition(w.address, w.label, p) }}
+                          disabled={copying === `${p.conditionId}-${w.address}`}
+                          className="px-2 py-1 text-[10px] bg-indigo-600 hover:bg-indigo-500 disabled:bg-zinc-700 text-white rounded transition-colors"
+                        >
+                          {copying === `${p.conditionId}-${w.address}` ? '...' : 'Copy'}
+                        </button>
                       </div>
                     ))}
                     {w.openPositions.length > 20 && (

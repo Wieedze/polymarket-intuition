@@ -132,6 +132,30 @@ function initTables(db: Database.Database): void {
       snapshot_at TEXT NOT NULL,
       PRIMARY KEY (wallet, condition_id, outcome_index)
     );
+
+    CREATE TABLE IF NOT EXISTS paper_trades (
+      id TEXT PRIMARY KEY,
+      condition_id TEXT NOT NULL,
+      title TEXT NOT NULL,
+      domain TEXT,
+      side TEXT NOT NULL,
+      entry_price REAL NOT NULL,
+      simulated_usdc REAL NOT NULL,
+      shares REAL NOT NULL,
+      copied_from TEXT NOT NULL,
+      copied_label TEXT,
+      status TEXT NOT NULL DEFAULT 'open',
+      cur_price REAL,
+      exit_price REAL,
+      pnl REAL,
+      opened_at TEXT NOT NULL,
+      resolved_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS paper_portfolio (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
   `)
 }
 
@@ -482,4 +506,192 @@ export function savePositionSnapshot(
   for (const p of positions) {
     stmt.run(wallet, p.conditionId, p.outcomeIndex, p.title, p.size, p.avgPrice, p.curPrice, now)
   }
+}
+
+// ── Paper trading operations ────────────────────────────────────
+
+export type PaperTrade = {
+  id: string
+  conditionId: string
+  title: string
+  domain: string | null
+  side: string
+  entryPrice: number
+  simulatedUsdc: number
+  shares: number
+  copiedFrom: string
+  copiedLabel: string | null
+  status: 'open' | 'won' | 'lost'
+  curPrice: number | null
+  exitPrice: number | null
+  pnl: number | null
+  openedAt: string
+  resolvedAt: string | null
+}
+
+export function getPortfolioSetting(key: string, defaultValue: string): string {
+  const db = getDb()
+  const row = db.prepare('SELECT value FROM paper_portfolio WHERE key = ?').get(key) as
+    | { value: string }
+    | undefined
+  return row?.value ?? defaultValue
+}
+
+export function setPortfolioSetting(key: string, value: string): void {
+  const db = getDb()
+  db.prepare('INSERT OR REPLACE INTO paper_portfolio (key, value) VALUES (?, ?)').run(key, value)
+}
+
+export function openPaperTrade(trade: {
+  conditionId: string
+  title: string
+  domain: string | null
+  side: string
+  entryPrice: number
+  simulatedUsdc: number
+  copiedFrom: string
+  copiedLabel: string | null
+}): PaperTrade {
+  const db = getDb()
+  const shares = trade.simulatedUsdc / trade.entryPrice
+  const id = `paper-${trade.conditionId}-${Date.now()}`
+  const now = new Date().toISOString()
+
+  db.prepare(
+    `INSERT INTO paper_trades
+     (id, condition_id, title, domain, side, entry_price, simulated_usdc, shares,
+      copied_from, copied_label, status, cur_price, opened_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)`
+  ).run(
+    id,
+    trade.conditionId,
+    trade.title,
+    trade.domain,
+    trade.side,
+    trade.entryPrice,
+    trade.simulatedUsdc,
+    shares,
+    trade.copiedFrom,
+    trade.copiedLabel,
+    trade.entryPrice,
+    now
+  )
+
+  return {
+    id,
+    conditionId: trade.conditionId,
+    title: trade.title,
+    domain: trade.domain,
+    side: trade.side,
+    entryPrice: trade.entryPrice,
+    simulatedUsdc: trade.simulatedUsdc,
+    shares,
+    copiedFrom: trade.copiedFrom,
+    copiedLabel: trade.copiedLabel,
+    status: 'open',
+    curPrice: trade.entryPrice,
+    exitPrice: null,
+    pnl: null,
+    openedAt: now,
+    resolvedAt: null,
+  }
+}
+
+export function getOpenPaperTrades(): PaperTrade[] {
+  const db = getDb()
+  return mapPaperRows(
+    db.prepare("SELECT * FROM paper_trades WHERE status = 'open' ORDER BY opened_at DESC").all()
+  )
+}
+
+export function getAllPaperTrades(): PaperTrade[] {
+  const db = getDb()
+  return mapPaperRows(
+    db.prepare('SELECT * FROM paper_trades ORDER BY opened_at DESC').all()
+  )
+}
+
+export function updatePaperTradePrice(conditionId: string, curPrice: number): void {
+  const db = getDb()
+  db.prepare(
+    "UPDATE paper_trades SET cur_price = ? WHERE condition_id = ? AND status = 'open'"
+  ).run(curPrice, conditionId)
+}
+
+export function resolvePaperTrade(
+  conditionId: string,
+  exitPrice: number
+): void {
+  const db = getDb()
+  const rows = db.prepare(
+    "SELECT * FROM paper_trades WHERE condition_id = ? AND status = 'open'"
+  ).all() as Array<Record<string, unknown>>
+
+  for (const row of rows) {
+    const entryPrice = row.entry_price as number
+    const shares = row.shares as number
+    const side = row.side as string
+    const id = row.id as string
+
+    // PnL calculation: if YES side and market resolves YES (exitPrice ≈ 1) → win
+    let pnl: number
+    let status: string
+    if (exitPrice > 0.95) {
+      // Market resolved YES
+      if (side === 'YES') {
+        pnl = shares * (1 - entryPrice)
+        status = 'won'
+      } else {
+        pnl = -(shares * entryPrice)
+        status = 'lost'
+      }
+    } else if (exitPrice < 0.05) {
+      // Market resolved NO
+      if (side === 'NO') {
+        pnl = shares * (1 - entryPrice)
+        status = 'won'
+      } else {
+        pnl = -(shares * entryPrice)
+        status = 'lost'
+      }
+    } else {
+      // Not fully resolved — paper exit at current price
+      pnl = shares * (exitPrice - entryPrice)
+      status = pnl > 0 ? 'won' : 'lost'
+    }
+
+    db.prepare(
+      `UPDATE paper_trades SET status = ?, exit_price = ?, pnl = ?, resolved_at = ?
+       WHERE id = ?`
+    ).run(status, exitPrice, pnl, new Date().toISOString(), id)
+  }
+}
+
+export function paperTradeExistsForCondition(conditionId: string): boolean {
+  const db = getDb()
+  const row = db.prepare(
+    "SELECT 1 FROM paper_trades WHERE condition_id = ? AND status = 'open'"
+  ).get(conditionId)
+  return row !== undefined
+}
+
+function mapPaperRows(rows: unknown[]): PaperTrade[] {
+  return (rows as Array<Record<string, unknown>>).map((r) => ({
+    id: r.id as string,
+    conditionId: r.condition_id as string,
+    title: r.title as string,
+    domain: r.domain as string | null,
+    side: r.side as string,
+    entryPrice: r.entry_price as number,
+    simulatedUsdc: r.simulated_usdc as number,
+    shares: r.shares as number,
+    copiedFrom: r.copied_from as string,
+    copiedLabel: r.copied_label as string | null,
+    status: r.status as 'open' | 'won' | 'lost',
+    curPrice: r.cur_price as number | null,
+    exitPrice: r.exit_price as number | null,
+    pnl: r.pnl as number | null,
+    openedAt: r.opened_at as string,
+    resolvedAt: r.resolved_at as string | null,
+  }))
 }

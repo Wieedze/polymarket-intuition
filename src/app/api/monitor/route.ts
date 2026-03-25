@@ -61,6 +61,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       const positions = Array.from(snapshot.values()).map((p) => {
         const domain = keywordClassify(p.title)
         return {
+          conditionId: p.conditionId,
           title: p.title,
           side: p.outcomeIndex === 0 ? 'YES' : 'NO',
           avgPrice: p.avgPrice,

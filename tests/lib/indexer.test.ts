@@ -100,6 +100,32 @@ beforeEach(() => {
       queued_at TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_trades_wallet_domain ON trades(wallet, domain);
+    CREATE TABLE IF NOT EXISTS leaderboard_cache (
+      wallet TEXT NOT NULL, user_name TEXT, rank INTEGER NOT NULL,
+      pnl REAL NOT NULL, volume REAL NOT NULL, period TEXT NOT NULL,
+      fetched_at TEXT NOT NULL, PRIMARY KEY (wallet, period)
+    );
+    CREATE TABLE IF NOT EXISTS watched_wallets (
+      wallet TEXT PRIMARY KEY, label TEXT, added_at TEXT NOT NULL,
+      last_polled_at TEXT, active INTEGER DEFAULT 1
+    );
+    CREATE TABLE IF NOT EXISTS position_snapshots (
+      wallet TEXT NOT NULL, condition_id TEXT NOT NULL, outcome_index INTEGER NOT NULL,
+      title TEXT NOT NULL, size REAL NOT NULL, avg_price REAL NOT NULL,
+      cur_price REAL NOT NULL, snapshot_at TEXT NOT NULL,
+      PRIMARY KEY (wallet, condition_id, outcome_index)
+    );
+    CREATE TABLE IF NOT EXISTS paper_trades (
+      id TEXT PRIMARY KEY, condition_id TEXT NOT NULL, title TEXT NOT NULL,
+      domain TEXT, side TEXT NOT NULL, entry_price REAL NOT NULL,
+      simulated_usdc REAL NOT NULL, shares REAL NOT NULL,
+      copied_from TEXT NOT NULL, copied_label TEXT,
+      status TEXT NOT NULL DEFAULT 'open', cur_price REAL, exit_price REAL,
+      pnl REAL, opened_at TEXT NOT NULL, resolved_at TEXT
+    );
+    CREATE TABLE IF NOT EXISTS paper_portfolio (
+      key TEXT PRIMARY KEY, value TEXT NOT NULL
+    );
   `)
   setDb(db)
 
