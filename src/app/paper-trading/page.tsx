@@ -304,7 +304,7 @@ export default function PaperTradingPage(): React.ReactElement {
                         ? (t.curPrice ?? 0) > t.entryPrice ? 'text-emerald-400' : 'text-red-400'
                         : t.status === 'won' ? 'text-emerald-400' : 'text-red-400'
                     }>
-                      {((t.status === 'open' ? t.curPrice : t.exitPrice) ?? 0 * 100).toFixed(0)}c
+                      {(((t.status === 'open' ? t.curPrice : t.exitPrice) ?? 0) * 100).toFixed(0)}c
                     </span>
                   </div>
 
