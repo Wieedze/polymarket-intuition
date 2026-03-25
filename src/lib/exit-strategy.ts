@@ -25,8 +25,8 @@ export type ExitConfig = {
 export const DEFAULT_CONFIG: ExitConfig = {
   takeProfitPct: 0.80,        // +80% → almost max for binary market
   stopLossPct: 0.40,          // -40% → cut losses
-  trailingActivatePct: 0.30,  // trailing activates at +30%
-  trailingStopPct: 0.10,      // trailing stops at +10%
+  trailingActivatePct: 999,   // disabled — bad for binary markets
+  trailingStopPct: 0.10,      // (unused when trailing disabled)
   staleDays: 7,               // 7 days without movement
   staleThreshold: 0.03,       // 3¢ minimum move
   followExpertExit: true,
