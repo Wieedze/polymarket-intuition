@@ -22,6 +22,12 @@ export default function Home(): React.ReactElement {
           Leaderboard
         </Link>
         <Link
+          href="/monitor"
+          className="px-4 py-2 text-sm text-zinc-400 hover:text-white border border-zinc-700 hover:border-zinc-500 rounded-lg transition-colors"
+        >
+          Monitor
+        </Link>
+        <Link
           href="/signal"
           className="px-4 py-2 text-sm text-zinc-400 hover:text-white border border-zinc-700 hover:border-zinc-500 rounded-lg transition-colors"
         >

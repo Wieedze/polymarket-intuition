@@ -59,7 +59,20 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   const domain = classification.domain
 
   // Find experts: calibration > 0.65, trades >= 5
-  const expertRows = getExpertsByDomain(domain, 0.65, 5)
+  let expertRows: ReturnType<typeof getExpertsByDomain>
+  try {
+    expertRows = getExpertsByDomain(domain, 0.65, 5)
+  } catch {
+    // SQLite unavailable (e.g. webpack bundling issue) — return domain only
+    return NextResponse.json({
+      question,
+      domain,
+      expertsFound: 0,
+      aggregatedSignal: 0,
+      signalStrength: 'weak' as const,
+      experts: [],
+    })
+  }
 
   const experts: ExpertInfo[] = []
 
