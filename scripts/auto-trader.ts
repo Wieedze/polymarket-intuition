@@ -15,11 +15,12 @@
  *   MAX_OPEN_TRADES   — max simultaneous open paper trades (default: 50)
  */
 
-import { getActiveWatchedWallets, getOpenPaperTrades, openPaperTrade, paperTradeExistsForCondition, getPortfolioSetting, setPortfolioSetting, getAllPaperTrades } from '../src/lib/db'
+import { getActiveWatchedWallets, getOpenPaperTrades, openPaperTrade, paperTradeExistsForCondition, getPortfolioSetting, setPortfolioSetting, getAllPaperTrades, getPositionSnapshot } from '../src/lib/db'
 import { pollWallet, type PositionAlert, fetchOpenPositions } from '../src/lib/position-tracker'
 import { keywordClassify } from '../src/lib/classifier'
 import { fetchAllPages } from '../src/lib/polymarket'
 import { resolvePaperTrade, updatePaperTradePrice } from '../src/lib/db'
+import { evaluateExit, exitEmoji, DEFAULT_CONFIG, type ExitConfig } from '../src/lib/exit-strategy'
 
 const POLYMARKET_DATA_URL = process.env.POLYMARKET_DATA_URL ?? 'https://data-api.polymarket.com'
 
@@ -30,10 +31,18 @@ const BET_SIZE = parseFloat(process.env.BET_SIZE_USDC ?? getPortfolioSetting('be
 const MIN_ENTRY = parseFloat(process.env.MIN_ENTRY_PRICE ?? '0.15')
 const MAX_ENTRY = parseFloat(process.env.MAX_ENTRY_PRICE ?? '0.90')
 const MAX_OPEN = parseInt(process.env.MAX_OPEN_TRADES ?? '50', 10)
-const STOP_LOSS = parseFloat(process.env.STOP_LOSS ?? '0.40')       // cut at -40%
-const TRAILING_ACTIVATE = parseFloat(process.env.TRAILING_ACTIVATE ?? '0.30') // activate trailing at +30%
-const TRAILING_STOP = parseFloat(process.env.TRAILING_STOP ?? '0.10')  // take profit if drops to +10% after peak
-const MAX_CAPITAL_PCT = parseFloat(process.env.MAX_CAPITAL_PCT ?? '0.60') // max 60% of balance invested
+const MAX_CAPITAL_PCT = parseFloat(process.env.MAX_CAPITAL_PCT ?? '0.60')
+
+// Exit strategy config (override via env vars)
+const EXIT_CONFIG: ExitConfig = {
+  takeProfitPct: parseFloat(process.env.TAKE_PROFIT ?? '0.80'),
+  stopLossPct: parseFloat(process.env.STOP_LOSS ?? '0.40'),
+  trailingActivatePct: parseFloat(process.env.TRAILING_ACTIVATE ?? '0.30'),
+  trailingStopPct: parseFloat(process.env.TRAILING_STOP ?? '0.10'),
+  staleDays: parseInt(process.env.STALE_DAYS ?? '7', 10),
+  staleThreshold: parseFloat(process.env.STALE_THRESHOLD ?? '0.03'),
+  followExpertExit: process.env.FOLLOW_EXPERT_EXIT !== 'false',
+}
 
 // ── Auto-copy logic ──────────────────────────────────────────────
 
@@ -162,74 +171,44 @@ async function refreshOpenPrices(): Promise<number> {
 
 // ── Risk management ──────────────────────────────────────────────
 
-function runRiskManagement(): { stopped: number; trailed: number } {
+function runExitStrategy(): Record<string, number> {
   const openTrades = getOpenPaperTrades()
-  let stopped = 0
-  let trailed = 0
+  const counts: Record<string, number> = {}
 
-  for (const trade of openTrades) {
-    if (trade.curPrice == null) continue
-
-    // Current PnL % (relative to entry)
-    let pnlPct: number
-    if (trade.side === 'YES') {
-      pnlPct = (trade.curPrice - trade.entryPrice) / trade.entryPrice
-    } else {
-      pnlPct = (trade.entryPrice - trade.curPrice) / trade.entryPrice
-    }
-
-    // Peak PnL % (best the position has been)
-    const peakPrice = trade.peakPrice ?? trade.curPrice
-    let peakPnlPct: number
-    if (trade.side === 'YES') {
-      peakPnlPct = (peakPrice - trade.entryPrice) / trade.entryPrice
-    } else {
-      peakPnlPct = (trade.entryPrice - peakPrice) / trade.entryPrice
-      // For NO side, peak is actually the LOWEST price (most profitable)
-      // We need to reconsider: peakPrice tracks highest curPrice
-      // For NO side, the lowest curPrice is the most profitable
-      // So we need to check if peak was profitable differently
-    }
-
-    // STOP-LOSS: cut if losing more than threshold
-    if (pnlPct < -STOP_LOSS) {
-      resolvePaperTrade(trade.conditionId, trade.curPrice)
-      const pnl = trade.shares * (trade.curPrice - trade.entryPrice)
-      console.log(`  🛑 STOP | -${(Math.abs(pnlPct) * 100).toFixed(0)}% | ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)} | ${trade.title}`)
-      stopped++
-      continue
-    }
-
-    // TRAILING STOP: if position WAS up +30% and now dropped below +10%, take profit
-    // For YES: peak was high, now dropped. peakPnlPct > 30%, current < 10%
-    // For NO: more complex — skip trailing for NO side for simplicity
-    if (trade.side === 'YES' && peakPnlPct >= TRAILING_ACTIVATE && pnlPct <= TRAILING_STOP) {
-      resolvePaperTrade(trade.conditionId, trade.curPrice)
-      const pnl = trade.shares * (trade.curPrice - trade.entryPrice)
-      console.log(`  📈 TRAIL | was +${(peakPnlPct * 100).toFixed(0)}% → now +${(pnlPct * 100).toFixed(0)}% | +$${pnl.toFixed(2)} | ${trade.title}`)
-      trailed++
-      continue
-    }
-
-    // For NO side trailing: peakPrice is highest seen, but for NO we want LOWEST
-    // Since we track peak_price as MAX(curPrice), for NO side the best was the MIN
-    // We can approximate: if NO side is profitable (curPrice < entryPrice) and was very profitable
-    // but now less so, trail it. Use a simpler heuristic:
-    if (trade.side === 'NO' && pnlPct > 0) {
-      // Currently profitable. Check if it was much more profitable before
-      // Entry was high, curPrice dropped = profit. If curPrice bounces back up = losing profit
-      const entryToNow = trade.entryPrice - trade.curPrice
-      const entryToPeak = trade.entryPrice - peakPrice  // negative if peak > entry = loss direction
-      // If peak was above entry (bad for NO), that means position went against us then recovered
-      // Only trail if we've been at +30%+ and now at +10%
-      if (pnlPct >= 0 && entryToNow > 0) {
-        // We're profitable now. Was the profit ever higher?
-        // Hard to track with peak=MAX. Skip complex NO trailing for now.
-      }
+  // Check if experts still hold their positions
+  const expertPositions = new Map<string, Set<string>>()
+  if (EXIT_CONFIG.followExpertExit) {
+    const wallets = [...new Set(openTrades.map((t) => t.copiedFrom))]
+    for (const w of wallets) {
+      const snapshot = getPositionSnapshot(w)
+      expertPositions.set(w, new Set(snapshot.keys()))
     }
   }
 
-  return { stopped, trailed }
+  for (const trade of openTrades) {
+    // Check if expert still holds
+    let expertStillHolding: boolean | null = null
+    if (EXIT_CONFIG.followExpertExit) {
+      const expertKeys = expertPositions.get(trade.copiedFrom)
+      if (expertKeys) {
+        // Check both outcomeIndex 0 and 1
+        const key0 = `${trade.conditionId}-0`
+        const key1 = `${trade.conditionId}-1`
+        expertStillHolding = expertKeys.has(key0) || expertKeys.has(key1)
+      }
+    }
+
+    const decision = evaluateExit(trade, EXIT_CONFIG, expertStillHolding)
+
+    if (decision.shouldExit) {
+      resolvePaperTrade(trade.conditionId, trade.curPrice ?? trade.entryPrice)
+      const pnl = trade.shares * ((trade.curPrice ?? trade.entryPrice) - trade.entryPrice)
+      console.log(`  ${exitEmoji(decision.reason)} ${decision.reason.toUpperCase()} | ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)} | ${decision.message} | ${trade.title}`)
+      counts[decision.reason] = (counts[decision.reason] ?? 0) + 1
+    }
+  }
+
+  return counts
 }
 
 // ── Stats ────────────────────────────────────────────────────────
@@ -295,13 +274,19 @@ async function pollOnce(): Promise<void> {
   // Refresh prices first (needed for stop-loss)
   const pricesUpdated = await refreshOpenPrices()
 
-  // Risk management (stop-loss + trailing stop)
-  const { stopped, trailed } = runRiskManagement()
+  // Exit strategy (take-profit, stop-loss, trailing, stale, expert-exit)
+  const exits = runExitStrategy()
+  const totalExits = Object.values(exits).reduce((s, n) => s + n, 0)
+  const exitSummary = Object.entries(exits).map(([k, v]) => `${v} ${k}`).join(', ')
 
-  // Resolve completed markets
+  // Resolve completed markets (price went to 0 or 1)
   const resolved = await resolveCompletedTrades()
 
-  console.log(`  → ${newPositions} new | ${copied} copied | ${stopped} stopped | ${trailed} trailed | ${resolved} resolved | ${pricesUpdated} prices`)
+  const parts = [`${newPositions} new`, `${copied} copied`]
+  if (totalExits > 0) parts.push(`${totalExits} exits (${exitSummary})`)
+  if (resolved > 0) parts.push(`${resolved} resolved`)
+  parts.push(`${pricesUpdated} prices`)
+  console.log(`  → ${parts.join(' | ')}`)
 
   printStats()
 }
@@ -330,8 +315,11 @@ async function main(): Promise<void> {
   console.log(`  Bet size:   $${BET_SIZE}`)
   console.log(`  Entry range: ${(MIN_ENTRY * 100).toFixed(0)}¢ - ${(MAX_ENTRY * 100).toFixed(0)}¢`)
   console.log(`  Max open:   ${MAX_OPEN}`)
-  console.log(`  Stop-loss:  -${(STOP_LOSS * 100).toFixed(0)}%`)
-  console.log(`  Trail:      activate +${(TRAILING_ACTIVATE * 100).toFixed(0)}%, stop +${(TRAILING_STOP * 100).toFixed(0)}%`)
+  console.log(`  Take profit: +${(EXIT_CONFIG.takeProfitPct * 100).toFixed(0)}%`)
+  console.log(`  Stop-loss:   -${(EXIT_CONFIG.stopLossPct * 100).toFixed(0)}%`)
+  console.log(`  Trailing:    +${(EXIT_CONFIG.trailingActivatePct * 100).toFixed(0)}% → +${(EXIT_CONFIG.trailingStopPct * 100).toFixed(0)}%`)
+  console.log(`  Stale exit:  ${EXIT_CONFIG.staleDays}d < ${(EXIT_CONFIG.staleThreshold * 100).toFixed(0)}¢ move`)
+  console.log(`  Expert exit: ${EXIT_CONFIG.followExpertExit ? 'ON' : 'OFF'}`)
   console.log(`  Max capital: ${(MAX_CAPITAL_PCT * 100).toFixed(0)}%`)
   console.log(`  Poll every: ${POLL_INTERVAL_MS / 1000}s`)
   console.log('═══════════════════════════════════════════════')
