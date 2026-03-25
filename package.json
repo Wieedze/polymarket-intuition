@@ -8,7 +8,9 @@
     "build": "next build",
     "start": "next start",
     "test": "vitest run",
-    "init-atoms": "npx tsx scripts/init-atoms.ts"
+    "init-atoms": "npx tsx scripts/init-atoms.ts",
+    "bulk-index": "npx tsx scripts/bulk-index.ts",
+    "monitor": "npx tsx scripts/monitor.ts"
   },
   "dependencies": {
     "next": "^14.2.0",

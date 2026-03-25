@@ -101,6 +101,37 @@ function initTables(db: Database.Database): void {
     );
 
     CREATE INDEX IF NOT EXISTS idx_trades_wallet_domain ON trades(wallet, domain);
+
+    CREATE TABLE IF NOT EXISTS leaderboard_cache (
+      wallet TEXT NOT NULL,
+      user_name TEXT,
+      rank INTEGER NOT NULL,
+      pnl REAL NOT NULL,
+      volume REAL NOT NULL,
+      period TEXT NOT NULL,
+      fetched_at TEXT NOT NULL,
+      PRIMARY KEY (wallet, period)
+    );
+
+    CREATE TABLE IF NOT EXISTS watched_wallets (
+      wallet TEXT PRIMARY KEY,
+      label TEXT,
+      added_at TEXT NOT NULL,
+      last_polled_at TEXT,
+      active INTEGER DEFAULT 1
+    );
+
+    CREATE TABLE IF NOT EXISTS position_snapshots (
+      wallet TEXT NOT NULL,
+      condition_id TEXT NOT NULL,
+      outcome_index INTEGER NOT NULL,
+      title TEXT NOT NULL,
+      size REAL NOT NULL,
+      avg_price REAL NOT NULL,
+      cur_price REAL NOT NULL,
+      snapshot_at TEXT NOT NULL,
+      PRIMARY KEY (wallet, condition_id, outcome_index)
+    );
   `)
 }
 
@@ -307,4 +338,148 @@ export function markAttestedOnChain(wallet: string, domain: string): void {
   db.prepare(
     `UPDATE wallet_stats SET attested_on_chain = 1 WHERE wallet = ? AND domain = ?`
   ).run(wallet, domain)
+}
+
+// ── Leaderboard cache operations ────────────────────────────────
+
+export type LeaderboardRow = {
+  wallet: string
+  userName: string
+  rank: number
+  pnl: number
+  volume: number
+  period: string
+  fetchedAt: string
+}
+
+export function saveLeaderboardEntry(entry: LeaderboardRow): void {
+  const db = getDb()
+  db.prepare(
+    `INSERT OR REPLACE INTO leaderboard_cache
+     (wallet, user_name, rank, pnl, volume, period, fetched_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    entry.wallet,
+    entry.userName,
+    entry.rank,
+    entry.pnl,
+    entry.volume,
+    entry.period,
+    entry.fetchedAt
+  )
+}
+
+export function getLeaderboard(period: string): Array<LeaderboardRow & { stats: WalletDomainStats[] }> {
+  const db = getDb()
+  const entries = db
+    .prepare(
+      `SELECT wallet, user_name, rank, pnl, volume, period, fetched_at
+       FROM leaderboard_cache
+       WHERE period = ?
+       ORDER BY rank ASC`
+    )
+    .all(period) as Array<{
+    wallet: string
+    user_name: string
+    rank: number
+    pnl: number
+    volume: number
+    period: string
+    fetched_at: string
+  }>
+
+  return entries.map((e) => ({
+    wallet: e.wallet,
+    userName: e.user_name,
+    rank: e.rank,
+    pnl: e.pnl,
+    volume: e.volume,
+    period: e.period,
+    fetchedAt: e.fetched_at,
+    stats: getWalletStats(e.wallet),
+  }))
+}
+
+// ── Watched wallets operations ──────────────────────────────────
+
+export function addWatchedWallet(wallet: string, label?: string): void {
+  const db = getDb()
+  db.prepare(
+    `INSERT OR REPLACE INTO watched_wallets (wallet, label, added_at, active)
+     VALUES (?, ?, ?, 1)`
+  ).run(wallet, label ?? null, new Date().toISOString())
+}
+
+export function getActiveWatchedWallets(): Array<{ wallet: string; label: string | null }> {
+  const db = getDb()
+  return db
+    .prepare('SELECT wallet, label FROM watched_wallets WHERE active = 1')
+    .all() as Array<{ wallet: string; label: string | null }>
+}
+
+export function updateWalletPolledAt(wallet: string): void {
+  const db = getDb()
+  db.prepare(
+    'UPDATE watched_wallets SET last_polled_at = ? WHERE wallet = ?'
+  ).run(new Date().toISOString(), wallet)
+}
+
+// ── Position snapshot operations ────────────────────────────────
+
+export type PositionSnapshotRow = {
+  conditionId: string
+  outcomeIndex: number
+  title: string
+  size: number
+  avgPrice: number
+  curPrice: number
+}
+
+export function getPositionSnapshot(wallet: string): Map<string, PositionSnapshotRow> {
+  const db = getDb()
+  const rows = db
+    .prepare(
+      `SELECT condition_id, outcome_index, title, size, avg_price, cur_price
+       FROM position_snapshots WHERE wallet = ?`
+    )
+    .all(wallet) as Array<{
+    condition_id: string
+    outcome_index: number
+    title: string
+    size: number
+    avg_price: number
+    cur_price: number
+  }>
+
+  const map = new Map<string, PositionSnapshotRow>()
+  for (const r of rows) {
+    map.set(`${r.condition_id}-${r.outcome_index}`, {
+      conditionId: r.condition_id,
+      outcomeIndex: r.outcome_index,
+      title: r.title,
+      size: r.size,
+      avgPrice: r.avg_price,
+      curPrice: r.cur_price,
+    })
+  }
+  return map
+}
+
+export function savePositionSnapshot(
+  wallet: string,
+  positions: Array<{ conditionId: string; outcomeIndex: number; title: string; size: number; avgPrice: number; curPrice: number }>
+): void {
+  const db = getDb()
+  // Clear old snapshot
+  db.prepare('DELETE FROM position_snapshots WHERE wallet = ?').run(wallet)
+  // Insert new
+  const stmt = db.prepare(
+    `INSERT INTO position_snapshots
+     (wallet, condition_id, outcome_index, title, size, avg_price, cur_price, snapshot_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+  )
+  const now = new Date().toISOString()
+  for (const p of positions) {
+    stmt.run(wallet, p.conditionId, p.outcomeIndex, p.title, p.size, p.avgPrice, p.curPrice, now)
+  }
 }

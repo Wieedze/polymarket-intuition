@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server'
+import { getLeaderboard } from '@/lib/db'
 import { fetchResolvedTrades } from '@/lib/polymarket'
 import { classifyMarket } from '@/lib/classifier'
 import {
@@ -15,14 +16,6 @@ import type { DomainAtomValue } from '@/lib/atoms'
 import type { ResolvedTrade } from '@/types/polymarket'
 
 // ── Types ─────────────────────────────────────────────────────────
-
-type LeaderboardEntry = {
-  rank: string
-  proxyWallet: string
-  userName: string
-  vol: number
-  pnl: number
-}
 
 type DomainStats = {
   domain: string
@@ -58,13 +51,56 @@ function truncateAddress(addr: string): string {
   return `${addr.slice(0, 6)}...${addr.slice(-4)}`
 }
 
-async function computeWalletStats(
+function buildFromCache(period: string): LeaderboardWallet[] | null {
+  try {
+    const cached = getLeaderboard(period)
+    if (cached.length === 0) return null
+
+    return cached.map((entry) => {
+      const domains: DomainStats[] = entry.stats.map((s) => ({
+        domain: s.domain,
+        trades: s.tradesCount,
+        winRate: s.winRate,
+        calibration: s.calibration,
+        profitFactor: 0,
+        avgPnlPerTrade: s.totalPnl / Math.max(s.tradesCount, 1),
+        maxConsecutiveLosses: 0,
+        copyabilityScore: Math.min(
+          s.winRate / 0.7 * 0.25 +
+          Math.max((s.calibration - 0.5) / 0.5, 0) * 0.25 +
+          0.30 +
+          Math.min(1 - 0, 1) * 0.20,
+          1
+        ),
+        convictionScore: s.avgConviction,
+        tradingStyle: 'mixed',
+        totalPnl: s.totalPnl,
+      }))
+
+      domains.sort((a, b) => b.copyabilityScore - a.copyabilityScore)
+      const bestDomain = domains[0] ?? null
+
+      return {
+        rank: entry.rank,
+        address: entry.wallet,
+        userName: entry.userName || truncateAddress(entry.wallet),
+        pnl: entry.pnl,
+        volume: entry.volume,
+        resolvedTrades: domains.reduce((s, d) => s + d.trades, 0),
+        classifiedTrades: domains.reduce((s, d) => s + d.trades, 0),
+        bestDomain,
+        topCopyability: bestDomain?.copyabilityScore ?? 0,
+        domains,
+      }
+    })
+  } catch {
+    return null
+  }
+}
+
+async function computeLive(
   address: string
-): Promise<{
-  resolvedTrades: number
-  classifiedTrades: number
-  domains: DomainStats[]
-}> {
+): Promise<{ resolvedTrades: number; classifiedTrades: number; domains: DomainStats[] }> {
   const walletTrades = await fetchResolvedTrades(address)
 
   if (walletTrades.trades.length === 0) {
@@ -102,9 +138,11 @@ async function computeWalletStats(
 
   domains.sort((a, b) => b.copyabilityScore - a.copyabilityScore)
 
-  const classifiedTrades = domains.reduce((s, d) => s + d.trades, 0)
-
-  return { resolvedTrades: walletTrades.totalTrades, classifiedTrades, domains }
+  return {
+    resolvedTrades: walletTrades.totalTrades,
+    classifiedTrades: domains.reduce((s, d) => s + d.trades, 0),
+    domains,
+  }
 }
 
 // ── Route ─────────────────────────────────────────────────────────
@@ -113,8 +151,31 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   const timePeriod = request.nextUrl.searchParams.get('period') ?? 'MONTH'
   const limitParam = request.nextUrl.searchParams.get('limit') ?? '10'
   const limit = Math.min(Math.max(parseInt(limitParam, 10) || 10, 1), 20)
+  const refresh = request.nextUrl.searchParams.get('refresh') === 'true'
 
-  // Step 1: Fetch Polymarket leaderboard
+  // Try cache first (populated by bulk-index script)
+  if (!refresh) {
+    const cached = buildFromCache(timePeriod)
+    if (cached && cached.length > 0) {
+      cached.sort((a, b) => b.topCopyability - a.topCopyability)
+      return NextResponse.json({
+        period: timePeriod,
+        wallets: cached.slice(0, limit),
+        source: 'cache',
+        computedAt: new Date().toISOString(),
+      })
+    }
+  }
+
+  // Fallback: live computation
+  type LeaderboardEntry = {
+    rank: string
+    proxyWallet: string
+    userName: string
+    vol: number
+    pnl: number
+  }
+
   let leaderboard: LeaderboardEntry[]
   try {
     const res = await fetch(
@@ -127,18 +188,15 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: `Leaderboard error: ${msg}` }, { status: 502 })
   }
 
-  // Step 2: Compute stats for each wallet (in parallel, max 5 concurrent)
   const results: LeaderboardWallet[] = []
 
-  // Process in batches of 3 to avoid rate limiting
   for (let i = 0; i < leaderboard.length; i += 3) {
     const batch = leaderboard.slice(i, i + 3)
     const batchResults = await Promise.all(
       batch.map(async (entry) => {
         try {
-          const stats = await computeWalletStats(entry.proxyWallet)
+          const stats = await computeLive(entry.proxyWallet)
           const bestDomain = stats.domains[0] ?? null
-          const topCopyability = bestDomain?.copyabilityScore ?? 0
 
           return {
             rank: parseInt(entry.rank, 10),
@@ -149,7 +207,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
             resolvedTrades: stats.resolvedTrades,
             classifiedTrades: stats.classifiedTrades,
             bestDomain,
-            topCopyability,
+            topCopyability: bestDomain?.copyabilityScore ?? 0,
             domains: stats.domains,
           }
         } catch {
@@ -171,12 +229,12 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     results.push(...batchResults)
   }
 
-  // Sort by copyability descending
   results.sort((a, b) => b.topCopyability - a.topCopyability)
 
   return NextResponse.json({
     period: timePeriod,
     wallets: results,
+    source: 'live',
     computedAt: new Date().toISOString(),
   })
 }

@@ -47,7 +47,7 @@ async function fetchJson<T>(url: string): Promise<T> {
 }
 
 /** Paginate through a Polymarket endpoint (max 500 per page, max 5 pages) */
-async function fetchAllPages<T>(baseUrl: string, maxPages: number = 5): Promise<T[]> {
+export async function fetchAllPages<T>(baseUrl: string, maxPages: number = 5): Promise<T[]> {
   const PAGE_SIZE = 500
   const all: T[] = []
   let offset = 0
