@@ -4,6 +4,10 @@ import {
   calculateCalibration,
   calculateConvictionScore,
   detectTradingStyle,
+  calculateProfitFactor,
+  calculateAvgPnlPerTrade,
+  calculateMaxConsecutiveLosses,
+  calculateCopyabilityScore,
   calculateDecayFactor,
   MIN_TRADES_FOR_ATTESTATION,
 } from '../../src/lib/scorer'
@@ -210,6 +214,194 @@ describe('detectTradingStyle', () => {
     ]
     // avgPrice = 0.30, convictionScore = 0 (all lost)
     expect(detectTradingStyle(trades)).toBe('mixed')
+  })
+})
+
+// ── calculateProfitFactor ──────────────────────────────────────────
+
+describe('calculateProfitFactor', () => {
+  it('returns 0 for empty array', () => {
+    expect(calculateProfitFactor([])).toBe(0)
+  })
+
+  it('returns Infinity for all wins (no losses)', () => {
+    const trades = [
+      makeTrade({ pnl: 50 }),
+      makeTrade({ pnl: 30 }),
+    ]
+    expect(calculateProfitFactor(trades)).toBe(Infinity)
+  })
+
+  it('returns 0 for all break-even trades', () => {
+    const trades = [
+      makeTrade({ pnl: 0 }),
+      makeTrade({ pnl: 0 }),
+    ]
+    expect(calculateProfitFactor(trades)).toBe(0)
+  })
+
+  it('returns correct ratio for mixed results', () => {
+    const trades = [
+      makeTrade({ pnl: 100 }),   // gross win = 100
+      makeTrade({ pnl: -50 }),   // gross loss = 50
+      makeTrade({ pnl: 50 }),    // gross win = 50
+      makeTrade({ pnl: -25 }),   // gross loss = 25
+    ]
+    // grossWins = 150, grossLosses = 75
+    // profitFactor = 150 / 75 = 2.0
+    expect(calculateProfitFactor(trades)).toBeCloseTo(2.0, 2)
+  })
+
+  it('returns < 1 for net losers', () => {
+    const trades = [
+      makeTrade({ pnl: 20 }),
+      makeTrade({ pnl: -100 }),
+    ]
+    // 20 / 100 = 0.2
+    expect(calculateProfitFactor(trades)).toBeCloseTo(0.2, 2)
+  })
+})
+
+// ── calculateAvgPnlPerTrade ────────────────────────────────────────
+
+describe('calculateAvgPnlPerTrade', () => {
+  it('returns 0 for empty array', () => {
+    expect(calculateAvgPnlPerTrade([])).toBe(0)
+  })
+
+  it('returns positive for profitable trader', () => {
+    const trades = [
+      makeTrade({ pnl: 100 }),
+      makeTrade({ pnl: -30 }),
+      makeTrade({ pnl: 50 }),
+    ]
+    // (100 - 30 + 50) / 3 = 40
+    expect(calculateAvgPnlPerTrade(trades)).toBeCloseTo(40, 2)
+  })
+
+  it('returns negative for losing trader', () => {
+    const trades = [
+      makeTrade({ pnl: -100 }),
+      makeTrade({ pnl: -50 }),
+    ]
+    expect(calculateAvgPnlPerTrade(trades)).toBeCloseTo(-75, 2)
+  })
+})
+
+// ── calculateMaxConsecutiveLosses ──────────────────────────────────
+
+describe('calculateMaxConsecutiveLosses', () => {
+  it('returns 0 for empty array', () => {
+    expect(calculateMaxConsecutiveLosses([])).toBe(0)
+  })
+
+  it('returns 0 for all wins', () => {
+    const trades = [
+      makeTrade({ outcome: 'won' }),
+      makeTrade({ outcome: 'won' }),
+    ]
+    expect(calculateMaxConsecutiveLosses(trades)).toBe(0)
+  })
+
+  it('counts consecutive losses correctly', () => {
+    const trades = [
+      makeTrade({ outcome: 'won' }),
+      makeTrade({ outcome: 'lost' }),
+      makeTrade({ outcome: 'lost' }),
+      makeTrade({ outcome: 'lost' }),
+      makeTrade({ outcome: 'won' }),
+      makeTrade({ outcome: 'lost' }),
+    ]
+    expect(calculateMaxConsecutiveLosses(trades)).toBe(3)
+  })
+
+  it('handles all losses', () => {
+    const trades = [
+      makeTrade({ outcome: 'lost' }),
+      makeTrade({ outcome: 'lost' }),
+      makeTrade({ outcome: 'lost' }),
+      makeTrade({ outcome: 'lost' }),
+    ]
+    expect(calculateMaxConsecutiveLosses(trades)).toBe(4)
+  })
+
+  it('picks the longest streak when multiple exist', () => {
+    const trades = [
+      makeTrade({ outcome: 'lost' }),
+      makeTrade({ outcome: 'lost' }),
+      makeTrade({ outcome: 'won' }),
+      makeTrade({ outcome: 'lost' }),
+      makeTrade({ outcome: 'lost' }),
+      makeTrade({ outcome: 'lost' }),
+      makeTrade({ outcome: 'won' }),
+    ]
+    expect(calculateMaxConsecutiveLosses(trades)).toBe(3)
+  })
+})
+
+// ── calculateCopyabilityScore ──────────────────────────────────────
+
+describe('calculateCopyabilityScore', () => {
+  it('returns 0 for empty array', () => {
+    expect(calculateCopyabilityScore([])).toBe(0)
+  })
+
+  it('returns 0 for < 5 trades (not enough data)', () => {
+    const trades = [
+      makeTrade({ outcome: 'won', pnl: 50 }),
+      makeTrade({ outcome: 'won', pnl: 50 }),
+      makeTrade({ outcome: 'won', pnl: 50 }),
+    ]
+    expect(calculateCopyabilityScore(trades)).toBe(0)
+  })
+
+  it('returns high score for excellent trader', () => {
+    // 80% win rate, good calibration, high profit factor, no losing streaks
+    const trades = [
+      makeTrade({ side: 'YES', entryPrice: 0.70, outcome: 'won', pnl: 100 }),
+      makeTrade({ side: 'YES', entryPrice: 0.65, outcome: 'won', pnl: 80 }),
+      makeTrade({ side: 'YES', entryPrice: 0.60, outcome: 'won', pnl: 60 }),
+      makeTrade({ side: 'YES', entryPrice: 0.75, outcome: 'won', pnl: 120 }),
+      makeTrade({ side: 'YES', entryPrice: 0.55, outcome: 'lost', pnl: -40 }),
+    ]
+    const score = calculateCopyabilityScore(trades)
+    expect(score).toBeGreaterThan(0.6)
+  })
+
+  it('returns low score for bad trader', () => {
+    // 20% win rate, bad calibration, low profit factor, long losing streaks
+    const trades = [
+      makeTrade({ side: 'YES', entryPrice: 0.80, outcome: 'lost', pnl: -80 }),
+      makeTrade({ side: 'YES', entryPrice: 0.75, outcome: 'lost', pnl: -75 }),
+      makeTrade({ side: 'YES', entryPrice: 0.90, outcome: 'lost', pnl: -90 }),
+      makeTrade({ side: 'YES', entryPrice: 0.85, outcome: 'lost', pnl: -85 }),
+      makeTrade({ side: 'YES', entryPrice: 0.60, outcome: 'won', pnl: 20 }),
+    ]
+    const score = calculateCopyabilityScore(trades)
+    expect(score).toBeLessThan(0.35)
+  })
+
+  it('penalizes longshot hunters (low copyability)', () => {
+    // Typical longshot pattern: 14% win rate, huge losing streaks
+    const trades = [
+      makeTrade({ side: 'YES', entryPrice: 0.05, outcome: 'lost', pnl: -5 }),
+      makeTrade({ side: 'YES', entryPrice: 0.05, outcome: 'lost', pnl: -5 }),
+      makeTrade({ side: 'YES', entryPrice: 0.05, outcome: 'lost', pnl: -5 }),
+      makeTrade({ side: 'YES', entryPrice: 0.05, outcome: 'lost', pnl: -5 }),
+      makeTrade({ side: 'YES', entryPrice: 0.05, outcome: 'lost', pnl: -5 }),
+      makeTrade({ side: 'YES', entryPrice: 0.05, outcome: 'lost', pnl: -5 }),
+      makeTrade({ side: 'YES', entryPrice: 0.05, outcome: 'lost', pnl: -5 }),
+      makeTrade({ side: 'YES', entryPrice: 0.05, outcome: 'lost', pnl: -5 }),
+      makeTrade({ side: 'YES', entryPrice: 0.05, outcome: 'lost', pnl: -5 }),
+      makeTrade({ side: 'YES', entryPrice: 0.05, outcome: 'lost', pnl: -5 }),
+      makeTrade({ side: 'YES', entryPrice: 0.05, outcome: 'lost', pnl: -5 }),
+      makeTrade({ side: 'YES', entryPrice: 0.05, outcome: 'lost', pnl: -5 }),
+      makeTrade({ side: 'YES', entryPrice: 0.05, outcome: 'won', pnl: 30 }),
+      makeTrade({ side: 'YES', entryPrice: 0.05, outcome: 'won', pnl: 30 }),
+    ]
+    const score = calculateCopyabilityScore(trades)
+    // 14% win rate, 12 consecutive losses — low copyability for small accounts
+    expect(score).toBeLessThan(0.45)
   })
 })
 

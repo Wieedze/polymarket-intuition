@@ -9,6 +9,10 @@ export type DomainReputation = {
   avgConviction: number
   convictionScore: number
   tradingStyle: TradingStyle
+  profitFactor: number
+  avgPnlPerTrade: number
+  maxConsecutiveLosses: number
+  copyabilityScore: number
   totalPnl: number
   agentRank?: number
   compositeScore?: number

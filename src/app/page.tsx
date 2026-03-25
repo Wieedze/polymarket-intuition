@@ -14,7 +14,13 @@ export default function Home(): React.ReactElement {
   return (
     <main className="flex flex-col items-center justify-center min-h-screen px-4">
       {/* Nav */}
-      <nav className="fixed top-0 right-0 p-4">
+      <nav className="fixed top-0 right-0 p-4 flex gap-2">
+        <Link
+          href="/leaderboard"
+          className="px-4 py-2 text-sm text-zinc-400 hover:text-white border border-zinc-700 hover:border-zinc-500 rounded-lg transition-colors"
+        >
+          Leaderboard
+        </Link>
         <Link
           href="/signal"
           className="px-4 py-2 text-sm text-zinc-400 hover:text-white border border-zinc-700 hover:border-zinc-500 rounded-lg transition-colors"

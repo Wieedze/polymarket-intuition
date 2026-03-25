@@ -136,6 +136,10 @@ export default function ReputationProfile({
             calibration={d.calibration}
             convictionScore={d.convictionScore}
             tradingStyle={d.tradingStyle}
+            profitFactor={d.profitFactor}
+            avgPnlPerTrade={d.avgPnlPerTrade}
+            maxConsecutiveLosses={d.maxConsecutiveLosses}
+            copyabilityScore={d.copyabilityScore}
             compositeScore={d.compositeScore}
             agentRank={d.agentRank}
           />

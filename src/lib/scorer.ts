@@ -77,6 +77,95 @@ export function detectTradingStyle(trades: ResolvedTrade[]): TradingStyle {
   return 'mixed'
 }
 
+// ── Copy Trading Metrics ──────────────────────────────────────────
+
+/**
+ * Profit Factor = gross wins / gross losses.
+ * >1 = profitable, >1.5 = good edge, >2.0 = excellent.
+ * Returns 0 if no losses (division by zero) or no trades.
+ */
+export function calculateProfitFactor(trades: ResolvedTrade[]): number {
+  if (trades.length === 0) return 0
+
+  let grossWins = 0
+  let grossLosses = 0
+
+  for (const t of trades) {
+    if (t.pnl > 0) grossWins += t.pnl
+    else if (t.pnl < 0) grossLosses += Math.abs(t.pnl)
+  }
+
+  if (grossLosses === 0) return grossWins > 0 ? Infinity : 0
+  return grossWins / grossLosses
+}
+
+/**
+ * Average PnL per trade in USDC.
+ * Positive = expected profit per copied trade.
+ */
+export function calculateAvgPnlPerTrade(trades: ResolvedTrade[]): number {
+  if (trades.length === 0) return 0
+  const total = trades.reduce((s, t) => s + t.pnl, 0)
+  return total / trades.length
+}
+
+/**
+ * Maximum consecutive losses.
+ * Critical for small accounts — tells you the worst drawdown streak.
+ */
+export function calculateMaxConsecutiveLosses(trades: ResolvedTrade[]): number {
+  let max = 0
+  let current = 0
+
+  for (const t of trades) {
+    if (t.outcome === 'lost') {
+      current++
+      if (current > max) max = current
+    } else {
+      current = 0
+    }
+  }
+
+  return max
+}
+
+/**
+ * Copyability Score — composite metric for copy trading viability.
+ *
+ * Designed for small accounts: penalizes longshot hunters,
+ * rewards consistent edge with survivable drawdowns.
+ *
+ * Components (0-1 each, weighted):
+ *   winRateScore    (25%) — winRate, clamped to [0, 0.7] then normalized
+ *   calibrationScore(25%) — calibration, clamped to [0.5, 1.0] then normalized
+ *   profitScore     (30%) — profitFactor, clamped to [0, 3.0] then normalized
+ *   streakScore     (20%) — 1 - (maxConsecLosses / 20), clamped to [0, 1]
+ *
+ * Returns 0 if < 5 trades (not enough data).
+ */
+export function calculateCopyabilityScore(trades: ResolvedTrade[]): number {
+  if (trades.length < 5) return 0
+
+  const winRate = calculateWinRate(trades)
+  const calibration = calculateCalibration(trades)
+  const profitFactor = calculateProfitFactor(trades)
+  const maxConsecLosses = calculateMaxConsecutiveLosses(trades)
+
+  const winRateScore = Math.min(Math.max(winRate / 0.7, 0), 1)
+  const calibrationScore = Math.min(Math.max((calibration - 0.5) / 0.5, 0), 1)
+  const profitScore = profitFactor === Infinity
+    ? 1
+    : Math.min(Math.max(profitFactor / 3, 0), 1)
+  const streakScore = Math.min(Math.max(1 - maxConsecLosses / 20, 0), 1)
+
+  return (
+    winRateScore * 0.25 +
+    calibrationScore * 0.25 +
+    profitScore * 0.30 +
+    streakScore * 0.20
+  )
+}
+
 /**
  * Decay factor based on inactivity.
  * > 180 days → 0.5

@@ -1,7 +1,16 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { fetchResolvedTrades } from '@/lib/polymarket'
 import { classifyMarket } from '@/lib/classifier'
-import { calculateWinRate, calculateCalibration, calculateConvictionScore, detectTradingStyle } from '@/lib/scorer'
+import {
+  calculateWinRate,
+  calculateCalibration,
+  calculateConvictionScore,
+  detectTradingStyle,
+  calculateProfitFactor,
+  calculateAvgPnlPerTrade,
+  calculateMaxConsecutiveLosses,
+  calculateCopyabilityScore,
+} from '@/lib/scorer'
 import { DOMAIN_ATOMS, type DomainAtomValue } from '@/lib/atoms'
 import type { WalletReputation, DomainReputation } from '@/types/reputation'
 import type { DomainAtom } from '@/types/attestation'
@@ -72,6 +81,10 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       avgConviction,
       convictionScore,
       tradingStyle,
+      profitFactor: calculateProfitFactor(trades),
+      avgPnlPerTrade: calculateAvgPnlPerTrade(trades),
+      maxConsecutiveLosses: calculateMaxConsecutiveLosses(trades),
+      copyabilityScore: calculateCopyabilityScore(trades),
       totalPnl,
       lastUpdated: new Date().toISOString(),
     })
