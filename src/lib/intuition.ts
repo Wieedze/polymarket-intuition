@@ -190,6 +190,7 @@ export async function upsertAggregatedAttestation(
     const depositAmount = BigInt(1e15) // 0.001 TRUST signal deposit
 
     const hash = await walletClient.writeContract({
+      chain: intuitionMainnet,
       address: MULTIVAULT,
       abi: writeAbi,
       functionName: 'deposit',
