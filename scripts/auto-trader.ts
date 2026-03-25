@@ -44,23 +44,75 @@ const EXIT_CONFIG: ExitConfig = {
   followExpertExit: process.env.FOLLOW_EXPERT_EXIT !== 'false',
 }
 
+// ── Consensus tracking ───────────────────────────────────────────
+// Track which experts entered which markets this poll cycle
+// Key: conditionId → list of experts who entered
+
+type ConsensusEntry = {
+  conditionId: string
+  title: string
+  side: string
+  price: number
+  experts: Array<{ wallet: string; label: string | null; size: number }>
+}
+
+const consensusMap = new Map<string, ConsensusEntry>()
+
+function trackConsensus(alert: PositionAlert): void {
+  if (alert.type !== 'NEW_POSITION') return
+
+  const key = alert.position.conditionId
+  const side = alert.position.outcomeIndex === 0 ? 'YES' : 'NO'
+
+  const existing = consensusMap.get(key)
+  if (existing) {
+    // Only count if same side
+    if (existing.side === side) {
+      existing.experts.push({
+        wallet: alert.wallet,
+        label: alert.walletLabel,
+        size: alert.position.size,
+      })
+    }
+  } else {
+    consensusMap.set(key, {
+      conditionId: key,
+      title: alert.position.title,
+      side,
+      price: alert.position.curPrice,
+      experts: [{
+        wallet: alert.wallet,
+        label: alert.walletLabel,
+        size: alert.position.size,
+      }],
+    })
+  }
+}
+
+function getConsensusMultiplier(conditionId: string): number {
+  const entry = consensusMap.get(conditionId)
+  if (!entry) return 1
+  const n = entry.experts.length
+  // 1 expert = 1x, 2 = 1.5x, 3+ = 2x, 5+ = 3x
+  if (n >= 5) return 3
+  if (n >= 3) return 2
+  if (n >= 2) return 1.5
+  return 1
+}
+
 // ── Auto-copy logic ──────────────────────────────────────────────
 
 function shouldCopy(alert: PositionAlert): boolean {
   if (alert.type !== 'NEW_POSITION') return false
 
   const price = alert.position.curPrice
-  // Skip longshots and near-resolved
   if (price < MIN_ENTRY || price > MAX_ENTRY) return false
-
-  // Skip if already have paper trade for this market
   if (paperTradeExistsForCondition(alert.position.conditionId)) return false
 
-  // Skip if too many open trades
   const openTrades = getOpenPaperTrades()
   if (openTrades.length >= MAX_OPEN) return false
 
-  // Capital guard: don't invest more than MAX_CAPITAL_PCT of balance
+  // Capital guard
   const startBal = parseFloat(getPortfolioSetting('starting_balance', '10000'))
   const closedTrades = getAllPaperTrades().filter((t) => t.status !== 'open')
   const realizedPnl = closedTrades.reduce((s, t) => s + (t.pnl ?? 0), 0)
@@ -76,19 +128,29 @@ function autoCopy(alert: PositionAlert): void {
   const domain = keywordClassify(alert.position.title)
   const side = alert.position.outcomeIndex === 0 ? 'YES' : 'NO'
 
-  const trade = openPaperTrade({
+  // Dynamic sizing based on consensus
+  const consensusMulti = getConsensusMultiplier(alert.position.conditionId)
+  const consensusEntry = consensusMap.get(alert.position.conditionId)
+  const expertCount = consensusEntry?.experts.length ?? 1
+
+  // Sizing: base × consensus multiplier
+  // Capped at 3x base bet
+  const betAmount = Math.min(BET_SIZE * consensusMulti, BET_SIZE * 3)
+
+  openPaperTrade({
     conditionId: alert.position.conditionId,
     title: alert.position.title,
     domain: domain?.domain ?? null,
     side,
     entryPrice: alert.position.curPrice,
-    simulatedUsdc: BET_SIZE,
+    simulatedUsdc: betAmount,
     copiedFrom: alert.wallet,
     copiedLabel: alert.walletLabel,
   })
 
   const domainTag = domain ? `[${domain.domain.replace('pm-domain/', '')}]` : ''
-  console.log(`  📋 COPIED | ${side} @ ${(alert.position.curPrice * 100).toFixed(0)}¢ | $${BET_SIZE} | ${alert.position.title} ${domainTag}`)
+  const consensusTag = expertCount > 1 ? ` 🤝${expertCount}x consensus → $${betAmount}` : ` $${betAmount}`
+  console.log(`  📋 COPIED | ${side} @ ${(alert.position.curPrice * 100).toFixed(0)}¢ |${consensusTag} | ${alert.position.title} ${domainTag}`)
 }
 
 // ── Resolve logic ────────────────────────────────────────────────
@@ -251,23 +313,17 @@ async function pollOnce(): Promise<void> {
 
   console.log(`[${time}] Polling ${wallets.length} wallets...`)
 
-  let newPositions = 0
-  let copied = 0
+  // ── Phase 1: Collect all signals & build consensus ──
+  consensusMap.clear()
+  const allNewAlerts: PositionAlert[] = []
 
   for (const { wallet, label } of wallets) {
     try {
       const alerts = await pollWallet(wallet, label)
-
       for (const alert of alerts) {
         if (alert.type === 'NEW_POSITION') {
-          newPositions++
-          const side = alert.position.outcomeIndex === 0 ? 'YES' : 'NO'
-          console.log(`  🔔 NEW | ${label ?? wallet.slice(0, 10)} | ${side} @ ${(alert.position.curPrice * 100).toFixed(0)}¢ | ${alert.position.title}`)
-
-          if (shouldCopy(alert)) {
-            autoCopy(alert)
-            copied++
-          }
+          trackConsensus(alert)
+          allNewAlerts.push(alert)
         }
       }
     } catch {
@@ -276,18 +332,52 @@ async function pollOnce(): Promise<void> {
     await new Promise((r) => setTimeout(r, 800))
   }
 
-  // Refresh prices first (needed for stop-loss)
+  // Log new positions with consensus info
+  for (const alert of allNewAlerts) {
+    const side = alert.position.outcomeIndex === 0 ? 'YES' : 'NO'
+    const consensus = consensusMap.get(alert.position.conditionId)
+    const expertCount = consensus?.experts.length ?? 1
+    const consensusTag = expertCount > 1 ? ` [${expertCount} experts]` : ''
+    console.log(`  🔔 NEW | ${alert.walletLabel ?? alert.wallet.slice(0, 10)} | ${side} @ ${(alert.position.curPrice * 100).toFixed(0)}¢${consensusTag} | ${alert.position.title}`)
+  }
+
+  // Log consensus markets
+  for (const [, entry] of consensusMap) {
+    if (entry.experts.length >= 2) {
+      const names = entry.experts.map((e) => e.label?.split(' ')[0] ?? e.wallet.slice(0, 8)).join(', ')
+      console.log(`  🤝 CONSENSUS ${entry.experts.length}x | ${entry.side} @ ${(entry.price * 100).toFixed(0)}¢ | ${entry.title} | by: ${names}`)
+    }
+  }
+
+  // ── Phase 2: Copy with consensus-based sizing ──
+  let copied = 0
+
+  // Deduplicate: only copy each conditionId once (the first alert)
+  const copiedConditions = new Set<string>()
+
+  for (const alert of allNewAlerts) {
+    if (copiedConditions.has(alert.position.conditionId)) continue
+
+    if (shouldCopy(alert)) {
+      autoCopy(alert)
+      copiedConditions.add(alert.position.conditionId)
+      copied++
+    }
+  }
+
+  // ── Phase 3: Manage existing positions ──
   const pricesUpdated = await refreshOpenPrices()
 
-  // Exit strategy (take-profit, stop-loss, trailing, stale, expert-exit)
   const exits = runExitStrategy()
   const totalExits = Object.values(exits).reduce((s, n) => s + n, 0)
   const exitSummary = Object.entries(exits).map(([k, v]) => `${v} ${k}`).join(', ')
 
-  // Resolve completed markets (price went to 0 or 1)
   const resolved = await resolveCompletedTrades()
 
-  const parts = [`${newPositions} new`, `${copied} copied`]
+  // ── Summary ──
+  const parts = [`${allNewAlerts.length} new`, `${copied} copied`]
+  const consensusCount = [...consensusMap.values()].filter((e) => e.experts.length >= 2).length
+  if (consensusCount > 0) parts.push(`${consensusCount} consensus`)
   if (totalExits > 0) parts.push(`${totalExits} exits (${exitSummary})`)
   if (resolved > 0) parts.push(`${resolved} resolved`)
   parts.push(`${pricesUpdated} prices`)
@@ -326,6 +416,7 @@ async function main(): Promise<void> {
   console.log(`  Stale exit:  ${EXIT_CONFIG.staleDays}d < ${(EXIT_CONFIG.staleThreshold * 100).toFixed(0)}¢ move`)
   console.log(`  Expert exit: ${EXIT_CONFIG.followExpertExit ? 'ON' : 'OFF'}`)
   console.log(`  Max capital: ${(MAX_CAPITAL_PCT * 100).toFixed(0)}%`)
+  console.log(`  Consensus:   2x→1.5x, 3x→2x, 5x→3x sizing`)
   console.log(`  Poll every: ${POLL_INTERVAL_MS / 1000}s`)
   console.log('═══════════════════════════════════════════════')
 
