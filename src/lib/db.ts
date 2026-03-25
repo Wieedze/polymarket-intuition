@@ -634,10 +634,12 @@ export function resolvePaperTrade(
   conditionId: string,
   exitPrice: number
 ): void {
+  if (!conditionId || exitPrice == null || isNaN(exitPrice)) return
+
   const db = getDb()
   const rows = db.prepare(
-    "SELECT * FROM paper_trades WHERE condition_id = ? AND status = 'open'"
-  ).all() as Array<Record<string, unknown>>
+    "SELECT id, entry_price, shares, side FROM paper_trades WHERE condition_id = ? AND status = 'open'"
+  ).all(conditionId) as Array<Record<string, unknown>>
 
   for (const row of rows) {
     const entryPrice = row.entry_price as number

@@ -201,10 +201,15 @@ function runExitStrategy(): Record<string, number> {
     const decision = evaluateExit(trade, EXIT_CONFIG, expertStillHolding)
 
     if (decision.shouldExit) {
-      resolvePaperTrade(trade.conditionId, trade.curPrice ?? trade.entryPrice)
-      const pnl = trade.shares * ((trade.curPrice ?? trade.entryPrice) - trade.entryPrice)
-      console.log(`  ${exitEmoji(decision.reason)} ${decision.reason.toUpperCase()} | ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)} | ${decision.message} | ${trade.title}`)
-      counts[decision.reason] = (counts[decision.reason] ?? 0) + 1
+      const exitPrice = trade.curPrice ?? trade.entryPrice
+      try {
+        resolvePaperTrade(trade.conditionId, exitPrice)
+        const pnl = trade.shares * (exitPrice - trade.entryPrice)
+        console.log(`  ${exitEmoji(decision.reason)} ${decision.reason.toUpperCase()} | ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)} | ${decision.message} | ${trade.title}`)
+        counts[decision.reason] = (counts[decision.reason] ?? 0) + 1
+      } catch (err) {
+        console.error(`  ⚠ Exit failed for ${trade.conditionId}: ${err instanceof Error ? err.message : String(err)}`)
+      }
     }
   }
 
