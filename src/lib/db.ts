@@ -599,6 +599,7 @@ export function openPaperTrade(trade: {
     copiedLabel: trade.copiedLabel,
     status: 'open',
     curPrice: trade.entryPrice,
+    peakPrice: trade.entryPrice,
     exitPrice: null,
     pnl: null,
     openedAt: now,
