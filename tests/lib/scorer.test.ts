@@ -9,6 +9,7 @@ import {
   calculateMaxConsecutiveLosses,
   calculateCopyabilityScore,
   calculateDecayFactor,
+  calculateImplicitEdge,
   MIN_TRADES_FOR_ATTESTATION,
 } from '../../src/lib/scorer'
 import type { ResolvedTrade } from '../../src/types/polymarket'
@@ -143,13 +144,22 @@ describe('calculateConvictionScore', () => {
     expect(calculateConvictionScore([])).toBe(0)
   })
 
-  it('returns 0 when all trades have entryPrice < 0.25 (filtered)', () => {
+  it('returns 0 when all trades have entryPrice < 0.10 (filtered)', () => {
     const trades = [
       makeTrade({ entryPrice: 0.05, outcome: 'won' }),
-      makeTrade({ entryPrice: 0.10, outcome: 'won' }),
-      makeTrade({ entryPrice: 0.20, outcome: 'lost' }),
+      makeTrade({ entryPrice: 0.08, outcome: 'won' }),
+      makeTrade({ entryPrice: 0.09, outcome: 'lost' }),
     ]
     expect(calculateConvictionScore(trades)).toBe(0)
+  })
+
+  it('includes longshots >= 0.10 in conviction score (threshold lowered from 0.25)', () => {
+    const trades = [
+      makeTrade({ entryPrice: 0.20, outcome: 'won' }),
+      makeTrade({ entryPrice: 0.15, outcome: 'won' }),
+    ]
+    // Both trades qualify now (>= 0.10), avg = (0.20 + 0.15) / 2 = 0.175
+    expect(calculateConvictionScore(trades)).toBeCloseTo(0.175, 2)
   })
 
   it('returns ~0.70 for a single won trade at 0.70', () => {
@@ -431,6 +441,65 @@ describe('calculateDecayFactor', () => {
 
   it('returns 1.0 for trade today', () => {
     expect(calculateDecayFactor(new Date().toISOString())).toBe(1.0)
+  })
+})
+
+// ── calculateImplicitEdge ─────────────────────────────────────────
+
+describe('calculateImplicitEdge', () => {
+  it('returns 0 for empty trades', () => {
+    expect(calculateImplicitEdge([])).toBe(0)
+  })
+
+  it('returns positive edge when wallet beats market probability', () => {
+    // Wallet bets YES at 30¢ (market says 30% chance) and wins
+    // edge = 1 - 0.30 = +0.70 per trade
+    const trades = [
+      makeTrade({ entryPrice: 0.30, side: 'YES', outcome: 'won' }),
+      makeTrade({ entryPrice: 0.30, side: 'YES', outcome: 'won' }),
+    ]
+    expect(calculateImplicitEdge(trades)).toBeCloseTo(0.70, 2)
+  })
+
+  it('returns negative edge when wallet loses on high-probability bets', () => {
+    // Wallet bets YES at 80¢ and loses — worse than market
+    // edge = 0 - 0.80 = -0.80
+    const trades = [
+      makeTrade({ entryPrice: 0.80, side: 'YES', outcome: 'lost' }),
+    ]
+    expect(calculateImplicitEdge(trades)).toBeCloseTo(-0.80, 2)
+  })
+
+  it('returns ~0 when wallet wins exactly as often as the market predicts', () => {
+    // At 50¢, market says 50/50. Wallet wins half the time → edge ≈ 0
+    const trades = [
+      makeTrade({ entryPrice: 0.50, side: 'YES', outcome: 'won' }),
+      makeTrade({ entryPrice: 0.50, side: 'YES', outcome: 'lost' }),
+    ]
+    // edge = ((1-0.5) + (0-0.5)) / 2 = (0.5 - 0.5) / 2 = 0
+    expect(calculateImplicitEdge(trades)).toBeCloseTo(0, 2)
+  })
+
+  it('handles NO side correctly', () => {
+    // Wallet bets NO at 70¢ → marketProb for NO = 1 - 0.70 = 0.30
+    // If NO wins (outcome='won'): edge = 1 - 0.30 = +0.70
+    const trades = [
+      makeTrade({ entryPrice: 0.70, side: 'NO', outcome: 'won' }),
+    ]
+    expect(calculateImplicitEdge(trades)).toBeCloseTo(0.70, 2)
+  })
+
+  it('computes correct average across mixed trades', () => {
+    // Trade 1: YES @30¢, won → edge = +0.70
+    // Trade 2: YES @30¢, lost → edge = -0.30
+    // Trade 3: YES @30¢, won → edge = +0.70
+    // avg = (0.70 - 0.30 + 0.70) / 3 = 1.10/3 ≈ +0.367
+    const trades = [
+      makeTrade({ entryPrice: 0.30, side: 'YES', outcome: 'won' }),
+      makeTrade({ entryPrice: 0.30, side: 'YES', outcome: 'lost' }),
+      makeTrade({ entryPrice: 0.30, side: 'YES', outcome: 'won' }),
+    ]
+    expect(calculateImplicitEdge(trades)).toBeCloseTo(1.10 / 3, 2)
   })
 })
 
