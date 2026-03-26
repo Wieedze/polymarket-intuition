@@ -21,7 +21,7 @@ import { keywordClassify } from '../src/lib/classifier'
 import { fetchAllPages } from '../src/lib/polymarket'
 import { resolvePaperTrade, updatePaperTradePrice, logBotEvent } from '../src/lib/db'
 import { evaluateExit, exitEmoji, type ExitConfig } from '../src/lib/exit-strategy'
-import { scoreSignal, shouldCopySignal, signalBetMultiplier, isContradictory } from '../src/lib/signal-scorer'
+import { scoreSignal, shouldCopySignal, signalBetMultiplier, isContradictory, kellyBetFraction } from '../src/lib/signal-scorer'
 import { evaluateExpertTrust, getAllExpertTrust } from '../src/lib/expert-trust'
 
 const POLYMARKET_DATA_URL = process.env.POLYMARKET_DATA_URL ?? 'https://data-api.polymarket.com'
@@ -58,7 +58,7 @@ function getDynamicBetSize(): number {
 // Exit strategy config (override via env vars)
 const EXIT_CONFIG: ExitConfig = {
   takeProfitPct: parseFloat(process.env.TAKE_PROFIT ?? '999'),
-  stopLossPct: parseFloat(process.env.STOP_LOSS ?? '0.40'),
+  stopLossPct: parseFloat(process.env.STOP_LOSS ?? '0.25'),
   trailingActivatePct: parseFloat(process.env.TRAILING_ACTIVATE ?? '999'),
   trailingStopPct: parseFloat(process.env.TRAILING_STOP ?? '0.10'),
   nearResolutionThreshold: parseFloat(process.env.NEAR_RESOLUTION ?? '0.85'),
@@ -116,10 +116,14 @@ function getConsensusMultiplier(conditionId: string): number {
   const entry = consensusMap.get(conditionId)
   if (!entry) return 1
   const n = entry.experts.length
-  // 1 expert = 1x, 2 = 1.5x, 3+ = 2x, 5+ = 3x
-  if (n >= 5) return 3
-  if (n >= 3) return 2
-  if (n >= 2) return 1.5
+  // INVERTED: consensus = late entry signal → reduce sizing
+  // 1 expert = 1x (fresh signal, full size)
+  // 2 experts = 0.7x (cote already moved, reduce)
+  // 3+ experts = 0.5x (crowded trade, likely late)
+  // 5+ experts = 0.3x (everyone piled in, edge gone)
+  if (n >= 5) return 0.3
+  if (n >= 3) return 0.5
+  if (n >= 2) return 0.7
   return 1
 }
 
@@ -174,12 +178,38 @@ function tryCopyWithSignal(alert: PositionAlert): boolean {
   const domain = keywordClassify(alert.position.title)
   const side = alert.position.outcomeIndex === 0 ? 'YES' : 'NO'
 
-  // Dynamic sizing: base × signal × consensus × expert trust
-  const baseBet = getDynamicBetSize()
+  // ── Slippage simulation ─────────────────────────────────────────
+  // In reality we enter AFTER the sharp — price has already moved.
+  // Longshots (15-30¢) have wide spreads → bigger slippage.
+  // Value zone (30-55¢) has better liquidity → smaller slippage.
+  const rawPrice = alert.position.curPrice
+  const slippage = rawPrice < 0.30 ? 0.05 : 0.03
+  const entryPrice = Math.min(rawPrice + slippage, 0.95)
+
+  // ── Kelly-based sizing ──────────────────────────────────────────
+  // Kelly tells us how much to bet given our edge at this entry price.
+  // Use expert's win rate as our probability estimate.
+  // Quarter-Kelly already applied inside kellyBetFraction().
+  const kellyFraction = kellyBetFraction(trust.winRate, entryPrice)
+  const bankroll = parseFloat(getPortfolioSetting('starting_balance', '10000'))
+  const allTrades = getAllPaperTrades()
+  const realizedPnl = allTrades.filter(t => t.status !== 'open').reduce((s, t) => s + (t.pnl ?? 0), 0)
+  const currentBankroll = bankroll + realizedPnl
+
+  // Dynamic sizing: Kelly × bankroll × signal × consensus(inverted) × trust
+  // If Kelly is 0 (no edge), fall back to minimum bet
+  const baseBet = kellyFraction > 0
+    ? Math.min(Math.max(currentBankroll * kellyFraction, MIN_BET), MAX_BET)
+    : MIN_BET
+
   const signalMulti = signalBetMultiplier(signal)
   const consensusMulti = getConsensusMultiplier(alert.position.conditionId)
   const trustMulti = trust.trustLevel
   const betAmount = Math.min(baseBet * signalMulti * consensusMulti * trustMulti, MAX_BET)
+
+  // Dynamic stop loss: tighter on longshots (they resolve fast, no need for wide stop)
+  // 15-30¢ → -20% stop | 30-55¢ → -25% stop
+  const dynamicStopLoss = entryPrice < 0.30 ? 0.20 : 0.25
 
   const consensusEntry = consensusMap.get(alert.position.conditionId)
   const expertCount = consensusEntry?.experts.length ?? 1
@@ -189,19 +219,22 @@ function tryCopyWithSignal(alert: PositionAlert): boolean {
     title: alert.position.title,
     domain: domain?.domain ?? null,
     side,
-    entryPrice: alert.position.curPrice,
+    entryPrice,           // slippage-adjusted
     simulatedUsdc: betAmount,
     copiedFrom: alert.wallet,
     copiedLabel: alert.walletLabel,
   })
 
   const domainTag = domain ? `[${domain.domain.replace('pm-domain/', '')}]` : ''
-  const consensusTag = expertCount > 1 ? ` 🤝${expertCount}x` : ''
+  const consensusTag = expertCount > 1 ? ` 🤝${expertCount}x(${consensusMulti}x)` : ''
+  const slippageTag = `+${(slippage * 100).toFixed(0)}¢slip`
+  const kellyTag = kellyFraction > 0 ? `kelly:${(kellyFraction * 100).toFixed(1)}%` : 'kelly:0→min'
   const trustTag = trust.status === 'reduced' ? ' ⚡reduced' : ''
   const scoreTag = signal.score >= 80 ? '🔥' : signal.score >= 60 ? '✅' : '⚠️'
-  const logMsg = `${scoreTag} COPY (${signal.score}/100) | ${side} @ ${(alert.position.curPrice * 100).toFixed(0)}¢ | $${betAmount.toFixed(0)}${consensusTag}${trustTag} | ${trust.phase} | ${signal.reasons.slice(0, 2).join(', ')} | ${alert.position.title} ${domainTag}`
+  const stopTag = `stop:-${(dynamicStopLoss * 100).toFixed(0)}%`
+  const logMsg = `${scoreTag} COPY (${signal.score}/100) | ${side} @ ${(rawPrice * 100).toFixed(0)}¢→${(entryPrice * 100).toFixed(0)}¢ | $${betAmount.toFixed(0)}${consensusTag}${trustTag} | ${kellyTag} | ${stopTag} | ${slippageTag} | ${trust.phase} | ${signal.reasons.slice(0, 2).join(', ')} | ${alert.position.title} ${domainTag}`
   console.log(`  📋 ${logMsg}`)
-  logBotEvent('copy', `${side} @ ${(alert.position.curPrice * 100).toFixed(0)}¢ $${betAmount.toFixed(0)} | ${alert.position.title}`, `Score: ${signal.score}/100 | ${alert.walletLabel ?? alert.wallet.slice(0, 10)} | ${domainTag}`)
+  logBotEvent('copy', `${side} @ ${(entryPrice * 100).toFixed(0)}¢ $${betAmount.toFixed(0)} | ${alert.position.title}`, `Score: ${signal.score}/100 | ${alert.walletLabel ?? alert.wallet.slice(0, 10)} | ${domainTag} | ${kellyTag}`)
 
   return true
 }
