@@ -6,6 +6,7 @@ import {
   calculateConvictionScore,
   detectTradingStyle,
   calculateDecayFactor,
+  calculateImplicitEdge,
 } from './scorer'
 import {
   saveTrade,
@@ -87,6 +88,7 @@ export async function indexWallet(address: string): Promise<IndexResult> {
       const winRate = calculateWinRate(domainTrades)
       const calibration = calculateCalibration(domainTrades)
       const convictionScore = calculateConvictionScore(domainTrades)
+      const implicitEdge = calculateImplicitEdge(domainTrades)
       detectTradingStyle(domainTrades)
       const lastTradeAt = domainTrades[0]?.resolvedAt ?? new Date().toISOString()
       const decayFactor = calculateDecayFactor(lastTradeAt)
@@ -103,6 +105,7 @@ export async function indexWallet(address: string): Promise<IndexResult> {
         tradesCount: domainTrades.length,
         avgConviction,
         totalPnl,
+        implicitEdge,
         decayFactor,
         lastTradeAt,
       })

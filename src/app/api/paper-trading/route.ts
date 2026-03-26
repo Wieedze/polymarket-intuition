@@ -12,13 +12,68 @@ import {
 } from '@/lib/db'
 import { keywordClassify } from '@/lib/classifier'
 import { fetchAllPages } from '@/lib/polymarket'
+import { kellyBetFraction } from '@/lib/signal-scorer'
+import { getAllExpertTrust } from '@/lib/expert-trust'
 
 const POLYMARKET_DATA_URL =
   process.env.POLYMARKET_DATA_URL ?? 'https://data-api.polymarket.com'
 
+// Max correlated bets per wallet × domain (prevents 1 thesis × N positions risk)
+const MAX_CORRELATED_BETS = 3
+
 type PositionRecord = {
   conditionId: string
   curPrice: number
+}
+
+// ── Slippage simulation ───────────────────────────────────────────
+// In reality you enter after the sharp — the price has already moved.
+// 15-30¢ markets are less liquid → wider spread → bigger slippage.
+// 30-55¢ markets have better liquidity → tighter spread.
+function applySlippage(entryPrice: number): number {
+  if (entryPrice < 0.30) return Math.min(entryPrice + 0.05, 0.95)  // +5¢ on illiquid longshots
+  if (entryPrice < 0.55) return Math.min(entryPrice + 0.03, 0.95)  // +3¢ on value zone
+  return entryPrice  // >55¢ already blocked by signal scorer
+}
+
+// ── Correlation guard ─────────────────────────────────────────────
+// Prevents copying wallet X on domain Y if we already have MAX_CORRELATED_BETS open.
+// E.g. swisstony opens 8 NBA bets tonight — we take max 3.
+function countOpenCorrelatedBets(wallet: string, domain: string | null): number {
+  if (!domain) return 0
+  return getOpenPaperTrades()
+    .filter((t) => t.copiedFrom === wallet && t.domain === domain)
+    .length
+}
+
+// ── Kelly-based dynamic sizing ────────────────────────────────────
+// Instead of flat $100, size each bet based on:
+//   bankroll × kellyFraction × expertTrustLevel
+// Capped at 2× flat bet, minimum $20.
+function computeDynamicBetSize(
+  bankroll: number,
+  flatBetSize: number,
+  expertWallet: string,
+  entryPrice: number
+): number {
+  const expertTrusts = getAllExpertTrust()
+  const expert = expertTrusts.find((e) => e.wallet === expertWallet)
+
+  const winRate = expert?.winRate ?? 0.45        // conservative fallback
+  const trustLevel = expert?.trustLevel ?? 0.7   // observation-phase default
+
+  const kellyFraction = kellyBetFraction(winRate, entryPrice)
+
+  if (kellyFraction <= 0) {
+    // Negative Kelly = no edge at this entry price → minimum bet only
+    return 20
+  }
+
+  const dynamicBet = bankroll * kellyFraction * trustLevel
+  const minBet = 20
+  const maxBet = flatBetSize * 2  // never more than 2× configured flat bet
+
+  return Math.round(Math.max(minBet, Math.min(dynamicBet, maxBet)))
 }
 
 // ── GET: portfolio overview ──────────────────────────────────────
@@ -100,11 +155,11 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       const conditionId = body.conditionId as string
       const title = body.title as string
       const side = body.side as string
-      const entryPrice = body.entryPrice as number
+      const rawEntryPrice = body.entryPrice as number
       const copiedFrom = body.copiedFrom as string
       const copiedLabel = (body.copiedLabel as string) ?? null
 
-      if (!conditionId || !title || !side || !entryPrice || !copiedFrom) {
+      if (!conditionId || !title || !side || !rawEntryPrice || !copiedFrom) {
         return NextResponse.json({ error: 'Missing fields' }, { status: 400 })
       }
 
@@ -113,21 +168,48 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         return NextResponse.json({ error: 'Already have open paper trade for this market' }, { status: 409 })
       }
 
-      const betSize = parseFloat(getPortfolioSetting('bet_size_usdc', '100'))
       const domain = keywordClassify(title)
+      const domainName = domain?.domain ?? null
+
+      // ── Correlation guard ──────────────────────────────────────
+      // Prevent copying more than MAX_CORRELATED_BETS from same wallet × domain
+      const correlatedOpen = countOpenCorrelatedBets(copiedFrom, domainName)
+      if (correlatedOpen >= MAX_CORRELATED_BETS) {
+        return NextResponse.json({
+          error: `Correlation limit: already ${correlatedOpen} open bets on ${domainName} from this expert`,
+          skipped: true,
+        }, { status: 422 })
+      }
+
+      // ── Slippage simulation ────────────────────────────────────
+      // Simulate realistic entry — you always enter after the sharp
+      const entryPrice = applySlippage(rawEntryPrice)
+
+      // ── Kelly-based dynamic sizing ─────────────────────────────
+      const flatBetSize = parseFloat(getPortfolioSetting('bet_size_usdc', '100'))
+      const bankroll = parseFloat(getPortfolioSetting('starting_balance', '10000'))
+      const simulatedUsdc = computeDynamicBetSize(bankroll, flatBetSize, copiedFrom, entryPrice)
 
       const trade = openPaperTrade({
         conditionId,
         title,
-        domain: domain?.domain ?? null,
+        domain: domainName,
         side,
-        entryPrice,
-        simulatedUsdc: betSize,
+        entryPrice,        // slippage-adjusted entry
+        simulatedUsdc,     // kelly-sized bet
         copiedFrom,
         copiedLabel,
       })
 
-      return NextResponse.json({ trade })
+      return NextResponse.json({
+        trade,
+        meta: {
+          rawEntryPrice,
+          slippageApplied: +(entryPrice - rawEntryPrice).toFixed(2),
+          simulatedUsdc,
+          correlatedOpen,
+        },
+      })
     }
 
     if (action === 'resolve') {

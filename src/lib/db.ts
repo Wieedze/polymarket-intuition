@@ -20,6 +20,7 @@ export type WalletDomainStats = {
   tradesCount: number
   avgConviction: number
   totalPnl: number
+  implicitEdge: number   // beats market by X points on average (0/1 markets)
   decayFactor: number
   lastTradeAt: string
   updatedAt: string
@@ -179,6 +180,19 @@ function initTables(db: Database.Database): void {
   } catch {
     // Column already exists — ignore
   }
+
+  // Migration: partial exits support
+  try {
+    db.exec('ALTER TABLE paper_trades ADD COLUMN shares_remaining REAL')
+  } catch {}
+  try {
+    db.exec("ALTER TABLE paper_trades ADD COLUMN partial_exits TEXT NOT NULL DEFAULT '[]'")
+  } catch {}
+
+  // Migration: implicit edge in wallet_stats
+  try {
+    db.exec('ALTER TABLE wallet_stats ADD COLUMN implicit_edge REAL NOT NULL DEFAULT 0')
+  } catch {}
 }
 
 // ── Trade operations ──────────────────────────────────────────────
@@ -273,6 +287,7 @@ export function saveWalletStats(
     tradesCount: number
     avgConviction: number
     totalPnl: number
+    implicitEdge: number
     decayFactor: number
     lastTradeAt: string
   }
@@ -281,8 +296,8 @@ export function saveWalletStats(
   db.prepare(
     `INSERT OR REPLACE INTO wallet_stats
      (wallet, domain, win_rate, calibration, trades_count, avg_conviction,
-      total_pnl, decay_factor, last_trade_at, updated_at, attested_on_chain)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+      total_pnl, implicit_edge, decay_factor, last_trade_at, updated_at, attested_on_chain)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
        COALESCE((SELECT attested_on_chain FROM wallet_stats WHERE wallet = ? AND domain = ?), 0))`
   ).run(
     wallet,
@@ -292,6 +307,7 @@ export function saveWalletStats(
     stats.tradesCount,
     stats.avgConviction,
     stats.totalPnl,
+    stats.implicitEdge,
     stats.decayFactor,
     stats.lastTradeAt,
     new Date().toISOString(),
@@ -305,7 +321,7 @@ export function getWalletStats(wallet: string): WalletDomainStats[] {
   const rows = db
     .prepare(
       `SELECT wallet, domain, win_rate, calibration, trades_count,
-              avg_conviction, total_pnl, decay_factor, last_trade_at,
+              avg_conviction, total_pnl, implicit_edge, decay_factor, last_trade_at,
               updated_at, attested_on_chain
        FROM wallet_stats
        WHERE wallet = ?
@@ -319,6 +335,7 @@ export function getWalletStats(wallet: string): WalletDomainStats[] {
     trades_count: number
     avg_conviction: number
     total_pnl: number
+    implicit_edge: number
     decay_factor: number
     last_trade_at: string
     updated_at: string
@@ -334,6 +351,7 @@ export function getWalletStats(wallet: string): WalletDomainStats[] {
       tradesCount: r.trades_count,
       avgConviction: r.avg_conviction,
       totalPnl: r.total_pnl,
+      implicitEdge: r.implicit_edge ?? 0,
       decayFactor: r.decay_factor,
       lastTradeAt: r.last_trade_at,
       updatedAt: r.updated_at,
@@ -532,6 +550,13 @@ export function savePositionSnapshot(
 
 // ── Paper trading operations ────────────────────────────────────
 
+export type PartialExit = {
+  pct: number       // fraction sold (0.5 = 50%)
+  price: number     // exit price at time of partial exit
+  pnl: number       // realized PnL from this partial exit
+  at: string        // ISO timestamp
+}
+
 export type PaperTrade = {
   id: string
   conditionId: string
@@ -541,6 +566,7 @@ export type PaperTrade = {
   entryPrice: number
   simulatedUsdc: number
   shares: number
+  sharesRemaining: number | null  // null = 100% (pre-migration rows)
   copiedFrom: string
   copiedLabel: string | null
   status: 'open' | 'won' | 'lost'
@@ -548,6 +574,7 @@ export type PaperTrade = {
   peakPrice: number | null
   exitPrice: number | null
   pnl: number | null
+  partialExits: PartialExit[]     // history of partial exits
   openedAt: string
   resolvedAt: string | null
 }
@@ -700,6 +727,79 @@ export function resolvePaperTrade(
   }
 }
 
+/**
+ * Partial exit — sells a fraction of the position and keeps the rest open.
+ *
+ * @param conditionId - market to partially exit
+ * @param exitPriceFraction - fraction of shares to sell (0.5 = 50%)
+ * @param curPrice - current market price
+ * @returns realized PnL from this partial exit, or null if trade not found
+ */
+export function partialExitPaperTrade(
+  conditionId: string,
+  exitPriceFraction: number,
+  curPrice: number
+): number | null {
+  const db = getDb()
+
+  const row = db.prepare(
+    "SELECT * FROM paper_trades WHERE condition_id = ? AND status = 'open'"
+  ).get(conditionId) as Record<string, unknown> | undefined
+
+  if (!row) return null
+
+  const entryPrice = row.entry_price as number
+  const totalShares = row.shares as number
+  const sharesRemaining = (row.shares_remaining as number | null) ?? totalShares
+  const side = row.side as string
+  const existingExits: PartialExit[] = JSON.parse((row.partial_exits as string | null) ?? '[]')
+
+  // Shares to sell in this partial exit
+  const sharesToSell = sharesRemaining * exitPriceFraction
+
+  // PnL on the sold portion
+  let pnl: number
+  if (side === 'YES') {
+    pnl = sharesToSell * (curPrice - entryPrice)
+  } else {
+    // NO side: profit when price drops
+    pnl = sharesToSell * (entryPrice - curPrice)
+  }
+
+  const newSharesRemaining = sharesRemaining - sharesToSell
+
+  const partialExit: PartialExit = {
+    pct: exitPriceFraction,
+    price: curPrice,
+    pnl,
+    at: new Date().toISOString(),
+  }
+
+  const updatedExits = [...existingExits, partialExit]
+
+  db.prepare(
+    `UPDATE paper_trades
+     SET shares_remaining = ?,
+         partial_exits = ?,
+         peak_price = MAX(COALESCE(peak_price, cur_price), ?)
+     WHERE condition_id = ? AND status = 'open'`
+  ).run(
+    newSharesRemaining,
+    JSON.stringify(updatedExits),
+    curPrice,
+    conditionId
+  )
+
+  return pnl
+}
+
+/**
+ * Get total realized PnL from partial exits for a trade (before full resolution).
+ */
+export function getPartialExitPnl(trade: PaperTrade): number {
+  return trade.partialExits.reduce((s, e) => s + e.pnl, 0)
+}
+
 export function paperTradeExistsForCondition(conditionId: string): boolean {
   const db = getDb()
   const row = db.prepare(
@@ -796,6 +896,7 @@ function mapPaperRows(rows: unknown[]): PaperTrade[] {
     entryPrice: r.entry_price as number,
     simulatedUsdc: r.simulated_usdc as number,
     shares: r.shares as number,
+    sharesRemaining: r.shares_remaining as number | null,
     copiedFrom: r.copied_from as string,
     copiedLabel: r.copied_label as string | null,
     status: r.status as 'open' | 'won' | 'lost',
@@ -803,6 +904,7 @@ function mapPaperRows(rows: unknown[]): PaperTrade[] {
     peakPrice: r.peak_price as number | null,
     exitPrice: r.exit_price as number | null,
     pnl: r.pnl as number | null,
+    partialExits: JSON.parse((r.partial_exits as string | null) ?? '[]') as PartialExit[],
     openedAt: r.opened_at as string,
     resolvedAt: r.resolved_at as string | null,
   }))

@@ -16,6 +16,70 @@ function groupBy(trades: PaperTrade[], key: (t: PaperTrade) => string): Record<s
   return map
 }
 
+// ── Statistical helpers ───────────────────────────────────────────
+
+function profitFactor(trades: PaperTrade[]): number {
+  let wins = 0
+  let losses = 0
+  for (const t of trades) {
+    if ((t.pnl ?? 0) > 0) wins += t.pnl ?? 0
+    else losses += Math.abs(t.pnl ?? 0)
+  }
+  if (losses === 0) return wins > 0 ? 999 : 0
+  return wins / losses
+}
+
+function maxConsecutiveLosses(trades: PaperTrade[]): number {
+  const sorted = [...trades].sort((a, b) =>
+    (a.resolvedAt ?? a.openedAt).localeCompare(b.resolvedAt ?? b.openedAt)
+  )
+  let max = 0
+  let current = 0
+  for (const t of sorted) {
+    if (t.status === 'lost') { current++; if (current > max) max = current }
+    else current = 0
+  }
+  return max
+}
+
+function wilsonCI(wins: number, n: number): { low: number; high: number } {
+  if (n === 0) return { low: 0, high: 0 }
+  const z = 1.96
+  const p = wins / n
+  const center = (p + z * z / (2 * n)) / (1 + z * z / n)
+  const margin = (z * Math.sqrt(p * (1 - p) / n + z * z / (4 * n * n))) / (1 + z * z / n)
+  return {
+    low: Math.max(0, center - margin),
+    high: Math.min(1, center + margin),
+  }
+}
+
+function buildEquityCurve(closed: PaperTrade[], startBal: number) {
+  const byDay = new Map<string, PaperTrade[]>()
+  for (const t of closed) {
+    const day = (t.resolvedAt ?? t.openedAt).slice(0, 10)
+    const existing = byDay.get(day) ?? []
+    existing.push(t)
+    byDay.set(day, existing)
+  }
+  const days = [...byDay.keys()].sort()
+  let cumulative = startBal
+  let peak = startBal
+  let maxDrawdown = 0
+
+  const curve = days.map((day) => {
+    const trades = byDay.get(day)!
+    const dailyPnl = pnlOf(trades)
+    cumulative += dailyPnl
+    if (cumulative > peak) peak = cumulative
+    const dd = peak > 0 ? (peak - cumulative) / peak : 0
+    if (dd > maxDrawdown) maxDrawdown = dd
+    return { day, balance: cumulative, dailyPnl, trades: trades.length }
+  })
+
+  return { curve, maxDrawdown }
+}
+
 type DomainStat = {
   domain: string
   trades: number
@@ -185,6 +249,26 @@ export async function GET(): Promise<NextResponse> {
       .sort((a, b) => b.unrealized - a.unrealized)
       .slice(0, 10)
 
+    // ── Validation gates ─────────────────────────────────────────
+    const pf = profitFactor(closed)
+    const mcl = maxConsecutiveLosses(closed)
+    const avgPnl = closed.length > 0 ? pnlOf(closed) / closed.length : 0
+    const wrCI = wilsonCI(won.length, closed.length)
+    const { curve: equityCurve, maxDrawdown } = buildEquityCurve(closed, startBal)
+
+    const gates = {
+      profitFactor: { value: pf, threshold: 1.3, ok: pf >= 1.3 },
+      maxConsecutiveLosses: { value: mcl, threshold: 15, ok: mcl <= 15 },
+      avgPnlPerTrade: { value: avgPnl, threshold: 5, ok: avgPnl >= 5 },
+      minResolvedTrades: { value: closed.length, threshold: 200, ok: closed.length >= 200 },
+      allOk: pf >= 1.3 && mcl <= 15 && avgPnl >= 5 && closed.length >= 200,
+    }
+
+    const significance =
+      closed.length < 30 ? 'not_significant' :
+      closed.length < 100 ? 'low' :
+      closed.length < 200 ? 'medium' : 'high'
+
     return NextResponse.json({
       portfolio: {
         startingBalance: startBal,
@@ -202,6 +286,18 @@ export async function GET(): Promise<NextResponse> {
         losses: lost.length,
         winRate: closed.length > 0 ? won.length / closed.length : 0,
       },
+      gates,
+      stats: {
+        profitFactor: pf,
+        maxConsecutiveLosses: mcl,
+        avgPnlPerTrade: avgPnl,
+        maxDrawdown,
+        significance,
+        winRateCI: wrCI,
+        grossWins: closed.filter(t => (t.pnl ?? 0) > 0).reduce((s, t) => s + (t.pnl ?? 0), 0),
+        grossLosses: closed.filter(t => (t.pnl ?? 0) < 0).reduce((s, t) => s + Math.abs(t.pnl ?? 0), 0),
+      },
+      equityCurve,
       byDomain,
       byExpert,
       bySide,

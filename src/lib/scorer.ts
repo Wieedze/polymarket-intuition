@@ -41,14 +41,14 @@ export function calculateCalibration(trades: ResolvedTrade[]): number {
 
 /**
  * Conviction Score — win rate weighted by entryPrice.
- * Filters longshots (entryPrice < 0.25) automatically.
+ * Includes longshots (entryPrice >= 0.10) — our best trades are at 13-22¢.
  * A buy at 0.70 that wins is worth more than a buy at 0.03 that loses.
  *
- * Formula: mean(entryPrice × isWon) over trades with entryPrice >= 0.25
+ * Formula: mean(entryPrice × isWon) over trades with entryPrice >= 0.10
  * Returns 0 if no qualifying trades.
  */
 export function calculateConvictionScore(trades: ResolvedTrade[]): number {
-  const qualified = trades.filter((t) => t.entryPrice >= 0.25)
+  const qualified = trades.filter((t) => t.entryPrice >= 0.10)
   if (qualified.length === 0) return 0
 
   const sum = qualified.reduce((s, t) => {
@@ -167,11 +167,48 @@ export function calculateCopyabilityScore(trades: ResolvedTrade[]): number {
 }
 
 /**
- * Decay factor based on inactivity.
- * > 180 days → 0.5
- * > 90 days  → 0.75
- * Otherwise  → 1.0
+ * Implicit Edge — the core metric for 0/1 prediction markets.
+ *
+ * Measures how much the wallet BEATS the market's implied probability.
+ *
+ * For each trade:
+ *   marketProb = entryPrice (if YES) or 1-entryPrice (if NO)
+ *              = what the market thought the probability was
+ *   outcome    = 1 if wallet won, 0 if wallet lost
+ *   trade_edge = outcome - marketProb
+ *
+ * Example:
+ *   Wallet bets YES at 30¢ → marketProb = 0.30
+ *   Market resolves YES → outcome = 1 → edge = 1 - 0.30 = +0.70
+ *   Market resolves NO  → outcome = 0 → edge = 0 - 0.30 = -0.30
+ *
+ *   Over 100 bets at 30¢ where 55 resolve YES:
+ *   avg edge = 0.55 - 0.30 = +0.25 (beats market by 25 points)
+ *
+ * Interpretation:
+ *   > +0.10  → strong structural edge (rare, very valuable to copy)
+ *   +0.03 to +0.10 → good edge
+ *   -0.03 to +0.03 → random / no edge
+ *   < -0.03 → consistently wrong (worse than market)
+ *
+ * Returns 0 if no trades.
  */
+export function calculateImplicitEdge(trades: ResolvedTrade[]): number {
+  if (trades.length === 0) return 0
+
+  let totalEdge = 0
+
+  for (const trade of trades) {
+    // Market's implied probability at entry
+    const marketProb = trade.side === 'YES' ? trade.entryPrice : 1 - trade.entryPrice
+    // 1 if wallet was right, 0 if wrong
+    const outcome = trade.outcome === 'won' ? 1 : 0
+    // Edge on this trade
+    totalEdge += outcome - marketProb
+  }
+
+  return totalEdge / trades.length
+}
 export function calculateDecayFactor(lastTradeAt: string): number {
   const lastDate = new Date(lastTradeAt).getTime()
   const now = Date.now()

@@ -19,7 +19,7 @@ import { getActiveWatchedWallets, getOpenPaperTrades, openPaperTrade, paperTrade
 import { pollWallet, type PositionAlert } from '../src/lib/position-tracker'
 import { keywordClassify } from '../src/lib/classifier'
 import { fetchAllPages } from '../src/lib/polymarket'
-import { resolvePaperTrade, updatePaperTradePrice, logBotEvent } from '../src/lib/db'
+import { resolvePaperTrade, updatePaperTradePrice, logBotEvent, partialExitPaperTrade } from '../src/lib/db'
 import { evaluateExit, exitEmoji, type ExitConfig } from '../src/lib/exit-strategy'
 import { scoreSignal, shouldCopySignal, signalBetMultiplier, isContradictory, kellyBetFraction } from '../src/lib/signal-scorer'
 import { evaluateExpertTrust, getAllExpertTrust } from '../src/lib/expert-trust'

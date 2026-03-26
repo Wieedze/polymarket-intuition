@@ -8,6 +8,7 @@ export type SignalScore = {
   domainMatch: boolean    // is this expert's best domain?
   expertCalibration: number
   expertWinRate: number
+  expertImplicitEdge: number  // beats market by X points
   expertTrades: number
   betSizeSignal: number   // how big is this bet vs expert's usual
   domain: string | null
@@ -143,30 +144,53 @@ export function scoreSignal(params: {
     reasons.push(`No history in ${domain ?? 'unknown'} domain`)
   }
 
-  // 2. Calibration (25 points max) — how well-calibrated is the expert in this domain?
+  // 2. Calibration (20 points max) — how well-calibrated is the expert in this domain?
   let calibrationScore = 0
   const cal = domainStats?.calibration ?? bestDomain?.calibration ?? 0
-  if (cal >= 0.80) { calibrationScore = 25; reasons.push(`Excellent calibration: ${(cal * 100).toFixed(0)}%`) }
-  else if (cal >= 0.70) { calibrationScore = 18; reasons.push(`Good calibration: ${(cal * 100).toFixed(0)}%`) }
-  else if (cal >= 0.60) { calibrationScore = 10 }
+  if (cal >= 0.80) { calibrationScore = 20; reasons.push(`Excellent calibration: ${(cal * 100).toFixed(0)}%`) }
+  else if (cal >= 0.70) { calibrationScore = 14; reasons.push(`Good calibration: ${(cal * 100).toFixed(0)}%`) }
+  else if (cal >= 0.60) { calibrationScore = 8 }
   else { reasons.push(`Low calibration: ${(cal * 100).toFixed(0)}%`) }
 
-  // 3. Win rate (20 points max) — domain-specific win rate
+  // 3. Implicit edge (15 points max) — beats market implied probability by X points
+  // This is the KEY metric for 0/1 markets: does the wallet systematically
+  // find bets where the market underestimates the real probability?
+  let implicitEdgeScore = 0
+  const ie = domainStats?.implicitEdge ?? bestDomain?.implicitEdge ?? 0
+  if (ie >= 0.15) { implicitEdgeScore = 15; reasons.push(`Strong implicit edge: +${(ie * 100).toFixed(0)}pts`) }
+  else if (ie >= 0.08) { implicitEdgeScore = 11; reasons.push(`Good implicit edge: +${(ie * 100).toFixed(0)}pts`) }
+  else if (ie >= 0.03) { implicitEdgeScore = 7; reasons.push(`Positive implicit edge: +${(ie * 100).toFixed(0)}pts`) }
+  else if (ie >= -0.03) { implicitEdgeScore = 3 } // neutral — market-rate
+  else { reasons.push(`Negative edge: ${(ie * 100).toFixed(0)}pts (worse than market)`) }
+
+  // 4. Win rate (10 points max) — still useful but less important than implicit edge
   let winRateScore = 0
   const wr = domainStats?.winRate ?? bestDomain?.winRate ?? 0
-  if (wr >= 0.60) { winRateScore = 20; reasons.push(`Strong WR: ${(wr * 100).toFixed(0)}%`) }
-  else if (wr >= 0.50) { winRateScore = 14 }
-  else if (wr >= 0.40) { winRateScore = 8 }
+  if (wr >= 0.60) { winRateScore = 10; reasons.push(`Strong WR: ${(wr * 100).toFixed(0)}%`) }
+  else if (wr >= 0.50) { winRateScore = 7 }
+  else if (wr >= 0.40) { winRateScore = 4 }
 
-  // 4. Entry price quality (15 points max) — sweet spot is 0.25-0.75
+  // 4. Entry price quality (15 points max)
+  // Data shows: 15-30¢ = +$2370, 30-55¢ = +$2844, >65¢ = -$3752
+  // Hard block above 65¢ — no edge, pure favorite territory
   let entryScore = 0
-  if (entryPrice >= 0.25 && entryPrice <= 0.75) {
-    entryScore = 15  // good range: not a longshot, not a sure thing
-    reasons.push(`Good entry: ${(entryPrice * 100).toFixed(0)}¢`)
-  } else if (entryPrice >= 0.15 && entryPrice <= 0.85) {
-    entryScore = 8
+  if (entryPrice > 0.65) {
+    return {
+      score: 0, domainMatch: false, expertCalibration: 0,
+      expertWinRate: 0, expertTrades: 0, betSizeSignal: 0,
+      domain, reasons: [`Entry ${(entryPrice * 100).toFixed(0)}¢ blocked — favorites destroy bankroll`],
+    }
+  } else if (entryPrice >= 0.15 && entryPrice <= 0.30) {
+    entryScore = 15  // longshot sweet spot — best historical P&L
+    reasons.push(`Longshot entry: ${(entryPrice * 100).toFixed(0)}¢`)
+  } else if (entryPrice > 0.30 && entryPrice <= 0.55) {
+    entryScore = 12  // value zone
+    reasons.push(`Value entry: ${(entryPrice * 100).toFixed(0)}¢`)
+  } else if (entryPrice > 0.55 && entryPrice <= 0.65) {
+    entryScore = 3   // marginal — penalized
+    reasons.push(`Marginal entry: ${(entryPrice * 100).toFixed(0)}¢`)
   } else {
-    reasons.push(`Extreme entry: ${(entryPrice * 100).toFixed(0)}¢`)
+    reasons.push(`Extreme longshot: ${(entryPrice * 100).toFixed(0)}¢`)
   }
 
   // 5. Bet size signal (10 points max) — bigger position = more conviction
@@ -176,7 +200,7 @@ export function scoreSignal(params: {
   else if (positionSize > 1000) { betSizeSignal = 4 }
   else { betSizeSignal = 1 }
 
-  const rawScore = domainScore + calibrationScore + winRateScore + entryScore + betSizeSignal
+  const rawScore = domainScore + calibrationScore + implicitEdgeScore + winRateScore + entryScore + betSizeSignal
 
   // Apply domain performance multiplier (boost profitable domains, penalize losing ones)
   const totalScore = Math.round(rawScore * domainMultiplier)
@@ -190,6 +214,7 @@ export function scoreSignal(params: {
     domainMatch,
     expertCalibration: cal,
     expertWinRate: wr,
+    expertImplicitEdge: ie,
     expertTrades: domainStats?.tradesCount ?? 0,
     betSizeSignal,
     domain,
