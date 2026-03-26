@@ -26,17 +26,24 @@ export type ExitConfig = {
 
   // Expert exit: if the expert we copied closes their position, we close too
   followExpertExit: boolean
+
+  // Partial exits: sell a fraction of the position at profit milestones
+  // to free capital for new signals without closing the full position
+  partialExitAt100Pct: number   // fraction to sell at +100% (default 0.5 = 50%)
+  partialExitAt150Pct: number   // fraction to sell at +150% (default 0.3 = 30%)
 }
 
 export const DEFAULT_CONFIG: ExitConfig = {
   takeProfitPct: 999,           // disabled — use nearResolutionThreshold instead
-  stopLossPct: 0.40,            // -40% → cut losses
+  stopLossPct: 0.25,            // -25% → cut losses (was 0.40 — too generous on fast-resolving markets)
   trailingActivatePct: 999,     // disabled — bad for binary markets
   trailingStopPct: 0.10,        // (unused when trailing disabled)
   nearResolutionThreshold: 0.85, // exit YES at 85¢+, exit NO at 15¢-
   staleDays: 7,                  // 7 days without movement
   staleThreshold: 0.03,          // 3¢ minimum move
   followExpertExit: true,
+  partialExitAt100Pct: 0.50,    // sell 50% at +100% — frees capital, keeps upside
+  partialExitAt150Pct: 0.30,    // sell 30% more at +150% — 20% rides free to resolution
 }
 
 // ── Exit Decision ───────────────────────────────────────────────
@@ -50,9 +57,12 @@ export type ExitDecision = {
     | 'trailing-stop'
     | 'stale-position'
     | 'expert-exit'
+    | 'partial-exit-100'
+    | 'partial-exit-150'
     | 'hold'
   pnlPct: number
   peakPnlPct: number
+  partialFraction?: number  // fraction to sell (only for partial-exit reasons)
   message: string
 }
 
@@ -78,6 +88,34 @@ export function evaluateExit(
   const peakPnlPct = trade.side === 'YES'
     ? calcPnlPct('YES', trade.entryPrice, peakPrice)
     : pnlPct // For NO, peak tracking is complex — use current
+
+  // 0. PARTIAL EXITS — free capital at profit milestones without closing position
+  //    Check how many partial exits already done to avoid re-triggering
+  const partialExits = trade.partialExits ?? []
+  const done100 = partialExits.some((e) => e.pct === config.partialExitAt100Pct && e.price >= trade.entryPrice * 2)
+  const done150 = partialExits.some((e) => e.pct === config.partialExitAt150Pct && e.price >= trade.entryPrice * 2.5)
+
+  if (!done150 && pnlPct >= 1.50 && config.partialExitAt150Pct > 0) {
+    return {
+      shouldExit: true,
+      reason: 'partial-exit-150',
+      pnlPct,
+      peakPnlPct,
+      partialFraction: config.partialExitAt150Pct,
+      message: `Partial exit 150%: selling ${(config.partialExitAt150Pct * 100).toFixed(0)}% at +${(pnlPct * 100).toFixed(0)}% — freeing capital`,
+    }
+  }
+
+  if (!done100 && pnlPct >= 1.00 && config.partialExitAt100Pct > 0) {
+    return {
+      shouldExit: true,
+      reason: 'partial-exit-100',
+      pnlPct,
+      peakPnlPct,
+      partialFraction: config.partialExitAt100Pct,
+      message: `Partial exit 100%: selling ${(config.partialExitAt100Pct * 100).toFixed(0)}% at +${(pnlPct * 100).toFixed(0)}% — freeing capital`,
+    }
+  }
 
   // 1. NEAR-RESOLUTION early exit — capture ~85% of max value without waiting
   //    YES: exit when price >= 0.85 (e.g. 85¢ → already near certain YES)
@@ -194,6 +232,7 @@ export function exitEmoji(reason: ExitDecision['reason']): string {
     case 'trailing-stop': return '📈'
     case 'stale-position': return '💤'
     case 'expert-exit': return '👋'
-    case 'hold': return '⏳'
+    case 'partial-exit-100': return '💸'
+    case 'partial-exit-150': return '💸'
   }
 }
