@@ -19,9 +19,9 @@ export type ExpertTrust = {
 
 // ── Config ────────────────────────────────────────────────────────
 
-const OBSERVATION_TRADES = 10   // first 10 trades → observe, no judgment
-const EVALUATION_TRADES = 20    // after 20 → evaluate aggressively
-const PROVEN_TRADES = 40        // after 40 → proven track record
+const OBSERVATION_TRADES = 20   // first 20 trades → observe, no judgment (10 was too low — pure luck range)
+const EVALUATION_TRADES = 30    // after 30 → evaluate aggressively
+const PROVEN_TRADES = 60        // after 60 → proven track record (40 was statistically weak)
 
 // ── Core logic ───────────────────────────────────────────────────
 

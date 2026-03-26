@@ -20,6 +20,7 @@ export type WalletDomainStats = {
   tradesCount: number
   avgConviction: number
   totalPnl: number
+  implicitEdge: number   // beats market by X points on average (0/1 markets)
   decayFactor: number
   lastTradeAt: string
   updatedAt: string
@@ -187,6 +188,11 @@ function initTables(db: Database.Database): void {
   try {
     db.exec("ALTER TABLE paper_trades ADD COLUMN partial_exits TEXT NOT NULL DEFAULT '[]'")
   } catch {}
+
+  // Migration: implicit edge in wallet_stats
+  try {
+    db.exec('ALTER TABLE wallet_stats ADD COLUMN implicit_edge REAL NOT NULL DEFAULT 0')
+  } catch {}
 }
 
 // ── Trade operations ──────────────────────────────────────────────
@@ -281,6 +287,7 @@ export function saveWalletStats(
     tradesCount: number
     avgConviction: number
     totalPnl: number
+    implicitEdge: number
     decayFactor: number
     lastTradeAt: string
   }
@@ -289,8 +296,8 @@ export function saveWalletStats(
   db.prepare(
     `INSERT OR REPLACE INTO wallet_stats
      (wallet, domain, win_rate, calibration, trades_count, avg_conviction,
-      total_pnl, decay_factor, last_trade_at, updated_at, attested_on_chain)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+      total_pnl, implicit_edge, decay_factor, last_trade_at, updated_at, attested_on_chain)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
        COALESCE((SELECT attested_on_chain FROM wallet_stats WHERE wallet = ? AND domain = ?), 0))`
   ).run(
     wallet,
@@ -300,6 +307,7 @@ export function saveWalletStats(
     stats.tradesCount,
     stats.avgConviction,
     stats.totalPnl,
+    stats.implicitEdge,
     stats.decayFactor,
     stats.lastTradeAt,
     new Date().toISOString(),
@@ -313,7 +321,7 @@ export function getWalletStats(wallet: string): WalletDomainStats[] {
   const rows = db
     .prepare(
       `SELECT wallet, domain, win_rate, calibration, trades_count,
-              avg_conviction, total_pnl, decay_factor, last_trade_at,
+              avg_conviction, total_pnl, implicit_edge, decay_factor, last_trade_at,
               updated_at, attested_on_chain
        FROM wallet_stats
        WHERE wallet = ?
@@ -327,6 +335,7 @@ export function getWalletStats(wallet: string): WalletDomainStats[] {
     trades_count: number
     avg_conviction: number
     total_pnl: number
+    implicit_edge: number
     decay_factor: number
     last_trade_at: string
     updated_at: string
@@ -342,6 +351,7 @@ export function getWalletStats(wallet: string): WalletDomainStats[] {
       tradesCount: r.trades_count,
       avgConviction: r.avg_conviction,
       totalPnl: r.total_pnl,
+      implicitEdge: r.implicit_edge ?? 0,
       decayFactor: r.decay_factor,
       lastTradeAt: r.last_trade_at,
       updatedAt: r.updated_at,
