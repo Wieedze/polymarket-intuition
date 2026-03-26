@@ -639,34 +639,38 @@ export function resolvePaperTrade(
 
   const db = getDb()
   const rows = db.prepare(
-    "SELECT id, entry_price, shares, side FROM paper_trades WHERE condition_id = ? AND status = 'open'"
+    "SELECT id, entry_price, shares, simulated_usdc, side FROM paper_trades WHERE condition_id = ? AND status = 'open'"
   ).all(conditionId) as Array<Record<string, unknown>>
 
   for (const row of rows) {
     const entryPrice = row.entry_price as number
     const shares = row.shares as number
+    const simulatedUsdc = row.simulated_usdc as number
     const side = row.side as string
     const id = row.id as string
 
-    // PnL calculation: if YES side and market resolves YES (exitPrice ≈ 1) → win
+    // PnL calculation for binary markets
+    // YES side: paid entryPrice per share, receives $1 if YES resolves, $0 if NO
+    // NO side: paid (1-entryPrice) per share, receives $1 if NO resolves, $0 if YES
+    // shares = simulatedUsdc / entryPrice (so shares × entryPrice = investment)
     let pnl: number
     let status: string
     if (exitPrice > 0.95) {
       // Market resolved YES
       if (side === 'YES') {
-        pnl = shares * (1 - entryPrice)
+        pnl = shares * (1 - entryPrice)  // paid entryPrice, got $1
         status = 'won'
       } else {
-        pnl = -(shares * entryPrice)
+        pnl = -simulatedUsdc  // lost entire investment
         status = 'lost'
       }
     } else if (exitPrice < 0.05) {
       // Market resolved NO
       if (side === 'NO') {
-        pnl = shares * (1 - entryPrice)
+        pnl = shares * entryPrice  // NO shares: profit = entryPrice per share
         status = 'won'
       } else {
-        pnl = -(shares * entryPrice)
+        pnl = -simulatedUsdc  // lost entire investment
         status = 'lost'
       }
     } else {

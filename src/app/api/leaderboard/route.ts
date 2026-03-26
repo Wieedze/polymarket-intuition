@@ -57,25 +57,35 @@ function buildFromCache(period: string): LeaderboardWallet[] | null {
     if (cached.length === 0) return null
 
     return cached.map((entry) => {
-      const domains: DomainStats[] = entry.stats.map((s) => ({
-        domain: s.domain,
-        trades: s.tradesCount,
-        winRate: s.winRate,
-        calibration: s.calibration,
-        profitFactor: 0,
-        avgPnlPerTrade: s.totalPnl / Math.max(s.tradesCount, 1),
-        maxConsecutiveLosses: 0,
-        copyabilityScore: Math.min(
-          s.winRate / 0.7 * 0.25 +
-          Math.max((s.calibration - 0.5) / 0.5, 0) * 0.25 +
-          0.30 +
-          Math.min(1 - 0, 1) * 0.20,
-          1
-        ),
-        convictionScore: s.avgConviction,
-        tradingStyle: 'mixed',
-        totalPnl: s.totalPnl,
-      }))
+      const domains: DomainStats[] = entry.stats.map((s) => {
+        // Compute real copyabilityScore from available data
+        // We don't have profitFactor or maxConsecLosses in cache, so estimate conservatively
+        const winRateScore = Math.min(Math.max(s.winRate / 0.7, 0), 1)
+        const calibrationScore = Math.min(Math.max((s.calibration - 0.5) / 0.5, 0), 1)
+        // Estimate profitFactor from totalPnl: if positive → some edge, if negative → no edge
+        const pnlPerTrade = s.totalPnl / Math.max(s.tradesCount, 1)
+        const profitEstimate = s.totalPnl > 0 ? Math.min(pnlPerTrade / 50, 1) : 0
+        // No streak data in cache — use neutral 0.5
+        const streakEstimate = 0.5
+
+        return {
+          domain: s.domain,
+          trades: s.tradesCount,
+          winRate: s.winRate,
+          calibration: s.calibration,
+          profitFactor: 0,
+          avgPnlPerTrade: pnlPerTrade,
+          maxConsecutiveLosses: 0,
+          copyabilityScore:
+            winRateScore * 0.25 +
+            calibrationScore * 0.25 +
+            profitEstimate * 0.30 +
+            streakEstimate * 0.20,
+          convictionScore: s.avgConviction,
+          tradingStyle: 'mixed',
+          totalPnl: s.totalPnl,
+        }
+      })
 
       domains.sort((a, b) => b.copyabilityScore - a.copyabilityScore)
       const bestDomain = domains[0] ?? null

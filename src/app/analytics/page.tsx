@@ -8,6 +8,9 @@ type Portfolio = {
   currentBalance: number
   realizedPnl: number
   unrealizedPnl: number
+  totalInvested: number
+  availableCash: number
+  totalRedeemable: number
   roi: number
   totalTrades: number
   openTrades: number
@@ -51,17 +54,34 @@ function wrStr(n: number): string {
 export default function AnalyticsPage(): React.ReactElement {
   const [data, setData] = useState<AnalyticsData | null>(null)
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  async function loadData(): Promise<void> {
+    try {
+      const res = await fetch('/api/analytics')
+      if (!res.ok) throw new Error(`Error ${res.status}`)
+      const result = (await res.json()) as AnalyticsData
+      setData(result)
+      setError(null)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load')
+    }
+  }
+
+  async function refresh(): Promise<void> {
+    setRefreshing(true)
+    // Refresh prices first
+    await fetch('/api/paper-trading?action=refresh').catch(() => {})
+    // Then check resolutions
+    await fetch('/api/paper-trading?action=resolve').catch(() => {})
+    // Reload analytics
+    await loadData()
+    setRefreshing(false)
+  }
+
   useEffect(() => {
-    fetch('/api/analytics')
-      .then(async (res) => {
-        if (!res.ok) throw new Error(`Error ${res.status}`)
-        return (await res.json()) as AnalyticsData
-      })
-      .then(setData)
-      .catch((err: Error) => setError(err.message))
-      .finally(() => setLoading(false))
+    loadData().finally(() => setLoading(false))
   }, [])
 
   if (loading) return <div className="min-h-screen flex items-center justify-center text-zinc-400">Loading analytics...</div>
@@ -77,20 +97,36 @@ export default function AnalyticsPage(): React.ReactElement {
         <Link href="/" className="text-zinc-500 hover:text-zinc-300 text-sm">&larr; Back</Link>
         <div className="flex gap-3">
           <Link href="/paper-trading" className="text-zinc-500 hover:text-zinc-300 text-sm">Paper Trading</Link>
-          <Link href="/monitor" className="text-zinc-500 hover:text-zinc-300 text-sm">Monitor</Link>
           <Link href="/leaderboard" className="text-zinc-500 hover:text-zinc-300 text-sm">Leaderboard</Link>
         </div>
       </div>
 
-      <h1 className="text-3xl font-bold text-white mb-2">Analytics</h1>
-      <p className="text-zinc-400 mb-8">Paper trading performance breakdown</p>
+      <div className="flex items-center justify-between mb-8">
+        <div>
+          <h1 className="text-3xl font-bold text-white">Analytics</h1>
+          <p className="mt-1 text-zinc-400">Paper trading performance breakdown</p>
+        </div>
+        <button
+          onClick={() => void refresh()}
+          disabled={refreshing}
+          className="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:bg-zinc-700 disabled:text-zinc-500 text-white text-sm font-medium rounded-lg transition-colors"
+        >
+          {refreshing ? 'Refreshing...' : 'Refresh All'}
+        </button>
+      </div>
 
-      {/* Portfolio overview */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-10">
+      {/* Portfolio overview — 2 rows */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-4">
         <Stat label="Balance" value={`$${p.currentBalance.toFixed(0)}`} sub={`Started: $${p.startingBalance.toFixed(0)}`} color={p.currentBalance >= p.startingBalance ? 'text-emerald-400' : 'text-red-400'} />
         <Stat label="Realized P&L" value={pnlStr(p.realizedPnl)} sub={`Unrealized: ${pnlStr(p.unrealizedPnl)}`} color={pnlColor(p.realizedPnl)} />
         <Stat label="Win Rate" value={p.closedTrades > 0 ? wrStr(p.winRate) : '—'} sub={`${p.wins}W / ${p.losses}L`} color="text-white" />
         <Stat label="ROI" value={p.closedTrades > 0 ? `${(p.roi * 100).toFixed(1)}%` : '—'} sub={`${p.openTrades} open / ${p.totalTrades} total`} color={pnlColor(p.roi)} />
+      </div>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-10">
+        <Stat label="Invested (at risk)" value={`$${p.totalInvested.toFixed(0)}`} sub={`${p.openTrades} positions`} color="text-amber-400" />
+        <Stat label="Available Cash" value={`$${p.availableCash.toFixed(0)}`} sub={`${((p.availableCash / p.startingBalance) * 100).toFixed(0)}% of start`} color={p.availableCash > 0 ? 'text-zinc-300' : 'text-red-400'} />
+        <Stat label="Redeemable Value" value={`$${p.totalRedeemable.toFixed(0)}`} sub="If sold all now" color="text-cyan-400" />
+        <Stat label="Total Equity" value={`$${(p.availableCash + p.totalRedeemable).toFixed(0)}`} sub="Cash + positions" color={(p.availableCash + p.totalRedeemable) >= p.startingBalance ? 'text-emerald-400' : 'text-red-400'} />
       </div>
 
       {/* By Domain */}

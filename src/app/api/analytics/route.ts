@@ -57,6 +57,12 @@ export async function GET(): Promise<NextResponse> {
       if (t.curPrice == null) return s
       return s + t.shares * (t.curPrice - t.entryPrice)
     }, 0)
+    const totalInvested = open.reduce((s, t) => s + t.simulatedUsdc, 0)
+    const availableCash = startBal + realizedPnl - totalInvested
+    const totalRedeemable = open.reduce((s, t) => {
+      if (t.curPrice == null) return s
+      return s + t.shares * t.curPrice
+    }, 0)
 
     // By domain
     const byDomainMap = groupBy(closed, (t) => t.domain ?? 'unknown')
@@ -184,6 +190,9 @@ export async function GET(): Promise<NextResponse> {
         currentBalance: startBal + realizedPnl,
         realizedPnl,
         unrealizedPnl,
+        totalInvested,
+        availableCash,
+        totalRedeemable,
         roi: startBal > 0 ? realizedPnl / startBal : 0,
         totalTrades: all.length,
         openTrades: open.length,
