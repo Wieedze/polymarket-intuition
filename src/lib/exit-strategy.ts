@@ -14,6 +14,12 @@ export type ExitConfig = {
   // Trailing stop: sell when drops back to this level
   trailingStopPct: number
 
+  // Near-resolution early exit: exit when price reaches near-certainty
+  // Captures ~85% of max value without waiting for full resolution
+  // YES exit when curPrice >= nearResolutionThreshold
+  // NO exit when curPrice <= (1 - nearResolutionThreshold)
+  nearResolutionThreshold: number
+
   // Stale position: sell if no price movement > threshold for N days
   staleDays: number
   staleThreshold: number  // minimum price change to be "active" (e.g. 0.03 = 3¢)
@@ -23,12 +29,13 @@ export type ExitConfig = {
 }
 
 export const DEFAULT_CONFIG: ExitConfig = {
-  takeProfitPct: 999,         // disabled — let binary markets resolve to 0 or 1
-  stopLossPct: 0.40,          // -40% → cut losses
-  trailingActivatePct: 999,   // disabled — bad for binary markets
-  trailingStopPct: 0.10,      // (unused when trailing disabled)
-  staleDays: 7,               // 7 days without movement
-  staleThreshold: 0.03,       // 3¢ minimum move
+  takeProfitPct: 999,           // disabled — use nearResolutionThreshold instead
+  stopLossPct: 0.40,            // -40% → cut losses
+  trailingActivatePct: 999,     // disabled — bad for binary markets
+  trailingStopPct: 0.10,        // (unused when trailing disabled)
+  nearResolutionThreshold: 0.85, // exit YES at 85¢+, exit NO at 15¢-
+  staleDays: 7,                  // 7 days without movement
+  staleThreshold: 0.03,          // 3¢ minimum move
   followExpertExit: true,
 }
 
@@ -38,6 +45,7 @@ export type ExitDecision = {
   shouldExit: boolean
   reason:
     | 'take-profit'
+    | 'near-resolution'
     | 'stop-loss'
     | 'trailing-stop'
     | 'stale-position'
@@ -71,7 +79,30 @@ export function evaluateExit(
     ? calcPnlPct('YES', trade.entryPrice, peakPrice)
     : pnlPct // For NO, peak tracking is complex — use current
 
-  // 1. TAKE PROFIT — you've almost maxed out
+  // 1. NEAR-RESOLUTION early exit — capture ~85% of max value without waiting
+  //    YES: exit when price >= 0.85 (e.g. 85¢ → already near certain YES)
+  //    NO:  exit when price <= 0.15 (e.g. 15¢ → near certain YES means NO lost)
+  const threshold = config.nearResolutionThreshold
+  if (trade.side === 'YES' && trade.curPrice >= threshold) {
+    return {
+      shouldExit: true,
+      reason: 'near-resolution',
+      pnlPct,
+      peakPnlPct,
+      message: `Near-resolution exit: YES at ${(trade.curPrice * 100).toFixed(0)}¢ (threshold: ${(threshold * 100).toFixed(0)}¢)`,
+    }
+  }
+  if (trade.side === 'NO' && trade.curPrice <= (1 - threshold)) {
+    return {
+      shouldExit: true,
+      reason: 'near-resolution',
+      pnlPct,
+      peakPnlPct,
+      message: `Near-resolution exit: NO at ${(trade.curPrice * 100).toFixed(0)}¢ (threshold: ${((1 - threshold) * 100).toFixed(0)}¢)`,
+    }
+  }
+
+  // 2. TAKE PROFIT — percentage-based (kept for custom configs)
   if (pnlPct >= config.takeProfitPct) {
     return {
       shouldExit: true,
@@ -82,7 +113,7 @@ export function evaluateExit(
     }
   }
 
-  // 2. STOP LOSS — cut the bleeding
+  // 3. STOP LOSS — cut the bleeding
   if (pnlPct <= -config.stopLossPct) {
     return {
       shouldExit: true,
@@ -93,7 +124,7 @@ export function evaluateExit(
     }
   }
 
-  // 3. TRAILING STOP — protect gains (YES side only, NO is complex)
+  // 4. TRAILING STOP — protect gains (YES side only, NO is complex)
   if (trade.side === 'YES' && peakPnlPct >= config.trailingActivatePct && pnlPct <= config.trailingStopPct) {
     return {
       shouldExit: true,
@@ -104,7 +135,7 @@ export function evaluateExit(
     }
   }
 
-  // 4. STALE POSITION — capital is sitting dead
+  // 5. STALE POSITION — capital is sitting dead
   const openedAt = new Date(trade.openedAt).getTime()
   const daysSinceOpen = (Date.now() - openedAt) / (1000 * 60 * 60 * 24)
   if (daysSinceOpen >= config.staleDays) {
@@ -120,7 +151,7 @@ export function evaluateExit(
     }
   }
 
-  // 5. EXPERT EXIT — they know something we don't
+  // 6. EXPERT EXIT — they know something we don't
   if (config.followExpertExit && expertStillHolding === false) {
     return {
       shouldExit: true,
@@ -158,6 +189,7 @@ function calcPnlPct(side: string, entryPrice: number, curPrice: number): number 
 export function exitEmoji(reason: ExitDecision['reason']): string {
   switch (reason) {
     case 'take-profit': return '💰'
+    case 'near-resolution': return '🎯'
     case 'stop-loss': return '🛑'
     case 'trailing-stop': return '📈'
     case 'stale-position': return '💤'
