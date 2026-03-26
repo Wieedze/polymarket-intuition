@@ -41,44 +41,36 @@ const KEYWORD_MAP: Record<DomainAtomValue, WeightedKeyword[]> = {
     ...['cryptocurrency', 'coin', 'decentralized', 'web3'].map(kw => ({ kw, weight: 1 })),
   ],
   [DOMAIN_ATOMS.SPORTS]: [
-    // Leagues & events
     ...['nba', 'nfl', 'mlb', 'nhl', 'world cup', 'super bowl', 'champions league',
       'premier league', 'wimbledon', 'fide', 'chess tournament', 'grand slam',
       'tour de france', 'formula 1', 'f1', 'ufc', 'nascar', 'la liga',
       'serie a', 'bundesliga', 'ligue 1', 'mls', 'afl', 'pga',
       'us open', 'davis cup', 'counter-strike', 'dota', 'valorant',
       'league of legends'].map(kw => ({ kw, weight: 3 })),
-    // Matchup patterns & betting terms
     ...['championship', 'playoff', 'finals', 'tournament', 'match', 'game',
       'season', 'league', 'cup', 'medal', 'gold medal', 'olympics',
       'spread:', 'o/u', 'vs.', ' vs ', '(bo3)', '(bo5)'].map(kw => ({ kw, weight: 2 })),
-    // Teams — NFL
     ...['patriots', 'chiefs', 'eagles', 'bills', 'ravens', 'lions',
       'cowboys', 'dolphins', 'jets', 'packers', 'vikings', 'bears',
       'colts', 'bengals', 'rams', 'chargers', 'seahawks', 'cardinals',
       'broncos', 'raiders', 'buccaneers', 'commanders', 'steelers',
       'jaguars', '49ers', 'giants', 'saints', 'falcons', 'titans',
       'texans', 'panthers', 'browns'].map(kw => ({ kw, weight: 2 })),
-    // Teams — NBA
     ...['lakers', 'celtics', 'warriors', 'bucks', 'nuggets', 'cavaliers',
       'clippers', '76ers', 'knicks', 'pistons', 'timberwolves', 'heat',
       'nets', 'rockets', 'suns', 'spurs', 'thunder', 'grizzlies',
       'pelicans', 'raptors', 'wizards', 'hornets', 'blazers',
       'mavericks', 'hawks', 'pacers', 'kings', 'jazz', 'magic'].map(kw => ({ kw, weight: 2 })),
-    // Teams — NHL
     ...['golden knights', 'devils', 'blackhawks', 'kraken', 'penguins',
       'bruins', 'rangers', 'maple leafs', 'oilers', 'avalanche',
       'hurricanes', 'panthers', 'flames', 'canucks', 'capitals',
       'red wings', 'blue jackets', 'senators', 'islanders'].map(kw => ({ kw, weight: 2 })),
-    // Teams — Soccer/Football
     ...['barcelona', 'madrid', 'panathinaikos', 'liverpool', 'chelsea',
       'arsenal', 'man city', 'manchester', 'bayern', 'juventus',
       'inter', 'psg', 'dortmund', 'atletico', 'roma', 'napoli',
       'milan', 'tottenham', 'benfica', 'porto'].map(kw => ({ kw, weight: 2 })),
-    // College
     ...['oregon', 'virginia', 'tulane', 'north texas', 'alabama',
       'michigan', 'ohio state', 'georgia', 'clemson', 'texas'].map(kw => ({ kw, weight: 1 })),
-    // Generic
     ...['sport', 'athlete', 'team', 'player', 'coach', 'win the',
       'win on'].map(kw => ({ kw, weight: 1 })),
   ],
@@ -179,11 +171,7 @@ function keywordClassify(text: string): ClassificationResult {
 
 /**
  * Classify a prediction market question into a domain.
- *
- * Pure keyword scoring — no LLM fallback.
- * Score = sum of weighted keyword matches.
- * Highest score wins. Ties broken by domain priority.
- * Returns null only if no keyword matches at all.
+ * Pure keyword scoring — deterministic, no external calls.
  */
 export async function classifyMarket(
   question: string,
