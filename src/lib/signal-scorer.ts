@@ -1,4 +1,4 @@
-import { getWalletStats, getAllPaperTrades, type WalletDomainStats } from './db'
+import { getWalletStats, type WalletDomainStats } from './db'
 import { keywordClassify } from './classifier'
 
 // ── Types ─────────────────────────────────────────────────────────
@@ -19,32 +19,28 @@ export type SignalScore = {
 const MIN_SIGNAL_SCORE = 40  // minimum score to copy
 
 /**
- * Get our own paper trading performance by domain.
- * Returns a multiplier: >1 for profitable domains, <1 for losing ones, 0 to block.
+ * Get a domain signal multiplier based on the expert's own track record in that domain.
+ * Uses wallet_stats from SQLite instead of our paper portfolio performance.
+ *
+ * This avoids penalizing valid signals because we had bad copies in that domain.
+ * The expert's calibration and win rate in THIS domain is the real signal quality indicator.
  */
-function getDomainPerformanceMultiplier(domain: string | null): number {
+function getDomainPerformanceMultiplier(domain: string | null, expertWallet: string): number {
   if (!domain) return 0  // skip unknown domains entirely
 
   try {
-    const allTrades = getAllPaperTrades()
-    const closedInDomain = allTrades.filter(
-      (t) => t.status !== 'open' && t.domain === domain
-    )
+    const expertStats = getWalletStats(expertWallet)
+    if (expertStats.length === 0) return 1.0  // no data yet — neutral
 
-    // Not enough data yet — neutral
-    if (closedInDomain.length < 5) return 1.0
+    const domainStats = expertStats.find((s) => s.domain === domain)
+    if (!domainStats) return 0.7  // expert has no history in this domain — cautious
 
-    const wins = closedInDomain.filter((t) => t.status === 'won').length
-    const winRate = wins / closedInDomain.length
-    const pnl = closedInDomain.reduce((s, t) => s + (t.pnl ?? 0), 0)
+    // Expert is excellent in this domain → boost
+    if (domainStats.calibration >= 0.75 && domainStats.winRate >= 0.55) return 1.5
+    if (domainStats.calibration >= 0.65 && domainStats.winRate >= 0.50) return 1.2
 
-    // Domain is losing money → penalize heavily
-    if (pnl < -100 && winRate < 0.40) return 0.3  // -70% penalty
-    if (pnl < 0 && winRate < 0.35) return 0.5     // -50% penalty
-
-    // Domain is profitable → boost
-    if (pnl > 500 && winRate > 0.50) return 1.5    // +50% boost
-    if (pnl > 100 && winRate > 0.45) return 1.2    // +20% boost
+    // Expert is mediocre in this domain → penalize
+    if (domainStats.calibration < 0.55 || domainStats.winRate < 0.35) return 0.5
 
     return 1.0
   } catch {
@@ -94,8 +90,8 @@ export function scoreSignal(params: {
     }
   }
 
-  // Filter unknown domains and penalize/boost based on our performance
-  const domainMultiplier = getDomainPerformanceMultiplier(domain)
+  // Penalize/boost based on expert's track record in this specific domain
+  const domainMultiplier = getDomainPerformanceMultiplier(domain, expertWallet)
   if (domainMultiplier === 0) {
     return {
       score: 0, domainMatch: false, expertCalibration: 0,
