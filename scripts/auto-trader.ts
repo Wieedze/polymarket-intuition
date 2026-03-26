@@ -57,10 +57,11 @@ function getDynamicBetSize(): number {
 
 // Exit strategy config (override via env vars)
 const EXIT_CONFIG: ExitConfig = {
-  takeProfitPct: parseFloat(process.env.TAKE_PROFIT ?? '0.80'),
+  takeProfitPct: parseFloat(process.env.TAKE_PROFIT ?? '999'),
   stopLossPct: parseFloat(process.env.STOP_LOSS ?? '0.40'),
-  trailingActivatePct: parseFloat(process.env.TRAILING_ACTIVATE ?? '0.30'),
+  trailingActivatePct: parseFloat(process.env.TRAILING_ACTIVATE ?? '999'),
   trailingStopPct: parseFloat(process.env.TRAILING_STOP ?? '0.10'),
+  nearResolutionThreshold: parseFloat(process.env.NEAR_RESOLUTION ?? '0.85'),
   staleDays: parseInt(process.env.STALE_DAYS ?? '7', 10),
   staleThreshold: parseFloat(process.env.STALE_THRESHOLD ?? '0.03'),
   followExpertExit: process.env.FOLLOW_EXPERT_EXIT !== 'false',
