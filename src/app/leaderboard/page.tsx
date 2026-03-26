@@ -124,10 +124,10 @@ export default function LeaderboardPage(): React.ReactElement {
           &larr; Back to search
         </Link>
         <Link
-          href="/signal"
+          href="/analytics"
           className="text-zinc-500 hover:text-zinc-300 text-sm"
         >
-          Signal &rarr;
+          Analytics &rarr;
         </Link>
       </div>
 

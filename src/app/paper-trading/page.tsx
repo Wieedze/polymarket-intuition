@@ -141,7 +141,7 @@ export default function PaperTradingPage(): React.ReactElement {
       <div className="flex items-center justify-between mb-8">
         <Link href="/" className="text-zinc-500 hover:text-zinc-300 text-sm">&larr; Back</Link>
         <div className="flex gap-2">
-          <Link href="/monitor" className="text-zinc-500 hover:text-zinc-300 text-sm">Monitor</Link>
+          <Link href="/analytics" className="text-zinc-500 hover:text-zinc-300 text-sm">Analytics</Link>
           <Link href="/leaderboard" className="text-zinc-500 hover:text-zinc-300 text-sm">Leaderboard</Link>
         </div>
       </div>
@@ -251,8 +251,7 @@ export default function PaperTradingPage(): React.ReactElement {
         <div className="text-center py-16 border border-zinc-800 rounded-xl">
           <p className="text-zinc-400">No paper trades yet</p>
           <p className="text-zinc-600 mt-2 text-sm">
-            Go to <Link href="/monitor" className="text-indigo-400 hover:text-indigo-300">Monitor</Link> and
-            copy expert positions, or they&apos;ll be auto-copied when monitoring runs.
+            Trades are auto-copied by the bot. Check <Link href="/analytics" className="text-indigo-400 hover:text-indigo-300">Analytics</Link> for performance breakdown.
           </p>
         </div>
       ) : (
