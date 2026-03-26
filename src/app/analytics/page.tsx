@@ -27,6 +27,17 @@ type SideStat = { trades: number; won: number; winRate: number; pnl: number }
 type TradeInfo = { title: string; side: string; entryPrice: number; pnl: number; expert: string; domain: string }
 type OpenInfo = { title: string; side: string; entryPrice: number; curPrice: number; unrealized: number; expert: string; domain: string }
 
+type ExpertTrustInfo = {
+  expert: string
+  phase: string
+  status: string
+  trustLevel: number
+  resolvedTrades: number
+  winRate: number
+  pnl: number
+  reason: string
+}
+
 type AnalyticsData = {
   portfolio: Portfolio
   byDomain: DomainStat[]
@@ -37,6 +48,7 @@ type AnalyticsData = {
   bestTrades: TradeInfo[]
   worstTrades: TradeInfo[]
   topOpen: OpenInfo[]
+  expertTrust: ExpertTrustInfo[]
 }
 
 function pnlColor(n: number): string {
@@ -198,6 +210,52 @@ export default function AnalyticsPage(): React.ReactElement {
           </div>
         </Section>
       </div>
+
+      {/* Expert Trust */}
+      {data.expertTrust && data.expertTrust.length > 0 && (
+        <Section title="Expert Trust Levels">
+          <table className="w-full text-sm">
+            <thead><tr className="text-zinc-500 text-xs">
+              <th className="text-left py-2">Expert</th>
+              <th className="text-right">Phase</th>
+              <th className="text-right">Trust</th>
+              <th className="text-right">Trades</th>
+              <th className="text-right">WR</th>
+              <th className="text-right">P&L</th>
+              <th className="text-right">Status</th>
+            </tr></thead>
+            <tbody>
+              {data.expertTrust.map((e) => (
+                <tr key={e.expert} className="border-t border-zinc-800">
+                  <td className="py-2 text-white truncate max-w-[180px]">{e.expert}</td>
+                  <td className="text-right text-zinc-500 text-xs">{e.phase}</td>
+                  <td className="text-right">
+                    <span className={`font-medium ${
+                      e.trustLevel >= 1 ? 'text-emerald-400' :
+                      e.trustLevel >= 0.5 ? 'text-yellow-400' :
+                      e.trustLevel > 0 ? 'text-orange-400' : 'text-red-400'
+                    }`}>
+                      {(e.trustLevel * 100).toFixed(0)}%
+                    </span>
+                  </td>
+                  <td className="text-right text-zinc-400">{e.resolvedTrades}</td>
+                  <td className="text-right text-zinc-300">{e.resolvedTrades > 0 ? wrStr(e.winRate) : '—'}</td>
+                  <td className={`text-right font-medium ${pnlColor(e.pnl)}`}>{e.resolvedTrades > 0 ? pnlStr(e.pnl) : '—'}</td>
+                  <td className="text-right">
+                    <span className={`text-xs px-2 py-0.5 rounded ${
+                      e.status === 'active' ? 'bg-emerald-500/20 text-emerald-400' :
+                      e.status === 'reduced' ? 'bg-yellow-500/20 text-yellow-400' :
+                      'bg-red-500/20 text-red-400'
+                    }`}>
+                      {e.status}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Section>
+      )}
 
       {/* Consensus vs Standard */}
       <Section title="Standard vs Consensus Bets">

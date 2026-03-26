@@ -22,6 +22,7 @@ import { fetchAllPages } from '../src/lib/polymarket'
 import { resolvePaperTrade, updatePaperTradePrice } from '../src/lib/db'
 import { evaluateExit, exitEmoji, type ExitConfig } from '../src/lib/exit-strategy'
 import { scoreSignal, shouldCopySignal, signalBetMultiplier, isContradictory } from '../src/lib/signal-scorer'
+import { evaluateExpertTrust, getAllExpertTrust } from '../src/lib/expert-trust'
 
 const POLYMARKET_DATA_URL = process.env.POLYMARKET_DATA_URL ?? 'https://data-api.polymarket.com'
 
@@ -147,6 +148,13 @@ function canCopy(alert: PositionAlert): boolean {
 }
 
 function tryCopyWithSignal(alert: PositionAlert): boolean {
+  // Check expert trust level first — paused experts are skipped
+  const trust = evaluateExpertTrust(alert.wallet, alert.walletLabel)
+  if (trust.status === 'paused') {
+    console.log(`  ⛔ PAUSED | ${alert.walletLabel ?? alert.wallet.slice(0, 10)} | ${trust.reason}`)
+    return false
+  }
+
   // Score the signal — is this a good trade to copy?
   const signal = scoreSignal({
     expertWallet: alert.wallet,
@@ -157,7 +165,6 @@ function tryCopyWithSignal(alert: PositionAlert): boolean {
 
   if (!shouldCopySignal(signal)) {
     if (signal.score > 20) {
-      // Close to threshold — log why rejected
       console.log(`  ⏭️  SKIP (${signal.score}/100) | ${signal.reasons[0]} | ${alert.position.title}`)
     }
     return false
@@ -166,11 +173,12 @@ function tryCopyWithSignal(alert: PositionAlert): boolean {
   const domain = keywordClassify(alert.position.title)
   const side = alert.position.outcomeIndex === 0 ? 'YES' : 'NO'
 
-  // Dynamic sizing: base (% of cash) × signal quality × consensus
+  // Dynamic sizing: base × signal × consensus × expert trust
   const baseBet = getDynamicBetSize()
   const signalMulti = signalBetMultiplier(signal)
   const consensusMulti = getConsensusMultiplier(alert.position.conditionId)
-  const betAmount = Math.min(baseBet * signalMulti * consensusMulti, MAX_BET)
+  const trustMulti = trust.trustLevel
+  const betAmount = Math.min(baseBet * signalMulti * consensusMulti * trustMulti, MAX_BET)
 
   const consensusEntry = consensusMap.get(alert.position.conditionId)
   const expertCount = consensusEntry?.experts.length ?? 1
@@ -188,8 +196,9 @@ function tryCopyWithSignal(alert: PositionAlert): boolean {
 
   const domainTag = domain ? `[${domain.domain.replace('pm-domain/', '')}]` : ''
   const consensusTag = expertCount > 1 ? ` 🤝${expertCount}x` : ''
+  const trustTag = trust.status === 'reduced' ? ' ⚡reduced' : ''
   const scoreTag = signal.score >= 80 ? '🔥' : signal.score >= 60 ? '✅' : '⚠️'
-  console.log(`  📋 ${scoreTag} COPY (${signal.score}/100) | ${side} @ ${(alert.position.curPrice * 100).toFixed(0)}¢ | $${betAmount.toFixed(0)}${consensusTag} | ${signal.reasons.slice(0, 2).join(', ')} | ${alert.position.title} ${domainTag}`)
+  console.log(`  📋 ${scoreTag} COPY (${signal.score}/100) | ${side} @ ${(alert.position.curPrice * 100).toFixed(0)}¢ | $${betAmount.toFixed(0)}${consensusTag}${trustTag} | ${trust.phase} | ${signal.reasons.slice(0, 2).join(', ')} | ${alert.position.title} ${domainTag}`)
 
   return true
 }
@@ -348,7 +357,20 @@ function printStats(): void {
   console.log(`  │ Cash:     $${cash.toFixed(0).padStart(10)}  (next bet: $${nextBet.toFixed(0)})`)
   console.log(`  │ Open:     ${open.length.toString().padStart(10)}  trades`)
   console.log(`  │ Win Rate: ${(winRate * 100).toFixed(0).padStart(9)}%  (${won.length}W / ${lost.length}L)`)
-  console.log(`  └─────────────────────────────────────┘\n`)
+  console.log(`  └─────────────────────────────────────┘`)
+
+  // Expert trust summary
+  const trusts = getAllExpertTrust()
+  const active = trusts.filter((t) => t.status === 'active')
+  const reduced = trusts.filter((t) => t.status === 'reduced')
+  const paused = trusts.filter((t) => t.status === 'paused')
+  console.log(`  Experts: ${active.length} active | ${reduced.length} reduced | ${paused.length} paused`)
+  if (paused.length > 0) {
+    for (const p of paused.slice(0, 3)) {
+      console.log(`    ⛔ ${(p.label ?? p.wallet.slice(0, 12)).padEnd(20)} | ${p.reason}`)
+    }
+  }
+  console.log('')
 }
 
 // ── Main loop ────────────────────────────────────────────────────

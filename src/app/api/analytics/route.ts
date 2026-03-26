@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { getAllPaperTrades, getPortfolioSetting, type PaperTrade } from '@/lib/db'
+import { getAllExpertTrust } from '@/lib/expert-trust'
 
 function pnlOf(trades: PaperTrade[]): number {
   return trades.reduce((s, t) => s + (t.pnl ?? 0), 0)
@@ -209,6 +210,16 @@ export async function GET(): Promise<NextResponse> {
       bestTrades,
       worstTrades,
       topOpen,
+      expertTrust: getAllExpertTrust().map((t) => ({
+        expert: t.label ?? t.wallet.slice(0, 12),
+        phase: t.phase,
+        status: t.status,
+        trustLevel: t.trustLevel,
+        resolvedTrades: t.resolvedTrades,
+        winRate: t.winRate,
+        pnl: t.pnl,
+        reason: t.reason,
+      })),
     })
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
