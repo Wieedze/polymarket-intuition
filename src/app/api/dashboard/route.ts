@@ -17,18 +17,43 @@ export async function GET(): Promise<NextResponse> {
     }, 0)
     const totalInvested = open.reduce((s, t) => s + t.simulatedUsdc, 0)
 
-    // PnL over time (daily cumulative)
-    const resolvedByDate = new Map<string, number>()
+    // ── Chart data: daily metrics ────────────────────────────────
+    const dailyMap = new Map<string, { pnl: number; trades: number; wins: number }>()
+
     for (const t of closed) {
       if (!t.resolvedAt) continue
       const date = t.resolvedAt.slice(0, 10)
-      resolvedByDate.set(date, (resolvedByDate.get(date) ?? 0) + (t.pnl ?? 0))
+      const existing = dailyMap.get(date) ?? { pnl: 0, trades: 0, wins: 0 }
+      existing.pnl += t.pnl ?? 0
+      existing.trades++
+      if (t.status === 'won') existing.wins++
+      dailyMap.set(date, existing)
     }
-    const sortedDates = [...resolvedByDate.entries()].sort((a, b) => a[0].localeCompare(b[0]))
+
+    const sortedDays = [...dailyMap.entries()].sort((a, b) => a[0].localeCompare(b[0]))
+
+    // Build chart data: equity curve + daily PnL + rolling win rate
     let cumPnl = 0
-    const pnlHistory = sortedDates.map(([date, pnl]) => {
-      cumPnl += pnl
-      return { date, pnl: cumPnl }
+    let rollingWins = 0
+    let rollingTotal = 0
+    const chartData = sortedDays.map(([date, day], i) => {
+      cumPnl += day.pnl
+      rollingWins += day.wins
+      rollingTotal += day.trades
+
+      // Rolling win rate (all trades up to this point, or last 20 days)
+      const lookback = sortedDays.slice(Math.max(0, i - 19), i + 1)
+      const lbWins = lookback.reduce((s, [, d]) => s + d.wins, 0)
+      const lbTotal = lookback.reduce((s, [, d]) => s + d.trades, 0)
+
+      return {
+        date,
+        equity: startBal + cumPnl,      // equity curve
+        dailyPnl: day.pnl,              // daily P&L (bars)
+        cumPnl,                          // cumulative P&L
+        trades: day.trades,              // trades resolved that day
+        winRate: lbTotal > 0 ? Math.round((lbWins / lbTotal) * 100) : 0,  // rolling WR %
+      }
     })
 
     // Recent events
@@ -68,7 +93,7 @@ export async function GET(): Promise<NextResponse> {
       openTrades: open.length,
       totalTrades: all.length,
       roi: startBal > 0 ? realizedPnl / startBal : 0,
-      pnlHistory,
+      chartData,
       events,
       domains,
     })

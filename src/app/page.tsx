@@ -3,11 +3,19 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import {
-  AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
-  PieChart, Pie, Cell,
+  AreaChart, Area, BarChart, Bar, LineChart, Line,
+  XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
+  PieChart, Pie, Cell, ReferenceLine,
 } from 'recharts'
 
-type PnlPoint = { date: string; pnl: number }
+type ChartPoint = {
+  date: string
+  equity: number
+  dailyPnl: number
+  cumPnl: number
+  trades: number
+  winRate: number
+}
 type BotEvent = { id: number; type: string; message: string; detail: string | null; createdAt: string }
 type DomainInfo = { domain: string; pnl: number; trades: number; won: number; winRate: number }
 
@@ -24,7 +32,7 @@ type DashboardData = {
   openTrades: number
   totalTrades: number
   roi: number
-  pnlHistory: PnlPoint[]
+  chartData: ChartPoint[]
   events: BotEvent[]
   domains: DomainInfo[]
 }
@@ -138,52 +146,47 @@ export default function Dashboard(): React.ReactElement {
             <BigStat label="Unrealized" value={pnlStr(data.unrealizedPnl)} color={data.unrealizedPnl >= 0 ? COLORS.teal : COLORS.red} />
           </div>
 
-          {/* Charts row */}
+          {/* Charts */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
-            {/* PnL Chart */}
+            {/* Equity Curve — THE main chart */}
             <div className="lg:col-span-2 rounded-xl p-5" style={{ background: COLORS.card }}>
               <div className="flex items-center justify-between mb-1">
-                <h2 className="text-sm font-medium" style={{ color: COLORS.textMuted }}>Performance</h2>
+                <h2 className="text-sm font-medium" style={{ color: COLORS.textMuted }}>Equity Curve</h2>
                 <span className="text-lg font-bold" style={{ color: data.realizedPnl >= 0 ? COLORS.teal : COLORS.red }}>
-                  {pnlStr(data.realizedPnl)}
+                  ${data.balance.toFixed(0)}
                 </span>
               </div>
-              <p className="text-xs mb-4" style={{ color: COLORS.textMuted }}>Cumulative P&L over time</p>
-              {data.pnlHistory.length > 0 ? (
-                <ResponsiveContainer width="100%" height={220}>
-                  <AreaChart data={data.pnlHistory} margin={{ top: 5, right: 10, bottom: 5, left: 10 }}>
+              <p className="text-xs mb-3" style={{ color: COLORS.textMuted }}>Portfolio value over time (started at ${data.startingBalance.toFixed(0)})</p>
+              {data.chartData.length > 0 ? (
+                <ResponsiveContainer width="100%" height={200}>
+                  <AreaChart data={data.chartData} margin={{ top: 5, right: 10, bottom: 5, left: 10 }}>
                     <defs>
-                      <linearGradient id="pnlFill" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor={COLORS.teal} stopOpacity={0.25} />
+                      <linearGradient id="eqFill" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor={COLORS.teal} stopOpacity={0.3} />
                         <stop offset="100%" stopColor={COLORS.teal} stopOpacity={0} />
                       </linearGradient>
                     </defs>
                     <CartesianGrid strokeDasharray="3 3" stroke={COLORS.surface} />
                     <XAxis dataKey="date" tickFormatter={(d: string) => d.slice(5)} tick={{ fill: COLORS.textMuted, fontSize: 10 }} axisLine={false} tickLine={false} />
-                    <YAxis tickFormatter={(v: number) => `$${v}`} tick={{ fill: COLORS.textMuted, fontSize: 10 }} axisLine={false} tickLine={false} width={50} />
-                    <Tooltip
-                      contentStyle={{ background: COLORS.surface, border: 'none', borderRadius: 8, color: '#fff', fontSize: 12 }}
-                      formatter={(value: number) => [`$${value.toFixed(2)}`, 'P&L']}
-                      labelFormatter={(l: string) => l}
-                    />
-                    <Area type="monotone" dataKey="pnl" stroke={COLORS.teal} fill="url(#pnlFill)" strokeWidth={2} dot={false} />
+                    <YAxis tickFormatter={(v: number) => `$${(v / 1000).toFixed(1)}K`} tick={{ fill: COLORS.textMuted, fontSize: 10 }} axisLine={false} tickLine={false} width={45} domain={['dataMin - 500', 'dataMax + 500']} />
+                    <Tooltip contentStyle={{ background: COLORS.surface, border: 'none', borderRadius: 8, fontSize: 12 }} formatter={(v: number) => [`$${v.toFixed(0)}`, 'Equity']} />
+                    <ReferenceLine y={data.startingBalance} stroke={COLORS.textMuted} strokeDasharray="3 3" />
+                    <Area type="monotone" dataKey="equity" stroke={COLORS.teal} fill="url(#eqFill)" strokeWidth={2} dot={false} />
                   </AreaChart>
                 </ResponsiveContainer>
               ) : (
-                <div className="h-[220px] flex items-center justify-center text-sm" style={{ color: COLORS.textMuted }}>
-                  Chart appears after trades resolve
-                </div>
+                <div className="h-[200px] flex items-center justify-center text-sm" style={{ color: COLORS.textMuted }}>Chart appears after trades resolve</div>
               )}
             </div>
 
-            {/* Domain donut + list */}
+            {/* Domain donut */}
             <div className="rounded-xl p-5" style={{ background: COLORS.card }}>
-              <h2 className="text-sm font-medium mb-4" style={{ color: COLORS.textMuted }}>By Domain</h2>
+              <h2 className="text-sm font-medium mb-3" style={{ color: COLORS.textMuted }}>By Domain</h2>
               {donutData.length > 0 ? (
                 <>
-                  <ResponsiveContainer width="100%" height={140}>
+                  <ResponsiveContainer width="100%" height={130}>
                     <PieChart>
-                      <Pie data={donutData} cx="50%" cy="50%" innerRadius={40} outerRadius={60} paddingAngle={3} dataKey="value">
+                      <Pie data={donutData} cx="50%" cy="50%" innerRadius={38} outerRadius={58} paddingAngle={3} dataKey="value">
                         {donutData.map((entry) => (
                           <Cell key={entry.name} fill={DOMAIN_PIE_COLORS[entry.name] ?? '#52525b'} />
                         ))}
@@ -191,11 +194,12 @@ export default function Dashboard(): React.ReactElement {
                     </PieChart>
                   </ResponsiveContainer>
                   <div className="space-y-2 mt-2">
-                    {data.domains.slice(0, 5).map((d) => (
+                    {data.domains.slice(0, 6).map((d) => (
                       <div key={d.domain} className="flex items-center justify-between text-xs">
                         <div className="flex items-center gap-2">
                           <span className="w-2 h-2 rounded-full" style={{ background: DOMAIN_PIE_COLORS[d.domain] ?? '#52525b' }} />
                           <span className="capitalize" style={{ color: COLORS.textLight }}>{d.domain}</span>
+                          <span style={{ color: COLORS.textMuted }}>{d.trades}t</span>
                         </div>
                         <span style={{ color: d.pnl >= 0 ? COLORS.teal : COLORS.red }}>{pnlStr(d.pnl)}</span>
                       </div>
@@ -203,12 +207,51 @@ export default function Dashboard(): React.ReactElement {
                   </div>
                 </>
               ) : (
-                <div className="h-[200px] flex items-center justify-center text-sm" style={{ color: COLORS.textMuted }}>
-                  No domain data yet
-                </div>
+                <div className="h-[200px] flex items-center justify-center text-sm" style={{ color: COLORS.textMuted }}>No data yet</div>
               )}
             </div>
           </div>
+
+          {/* Second row: Daily PnL + Rolling Win Rate */}
+          {data.chartData.length > 0 && (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+              {/* Daily PnL bars */}
+              <div className="rounded-xl p-5" style={{ background: COLORS.card }}>
+                <h2 className="text-sm font-medium mb-1" style={{ color: COLORS.textMuted }}>Daily P&L</h2>
+                <p className="text-xs mb-3" style={{ color: COLORS.textMuted }}>Profit/loss per day</p>
+                <ResponsiveContainer width="100%" height={160}>
+                  <BarChart data={data.chartData} margin={{ top: 5, right: 10, bottom: 5, left: 10 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke={COLORS.surface} />
+                    <XAxis dataKey="date" tickFormatter={(d: string) => d.slice(8)} tick={{ fill: COLORS.textMuted, fontSize: 10 }} axisLine={false} tickLine={false} />
+                    <YAxis tickFormatter={(v: number) => `$${v}`} tick={{ fill: COLORS.textMuted, fontSize: 10 }} axisLine={false} tickLine={false} width={40} />
+                    <Tooltip contentStyle={{ background: COLORS.surface, border: 'none', borderRadius: 8, fontSize: 12 }} formatter={(v: number) => [`$${v.toFixed(2)}`, 'P&L']} />
+                    <ReferenceLine y={0} stroke={COLORS.textMuted} />
+                    <Bar dataKey="dailyPnl" radius={[3, 3, 0, 0]}>
+                      {data.chartData.map((entry, i) => (
+                        <Cell key={i} fill={entry.dailyPnl >= 0 ? COLORS.teal : COLORS.red} fillOpacity={0.8} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+
+              {/* Rolling win rate */}
+              <div className="rounded-xl p-5" style={{ background: COLORS.card }}>
+                <h2 className="text-sm font-medium mb-1" style={{ color: COLORS.textMuted }}>Win Rate (rolling)</h2>
+                <p className="text-xs mb-3" style={{ color: COLORS.textMuted }}>Last 20 days window</p>
+                <ResponsiveContainer width="100%" height={160}>
+                  <LineChart data={data.chartData} margin={{ top: 5, right: 10, bottom: 5, left: 10 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke={COLORS.surface} />
+                    <XAxis dataKey="date" tickFormatter={(d: string) => d.slice(8)} tick={{ fill: COLORS.textMuted, fontSize: 10 }} axisLine={false} tickLine={false} />
+                    <YAxis tickFormatter={(v: number) => `${v}%`} tick={{ fill: COLORS.textMuted, fontSize: 10 }} axisLine={false} tickLine={false} width={35} domain={[0, 100]} />
+                    <Tooltip contentStyle={{ background: COLORS.surface, border: 'none', borderRadius: 8, fontSize: 12 }} formatter={(v: number) => [`${v}%`, 'Win Rate']} />
+                    <ReferenceLine y={50} stroke={COLORS.amber} strokeDasharray="3 3" label={{ value: '50%', fill: COLORS.amber, fontSize: 10 }} />
+                    <Line type="monotone" dataKey="winRate" stroke={COLORS.amber} strokeWidth={2} dot={{ r: 3, fill: COLORS.amber }} />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          )}
 
           {/* Activity feed */}
           <div className="rounded-xl p-5" style={{ background: COLORS.card }}>
