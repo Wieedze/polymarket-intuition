@@ -3,6 +3,21 @@
 import { useState } from 'react'
 import Link from 'next/link'
 
+// Design system — same as dashboard
+const COLORS = {
+  bg: '#171821',
+  card: '#21222D',
+  surface: '#2B2B36',
+  teal: '#A9DFD8',
+  amber: '#FCB859',
+  pink: '#F2C8ED',
+  red: '#EA1701',
+  green: '#029F04',
+  blue: '#28AEF3',
+  textMuted: '#87888C',
+  textLight: '#D2D2D2',
+}
+
 type DomainStats = {
   domain: string
   trades: number
@@ -48,15 +63,15 @@ const DOMAIN_LABELS: Record<string, string> = {
 }
 
 const DOMAIN_COLORS: Record<string, string> = {
-  'pm-domain/ai-tech': 'text-violet-400',
-  'pm-domain/politics': 'text-blue-400',
-  'pm-domain/crypto': 'text-orange-400',
-  'pm-domain/sports': 'text-green-400',
-  'pm-domain/economics': 'text-yellow-400',
-  'pm-domain/science': 'text-cyan-400',
-  'pm-domain/culture': 'text-pink-400',
-  'pm-domain/weather': 'text-sky-400',
-  'pm-domain/geopolitics': 'text-red-400',
+  'pm-domain/ai-tech': '#8b5cf6',
+  'pm-domain/politics': COLORS.blue,
+  'pm-domain/crypto': COLORS.amber,
+  'pm-domain/sports': COLORS.teal,
+  'pm-domain/economics': '#eab308',
+  'pm-domain/science': '#06b6d4',
+  'pm-domain/culture': COLORS.pink,
+  'pm-domain/weather': COLORS.blue,
+  'pm-domain/geopolitics': COLORS.red,
 }
 
 const PERIODS = [
@@ -66,15 +81,15 @@ const PERIODS = [
 ]
 
 function copyabilityColor(score: number): string {
-  if (score >= 0.6) return 'text-emerald-400'
-  if (score >= 0.4) return 'text-yellow-400'
-  return 'text-red-400'
+  if (score >= 0.6) return COLORS.teal
+  if (score >= 0.4) return COLORS.amber
+  return COLORS.red
 }
 
 function copyabilityBg(score: number): string {
-  if (score >= 0.6) return 'bg-emerald-500'
-  if (score >= 0.4) return 'bg-yellow-500'
-  return 'bg-red-500'
+  if (score >= 0.6) return COLORS.teal
+  if (score >= 0.4) return COLORS.amber
+  return COLORS.red
 }
 
 function pfLabel(pf: number): string {
@@ -99,7 +114,6 @@ export default function LeaderboardPage(): React.ReactElement {
   async function fetchLeaderboard(): Promise<void> {
     setLoading(true)
     setError(null)
-
     try {
       const res = await fetch(`/api/leaderboard?period=${period}&limit=${limit}`)
       if (!res.ok) {
@@ -117,215 +131,265 @@ export default function LeaderboardPage(): React.ReactElement {
   }
 
   return (
-    <main className="min-h-screen px-4 py-12 max-w-5xl mx-auto">
-      {/* Nav */}
-      <div className="flex items-center justify-between mb-8">
-        <Link href="/" className="text-zinc-500 hover:text-zinc-300 text-sm">
-          &larr; Back to search
-        </Link>
-        <Link
-          href="/analytics"
-          className="text-zinc-500 hover:text-zinc-300 text-sm"
-        >
-          Analytics &rarr;
-        </Link>
-      </div>
-
-      {/* Header */}
-      <div className="mb-8">
-        <h1 className="text-3xl font-bold text-white">Copy Trade Leaderboard</h1>
-        <p className="mt-2 text-zinc-400">
-          Top Polymarket traders ranked by copyability — who to follow with a small account
-        </p>
-      </div>
-
-      {/* Controls */}
-      <div className="flex flex-wrap items-center gap-3 mb-8">
-        {PERIODS.map((p) => (
-          <button
-            key={p.value}
-            onClick={() => setPeriod(p.value)}
-            className={`px-4 py-2 text-sm rounded-lg border transition-colors ${
-              period === p.value
-                ? 'bg-indigo-600 border-indigo-500 text-white'
-                : 'bg-zinc-900 border-zinc-700 text-zinc-400 hover:border-zinc-500'
-            }`}
-          >
-            {p.label}
-          </button>
-        ))}
-        <select
-          value={limit}
-          onChange={(e) => setLimit(parseInt(e.target.value, 10))}
-          className="px-3 py-2 text-sm bg-zinc-900 border border-zinc-700 rounded-lg text-zinc-300"
-        >
-          <option value={5}>Top 5</option>
-          <option value={10}>Top 10</option>
-          <option value={20}>Top 20</option>
-        </select>
-        <button
-          onClick={() => void fetchLeaderboard()}
-          disabled={loading}
-          className="px-6 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:bg-zinc-700 disabled:text-zinc-500 text-white text-sm font-medium rounded-lg transition-colors"
-        >
-          {loading ? 'Computing...' : 'Load Leaderboard'}
-        </button>
-      </div>
-
-      {loading && (
-        <div className="text-center py-20">
-          <div className="inline-block w-8 h-8 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
-          <p className="mt-4 text-zinc-400">
-            Fetching leaderboard & computing copyability scores...
-          </p>
-          <p className="mt-2 text-zinc-600 text-sm">
-            This may take a minute — analyzing trades for each wallet
-          </p>
-        </div>
-      )}
-
-      {error && (
-        <div className="text-red-400 text-center py-8">{error}</div>
-      )}
-
-      {data && !loading && (
-        <div className="space-y-3">
-          {data.wallets.map((w, idx) => (
-            <div
-              key={w.address}
-              className="border border-zinc-800 rounded-xl bg-zinc-900/50 hover:border-zinc-700 transition-colors"
-            >
-              {/* Main row */}
-              <button
-                onClick={() => setExpanded(expanded === w.address ? null : w.address)}
-                className="w-full px-5 py-4 flex items-center gap-4 text-left"
-              >
-                {/* Rank */}
-                <span className="text-2xl font-bold text-zinc-600 w-8 text-right">
-                  {idx + 1}
-                </span>
-
-                {/* Copyability gauge */}
-                <div className="w-16 text-center">
-                  <div className={`text-xl font-bold ${copyabilityColor(w.topCopyability)}`}>
-                    {Math.round(w.topCopyability * 100)}
-                  </div>
-                  <div className="text-[10px] text-zinc-500 uppercase">Copy</div>
-                </div>
-
-                {/* Name + address */}
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="text-white font-medium truncate">
-                      {w.userName}
-                    </span>
-                    <span className="text-zinc-600 text-xs font-mono">
-                      {truncateAddress(w.address)}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-3 mt-1 text-xs text-zinc-500">
-                    <span>{w.resolvedTrades} trades</span>
-                    {w.bestDomain && (
-                      <>
-                        <span>&middot;</span>
-                        <span className={DOMAIN_COLORS[w.bestDomain.domain] ?? 'text-zinc-400'}>
-                          Best: {DOMAIN_LABELS[w.bestDomain.domain] ?? w.bestDomain.domain}
-                        </span>
-                        <span>&middot;</span>
-                        <span>WR {Math.round(w.bestDomain.winRate * 100)}%</span>
-                        <span>&middot;</span>
-                        <span>PF {pfLabel(w.bestDomain.profitFactor)}</span>
-                      </>
-                    )}
-                  </div>
-                </div>
-
-                {/* PnL from Polymarket */}
-                <div className="text-right">
-                  <div className={`font-medium ${w.pnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                    {w.pnl >= 0 ? '+' : ''}{(w.pnl / 1000).toFixed(0)}K
-                  </div>
-                  <div className="text-[10px] text-zinc-500">PnL ({data.period})</div>
-                </div>
-
-                {/* Expand indicator */}
-                <span className="text-zinc-600 text-sm">
-                  {expanded === w.address ? '▲' : '▼'}
-                </span>
-              </button>
-
-              {/* Expanded domain details */}
-              {expanded === w.address && w.domains.length > 0 && (
-                <div className="px-5 pb-4 border-t border-zinc-800">
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-4">
-                    {w.domains.map((d) => (
-                      <div
-                        key={d.domain}
-                        className="p-3 bg-zinc-800/50 rounded-lg"
-                      >
-                        <div className="flex items-center justify-between mb-2">
-                          <span className={`text-sm font-medium ${DOMAIN_COLORS[d.domain] ?? 'text-zinc-300'}`}>
-                            {DOMAIN_LABELS[d.domain] ?? d.domain}
-                          </span>
-                          <span className={`text-sm font-bold ${copyabilityColor(d.copyabilityScore)}`}>
-                            {Math.round(d.copyabilityScore * 100)}%
-                          </span>
-                        </div>
-                        <div className="h-1.5 bg-zinc-700 rounded-full overflow-hidden mb-2">
-                          <div
-                            className={`h-full rounded-full ${copyabilityBg(d.copyabilityScore)}`}
-                            style={{ width: `${Math.round(d.copyabilityScore * 100)}%` }}
-                          />
-                        </div>
-                        <div className="grid grid-cols-3 gap-1 text-[11px]">
-                          <div>
-                            <span className="text-zinc-500">WR </span>
-                            <span className="text-zinc-300">{Math.round(d.winRate * 100)}%</span>
-                          </div>
-                          <div>
-                            <span className="text-zinc-500">PF </span>
-                            <span className={`${d.profitFactor >= 1.5 ? 'text-emerald-400' : 'text-zinc-300'}`}>
-                              {pfLabel(d.profitFactor)}
-                            </span>
-                          </div>
-                          <div>
-                            <span className="text-zinc-500">MaxL </span>
-                            <span className={`${d.maxConsecutiveLosses <= 5 ? 'text-zinc-300' : 'text-red-400'}`}>
-                              {d.maxConsecutiveLosses}
-                            </span>
-                          </div>
-                          <div>
-                            <span className="text-zinc-500">Cal </span>
-                            <span className="text-zinc-300">{Math.round(d.calibration * 100)}%</span>
-                          </div>
-                          <div>
-                            <span className="text-zinc-500">Avg </span>
-                            <span className={`${d.avgPnlPerTrade >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                              {d.avgPnlPerTrade >= 0 ? '+' : ''}{d.avgPnlPerTrade.toFixed(0)}
-                            </span>
-                          </div>
-                          <div>
-                            <span className="text-zinc-500">{d.trades}t </span>
-                            <span className="text-zinc-500">{d.tradingStyle}</span>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                  <div className="mt-3 text-center">
-                    <Link
-                      href={`/profile/${w.address}`}
-                      className="text-indigo-400 hover:text-indigo-300 text-sm"
-                    >
-                      View full profile &rarr;
-                    </Link>
-                  </div>
-                </div>
-              )}
+    <div className="min-h-screen" style={{ background: COLORS.bg, color: COLORS.textLight }}>
+      <div className="flex">
+        {/* Sidebar */}
+        <aside className="hidden lg:flex flex-col w-56 min-h-screen p-5 border-r" style={{ background: COLORS.card, borderColor: COLORS.surface }}>
+          <div className="mb-10">
+            <h1 className="text-lg font-bold text-white">Copy Trader</h1>
+            <p className="text-xs mt-1" style={{ color: COLORS.textMuted }}>Paper simulation</p>
+          </div>
+          <nav className="flex flex-col gap-1">
+            <SideLink href="/">Dashboard</SideLink>
+            <SideLink href="/analytics">Analytics</SideLink>
+            <SideLink href="/paper-trading">Trades</SideLink>
+            <SideLink href="/leaderboard" active>Leaderboard</SideLink>
+          </nav>
+          <div className="mt-auto pt-8">
+            <div className="p-3 rounded-lg" style={{ background: COLORS.surface }}>
+              <div className="text-xs" style={{ color: COLORS.textMuted }}>Bot Status</div>
+              <div className="flex items-center gap-2 mt-1">
+                <span className="w-2 h-2 rounded-full animate-pulse" style={{ background: COLORS.green }} />
+                <span className="text-xs text-white">Running</span>
+              </div>
             </div>
-          ))}
-        </div>
-      )}
-    </main>
+          </div>
+        </aside>
+
+        {/* Main content */}
+        <main className="flex-1 p-6 lg:p-8">
+          {/* Mobile nav */}
+          <div className="lg:hidden flex items-center justify-between mb-6">
+            <h1 className="text-lg font-bold text-white">Copy Trader</h1>
+            <div className="flex gap-2">
+              <Link href="/" className="text-xs px-3 py-1 rounded-lg" style={{ background: COLORS.surface, color: COLORS.textMuted }}>Dashboard</Link>
+              <Link href="/analytics" className="text-xs px-3 py-1 rounded-lg" style={{ background: COLORS.surface, color: COLORS.textMuted }}>Analytics</Link>
+            </div>
+          </div>
+
+          {/* Header */}
+          <div className="mb-8">
+            <h2 className="text-2xl font-bold text-white">Copy Trade Leaderboard</h2>
+            <p className="mt-2 text-sm" style={{ color: COLORS.textMuted }}>
+              Top Polymarket traders ranked by copyability — who to follow with a small account
+            </p>
+          </div>
+
+          {/* Controls */}
+          <div className="flex flex-wrap items-center gap-3 mb-8">
+            {PERIODS.map((p) => (
+              <button
+                key={p.value}
+                onClick={() => setPeriod(p.value)}
+                className="px-4 py-2 text-sm rounded-lg border transition-colors"
+                style={{
+                  background: period === p.value ? COLORS.surface : 'transparent',
+                  borderColor: period === p.value ? COLORS.teal : COLORS.surface,
+                  color: period === p.value ? COLORS.teal : COLORS.textMuted,
+                }}
+              >
+                {p.label}
+              </button>
+            ))}
+            <select
+              value={limit}
+              onChange={(e) => setLimit(parseInt(e.target.value, 10))}
+              className="px-3 py-2 text-sm rounded-lg border"
+              style={{ background: COLORS.card, borderColor: COLORS.surface, color: COLORS.textLight }}
+            >
+              <option value={5}>Top 5</option>
+              <option value={10}>Top 10</option>
+              <option value={20}>Top 20</option>
+            </select>
+            <button
+              onClick={() => void fetchLeaderboard()}
+              disabled={loading}
+              className="px-6 py-2 text-sm font-medium rounded-lg transition-colors"
+              style={{
+                background: loading ? COLORS.surface : COLORS.teal,
+                color: loading ? COLORS.textMuted : COLORS.bg,
+              }}
+            >
+              {loading ? 'Computing...' : 'Load Leaderboard'}
+            </button>
+          </div>
+
+          {loading && (
+            <div className="text-center py-20">
+              <div className="inline-block w-8 h-8 border-2 border-t-transparent rounded-full animate-spin" style={{ borderColor: COLORS.teal, borderTopColor: 'transparent' }} />
+              <p className="mt-4" style={{ color: COLORS.textMuted }}>
+                Fetching leaderboard & computing copyability scores...
+              </p>
+              <p className="mt-2 text-sm" style={{ color: COLORS.surface }}>
+                This may take a minute — analyzing trades for each wallet
+              </p>
+            </div>
+          )}
+
+          {error && (
+            <div className="text-center py-8" style={{ color: COLORS.red }}>{error}</div>
+          )}
+
+          {data && !loading && (
+            <div className="space-y-3">
+              {data.wallets.map((w, idx) => (
+                <div
+                  key={w.address}
+                  className="rounded-xl border transition-colors"
+                  style={{ background: COLORS.card, borderColor: COLORS.surface }}
+                >
+                  {/* Main row */}
+                  <button
+                    onClick={() => setExpanded(expanded === w.address ? null : w.address)}
+                    className="w-full px-5 py-4 flex items-center gap-4 text-left"
+                  >
+                    {/* Rank */}
+                    <span className="text-2xl font-bold w-8 text-right" style={{ color: COLORS.surface }}>
+                      {idx + 1}
+                    </span>
+
+                    {/* Copyability score */}
+                    <div className="w-16 text-center">
+                      <div className="text-xl font-bold" style={{ color: copyabilityColor(w.topCopyability) }}>
+                        {Math.round(w.topCopyability * 100)}
+                      </div>
+                      <div className="text-[10px] uppercase" style={{ color: COLORS.textMuted }}>Copy</div>
+                    </div>
+
+                    {/* Name + address */}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium text-white truncate">{w.userName}</span>
+                        <span className="font-mono text-xs" style={{ color: COLORS.textMuted }}>{truncateAddress(w.address)}</span>
+                      </div>
+                      <div className="flex items-center gap-3 mt-1 text-xs" style={{ color: COLORS.textMuted }}>
+                        <span>{w.resolvedTrades} trades</span>
+                        {w.bestDomain && (
+                          <>
+                            <span>&middot;</span>
+                            <span style={{ color: DOMAIN_COLORS[w.bestDomain.domain] ?? COLORS.textMuted }}>
+                              Best: {DOMAIN_LABELS[w.bestDomain.domain] ?? w.bestDomain.domain}
+                            </span>
+                            <span>&middot;</span>
+                            <span>WR {Math.round(w.bestDomain.winRate * 100)}%</span>
+                            <span>&middot;</span>
+                            <span>PF {pfLabel(w.bestDomain.profitFactor)}</span>
+                          </>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* PnL */}
+                    <div className="text-right">
+                      <div className="font-medium" style={{ color: w.pnl >= 0 ? COLORS.teal : COLORS.red }}>
+                        {w.pnl >= 0 ? '+' : ''}{(w.pnl / 1000).toFixed(0)}K
+                      </div>
+                      <div className="text-[10px]" style={{ color: COLORS.textMuted }}>PnL ({data.period})</div>
+                    </div>
+
+                    {/* Expand */}
+                    <span className="text-sm" style={{ color: COLORS.textMuted }}>
+                      {expanded === w.address ? '▲' : '▼'}
+                    </span>
+                  </button>
+
+                  {/* Expanded domain details */}
+                  {expanded === w.address && w.domains.length > 0 && (
+                    <div className="px-5 pb-4 border-t" style={{ borderColor: COLORS.surface }}>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-4">
+                        {w.domains.map((d) => (
+                          <div key={d.domain} className="p-3 rounded-lg" style={{ background: COLORS.surface }}>
+                            <div className="flex items-center justify-between mb-2">
+                              <span className="text-sm font-medium" style={{ color: DOMAIN_COLORS[d.domain] ?? COLORS.textLight }}>
+                                {DOMAIN_LABELS[d.domain] ?? d.domain}
+                              </span>
+                              <span className="text-sm font-bold" style={{ color: copyabilityColor(d.copyabilityScore) }}>
+                                {Math.round(d.copyabilityScore * 100)}%
+                              </span>
+                            </div>
+                            <div className="h-1.5 rounded-full overflow-hidden mb-2" style={{ background: COLORS.card }}>
+                              <div
+                                className="h-full rounded-full transition-all"
+                                style={{
+                                  width: `${Math.round(d.copyabilityScore * 100)}%`,
+                                  background: copyabilityBg(d.copyabilityScore),
+                                }}
+                              />
+                            </div>
+                            <div className="grid grid-cols-3 gap-1 text-[11px]">
+                              <div>
+                                <span style={{ color: COLORS.textMuted }}>WR </span>
+                                <span style={{ color: COLORS.textLight }}>{Math.round(d.winRate * 100)}%</span>
+                              </div>
+                              <div>
+                                <span style={{ color: COLORS.textMuted }}>PF </span>
+                                <span style={{ color: d.profitFactor >= 1.5 ? COLORS.teal : COLORS.textLight }}>
+                                  {pfLabel(d.profitFactor)}
+                                </span>
+                              </div>
+                              <div>
+                                <span style={{ color: COLORS.textMuted }}>MaxL </span>
+                                <span style={{ color: d.maxConsecutiveLosses <= 5 ? COLORS.textLight : COLORS.red }}>
+                                  {d.maxConsecutiveLosses}
+                                </span>
+                              </div>
+                              <div>
+                                <span style={{ color: COLORS.textMuted }}>Cal </span>
+                                <span style={{ color: COLORS.textLight }}>{Math.round(d.calibration * 100)}%</span>
+                              </div>
+                              <div>
+                                <span style={{ color: COLORS.textMuted }}>Avg </span>
+                                <span style={{ color: d.avgPnlPerTrade >= 0 ? COLORS.teal : COLORS.red }}>
+                                  {d.avgPnlPerTrade >= 0 ? '+' : ''}{d.avgPnlPerTrade.toFixed(0)}
+                                </span>
+                              </div>
+                              <div>
+                                <span style={{ color: COLORS.textMuted }}>{d.trades}t </span>
+                                <span style={{ color: COLORS.textMuted }}>{d.tradingStyle}</span>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                      <div className="mt-3 text-center">
+                        <Link
+                          href={`/profile/${w.address}`}
+                          className="text-sm transition-colors"
+                          style={{ color: COLORS.teal }}
+                        >
+                          View full profile &rarr;
+                        </Link>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {!data && !loading && !error && (
+            <div className="text-center py-20 border rounded-xl" style={{ borderColor: COLORS.surface }}>
+              <p className="text-lg mb-2" style={{ color: COLORS.textMuted }}>Ready to compute</p>
+              <p className="text-sm" style={{ color: COLORS.textMuted }}>Select a period and click Load Leaderboard</p>
+            </div>
+          )}
+        </main>
+      </div>
+    </div>
+  )
+}
+
+function SideLink({ href, children, active }: { href: string; children: React.ReactNode; active?: boolean }): React.ReactElement {
+  return (
+    <Link
+      href={href}
+      className="px-3 py-2 rounded-lg text-sm transition-colors"
+      style={{
+        background: active ? COLORS.surface : 'transparent',
+        color: active ? COLORS.teal : COLORS.textMuted,
+      }}
+    >
+      {children}
+    </Link>
   )
 }

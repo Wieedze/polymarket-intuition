@@ -3,6 +3,21 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 
+// Design system — same as dashboard
+const COLORS = {
+  bg: '#171821',
+  card: '#21222D',
+  surface: '#2B2B36',
+  teal: '#A9DFD8',
+  amber: '#FCB859',
+  pink: '#F2C8ED',
+  red: '#EA1701',
+  green: '#029F04',
+  blue: '#28AEF3',
+  textMuted: '#87888C',
+  textLight: '#D2D2D2',
+}
+
 type PaperTrade = {
   id: string
   conditionId: string
@@ -56,19 +71,27 @@ const DOMAIN_LABELS: Record<string, string> = {
 }
 
 const DOMAIN_COLORS: Record<string, string> = {
-  'pm-domain/ai-tech': 'bg-violet-500/20 text-violet-400',
-  'pm-domain/politics': 'bg-blue-500/20 text-blue-400',
-  'pm-domain/crypto': 'bg-orange-500/20 text-orange-400',
-  'pm-domain/sports': 'bg-green-500/20 text-green-400',
-  'pm-domain/economics': 'bg-yellow-500/20 text-yellow-400',
-  'pm-domain/science': 'bg-cyan-500/20 text-cyan-400',
-  'pm-domain/culture': 'bg-pink-500/20 text-pink-400',
-  'pm-domain/weather': 'bg-sky-500/20 text-sky-400',
-  'pm-domain/geopolitics': 'bg-red-500/20 text-red-400',
+  'pm-domain/ai-tech': '#8b5cf6',
+  'pm-domain/politics': '#28AEF3',
+  'pm-domain/crypto': '#FCB859',
+  'pm-domain/sports': '#A9DFD8',
+  'pm-domain/economics': '#eab308',
+  'pm-domain/science': '#06b6d4',
+  'pm-domain/culture': '#F2C8ED',
+  'pm-domain/weather': '#28AEF3',
+  'pm-domain/geopolitics': '#EA1701',
 }
 
 function truncAddr(addr: string): string {
   return addr.length > 12 ? `${addr.slice(0, 6)}...${addr.slice(-4)}` : addr
+}
+
+function pnlColor(n: number): string {
+  return n >= 0 ? COLORS.teal : COLORS.red
+}
+
+function pnlStr(n: number): string {
+  return `${n >= 0 ? '+' : ''}${n.toFixed(2)}`
 }
 
 export default function PaperTradingPage(): React.ReactElement {
@@ -136,192 +159,274 @@ export default function PaperTradingPage(): React.ReactElement {
     : trades
 
   return (
-    <main className="min-h-screen px-4 py-12 max-w-5xl mx-auto">
-      {/* Nav */}
-      <div className="flex items-center justify-between mb-8">
-        <Link href="/" className="text-zinc-500 hover:text-zinc-300 text-sm">&larr; Back</Link>
-        <div className="flex gap-2">
-          <Link href="/analytics" className="text-zinc-500 hover:text-zinc-300 text-sm">Analytics</Link>
-          <Link href="/leaderboard" className="text-zinc-500 hover:text-zinc-300 text-sm">Leaderboard</Link>
-        </div>
-      </div>
-
-      <div className="mb-8">
-        <h1 className="text-3xl font-bold text-white">Paper Trading</h1>
-        <p className="mt-2 text-zinc-400">Simulated copy trading — test your strategy with fake money</p>
-      </div>
-
-      {error && <div className="text-red-400 mb-6">{error}</div>}
-
-      {/* Portfolio stats */}
-      {p && (
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
-          <div className="p-4 bg-zinc-900 border border-zinc-800 rounded-xl">
-            <div className="text-xs text-zinc-500 mb-1">Balance</div>
-            <div className={`text-xl font-bold ${p.currentBalance >= p.startingBalance ? 'text-emerald-400' : 'text-red-400'}`}>
-              ${p.currentBalance.toFixed(0)}
-            </div>
-            <div className="text-xs text-zinc-600 mt-1">Started: ${p.startingBalance.toFixed(0)}</div>
+    <div className="min-h-screen" style={{ background: COLORS.bg, color: COLORS.textLight }}>
+      <div className="flex">
+        {/* Sidebar */}
+        <aside className="hidden lg:flex flex-col w-56 min-h-screen p-5 border-r" style={{ background: COLORS.card, borderColor: COLORS.surface }}>
+          <div className="mb-10">
+            <h1 className="text-lg font-bold text-white">Copy Trader</h1>
+            <p className="text-xs mt-1" style={{ color: COLORS.textMuted }}>Paper simulation</p>
           </div>
-          <div className="p-4 bg-zinc-900 border border-zinc-800 rounded-xl">
-            <div className="text-xs text-zinc-500 mb-1">Realized P&L</div>
-            <div className={`text-xl font-bold ${p.realizedPnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-              {p.realizedPnl >= 0 ? '+' : ''}{p.realizedPnl.toFixed(2)}
-            </div>
-            <div className="text-xs text-zinc-600 mt-1">
-              Unrealized: {p.unrealizedPnl >= 0 ? '+' : ''}{p.unrealizedPnl.toFixed(2)}
+          <nav className="flex flex-col gap-1">
+            <SideLink href="/">Dashboard</SideLink>
+            <SideLink href="/analytics">Analytics</SideLink>
+            <SideLink href="/paper-trading" active>Trades</SideLink>
+            <SideLink href="/leaderboard">Leaderboard</SideLink>
+          </nav>
+          <div className="mt-auto pt-8">
+            <div className="p-3 rounded-lg" style={{ background: COLORS.surface }}>
+              <div className="text-xs" style={{ color: COLORS.textMuted }}>Bot Status</div>
+              <div className="flex items-center gap-2 mt-1">
+                <span className="w-2 h-2 rounded-full animate-pulse" style={{ background: COLORS.green }} />
+                <span className="text-xs text-white">Running</span>
+              </div>
             </div>
           </div>
-          <div className="p-4 bg-zinc-900 border border-zinc-800 rounded-xl">
-            <div className="text-xs text-zinc-500 mb-1">Win Rate</div>
-            <div className="text-xl font-bold text-white">
-              {p.closedTrades > 0 ? `${Math.round(p.winRate * 100)}%` : '—'}
+        </aside>
+
+        {/* Main content */}
+        <main className="flex-1 p-6 lg:p-8">
+          {/* Mobile nav */}
+          <div className="lg:hidden flex items-center justify-between mb-6">
+            <h1 className="text-lg font-bold text-white">Copy Trader</h1>
+            <div className="flex gap-2">
+              <Link href="/" className="text-xs px-3 py-1 rounded-lg" style={{ background: COLORS.surface, color: COLORS.textMuted }}>Dashboard</Link>
+              <Link href="/analytics" className="text-xs px-3 py-1 rounded-lg" style={{ background: COLORS.surface, color: COLORS.textMuted }}>Analytics</Link>
             </div>
-            <div className="text-xs text-zinc-600 mt-1">{p.wins}W / {p.losses}L</div>
           </div>
-          <div className="p-4 bg-zinc-900 border border-zinc-800 rounded-xl">
-            <div className="text-xs text-zinc-500 mb-1">ROI</div>
-            <div className={`text-xl font-bold ${p.roi >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-              {p.closedTrades > 0 ? `${(p.roi * 100).toFixed(1)}%` : '—'}
+
+          {/* Header */}
+          <div className="flex items-center justify-between mb-8">
+            <div>
+              <h2 className="text-2xl font-bold text-white">Paper Trading</h2>
+              <p className="mt-1 text-sm" style={{ color: COLORS.textMuted }}>Simulated copy trading — test your strategy with fake money</p>
             </div>
-            <div className="text-xs text-zinc-600 mt-1">{p.openTrades} open / {p.totalTrades} total</div>
-          </div>
-        </div>
-      )}
-
-      {/* Controls */}
-      <div className="flex flex-wrap gap-3 mb-6">
-        <button
-          onClick={() => void refreshPrices()}
-          disabled={refreshing}
-          className="px-4 py-2 text-sm bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-white rounded-lg disabled:opacity-50"
-        >
-          {refreshing ? 'Refreshing...' : 'Refresh Prices'}
-        </button>
-        <button
-          onClick={() => void checkResolutions()}
-          disabled={resolving}
-          className="px-4 py-2 text-sm bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg disabled:opacity-50"
-        >
-          {resolving ? 'Checking...' : 'Check Resolutions'}
-        </button>
-        <div className="flex items-center gap-2 ml-auto">
-          <span className="text-xs text-zinc-500">Bet size:</span>
-          <input
-            type="number"
-            value={betSize}
-            onChange={(e) => setBetSize(e.target.value)}
-            className="w-20 px-2 py-1 text-sm bg-zinc-900 border border-zinc-700 rounded text-zinc-300"
-          />
-          <span className="text-xs text-zinc-500">Balance:</span>
-          <input
-            type="number"
-            value={startBal}
-            onChange={(e) => setStartBal(e.target.value)}
-            className="w-24 px-2 py-1 text-sm bg-zinc-900 border border-zinc-700 rounded text-zinc-300"
-          />
-          <button
-            onClick={() => void saveSetting()}
-            className="px-3 py-1 text-xs bg-zinc-700 hover:bg-zinc-600 text-zinc-300 rounded"
-          >
-            Save
-          </button>
-        </div>
-      </div>
-
-      {/* Tabs */}
-      <div className="flex gap-1 mb-4">
-        {(['open', 'closed', 'all'] as const).map((t) => (
-          <button
-            key={t}
-            onClick={() => setTab(t)}
-            className={`px-4 py-1.5 text-sm rounded-lg ${
-              tab === t ? 'bg-indigo-600 text-white' : 'bg-zinc-800 text-zinc-400 hover:text-white'
-            }`}
-          >
-            {t === 'open' ? `Open (${trades.filter((x) => x.status === 'open').length})` :
-             t === 'closed' ? `Closed (${trades.filter((x) => x.status !== 'open').length})` :
-             `All (${trades.length})`}
-          </button>
-        ))}
-      </div>
-
-      {/* Trades list */}
-      {filtered.length === 0 ? (
-        <div className="text-center py-16 border border-zinc-800 rounded-xl">
-          <p className="text-zinc-400">No paper trades yet</p>
-          <p className="text-zinc-600 mt-2 text-sm">
-            Trades are auto-copied by the bot. Check <Link href="/analytics" className="text-indigo-400 hover:text-indigo-300">Analytics</Link> for performance breakdown.
-          </p>
-        </div>
-      ) : (
-        <div className="space-y-2">
-          {filtered.map((t) => {
-            const unrealized = t.curPrice != null ? t.shares * (t.curPrice - t.entryPrice) : 0
-            const displayPnl = t.status === 'open' ? unrealized : (t.pnl ?? 0)
-
-            return (
-              <div
-                key={t.id}
-                className={`px-4 py-3 rounded-lg border ${
-                  t.status === 'open' ? 'border-zinc-800 bg-zinc-900/50' :
-                  t.status === 'won' ? 'border-emerald-500/20 bg-emerald-500/5' :
-                  'border-red-500/20 bg-red-500/5'
-                }`}
+            <div className="flex gap-2">
+              <button
+                onClick={() => void refreshPrices()}
+                disabled={refreshing}
+                className="px-4 py-2 text-sm rounded-lg transition-colors"
+                style={{
+                  background: refreshing ? COLORS.surface : COLORS.surface,
+                  color: refreshing ? COLORS.textMuted : COLORS.textLight,
+                  border: `1px solid ${COLORS.surface}`,
+                }}
               >
-                <div className="flex items-center gap-3">
-                  {/* Status badge */}
-                  <span className={`text-xs font-medium px-2 py-0.5 rounded ${
-                    t.status === 'open' ? 'bg-indigo-500/20 text-indigo-400' :
-                    t.status === 'won' ? 'bg-emerald-500/20 text-emerald-400' :
-                    'bg-red-500/20 text-red-400'
-                  }`}>
-                    {t.status.toUpperCase()}
-                  </span>
+                {refreshing ? 'Refreshing...' : 'Refresh Prices'}
+              </button>
+              <button
+                onClick={() => void checkResolutions()}
+                disabled={resolving}
+                className="px-4 py-2 text-sm font-medium rounded-lg transition-colors"
+                style={{
+                  background: resolving ? COLORS.surface : COLORS.teal,
+                  color: resolving ? COLORS.textMuted : COLORS.bg,
+                }}
+              >
+                {resolving ? 'Checking...' : 'Check Resolutions'}
+              </button>
+            </div>
+          </div>
 
-                  {/* Domain */}
-                  {t.domain && (
-                    <span className={`text-[10px] px-2 py-0.5 rounded-full ${DOMAIN_COLORS[t.domain] ?? 'bg-zinc-700 text-zinc-400'}`}>
-                      {DOMAIN_LABELS[t.domain] ?? '?'}
-                    </span>
-                  )}
+          {error && (
+            <div className="mb-6 text-sm" style={{ color: COLORS.red }}>{error}</div>
+          )}
 
-                  {/* Side */}
-                  <span className={`text-xs font-medium ${t.side === 'YES' ? 'text-emerald-400' : 'text-red-400'}`}>
-                    {t.side}
-                  </span>
-
-                  {/* Title */}
-                  <span className="text-sm text-zinc-300 flex-1 truncate">{t.title}</span>
-
-                  {/* Prices */}
-                  <div className="text-xs text-zinc-500 text-right">
-                    <span>{(t.entryPrice * 100).toFixed(0)}c</span>
-                    <span className="text-zinc-600"> → </span>
-                    <span className={
-                      t.status === 'open'
-                        ? (t.curPrice ?? 0) > t.entryPrice ? 'text-emerald-400' : 'text-red-400'
-                        : t.status === 'won' ? 'text-emerald-400' : 'text-red-400'
-                    }>
-                      {(((t.status === 'open' ? t.curPrice : t.exitPrice) ?? 0) * 100).toFixed(0)}c
-                    </span>
-                  </div>
-
-                  {/* PnL */}
-                  <div className={`text-sm font-medium w-20 text-right ${displayPnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                    {displayPnl >= 0 ? '+' : ''}{displayPnl.toFixed(2)}
-                  </div>
-
-                  {/* Copied from */}
-                  <span className="text-[10px] text-zinc-600 w-20 text-right truncate">
-                    {t.copiedLabel ?? truncAddr(t.copiedFrom)}
-                  </span>
+          {/* Portfolio stats */}
+          {p && (
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
+              <div className="p-4 rounded-xl" style={{ background: COLORS.card }}>
+                <div className="text-[11px] uppercase tracking-wider mb-1" style={{ color: COLORS.textMuted }}>Balance</div>
+                <div className="text-xl font-bold" style={{ color: p.currentBalance >= p.startingBalance ? COLORS.teal : COLORS.red }}>
+                  ${p.currentBalance.toFixed(0)}
+                </div>
+                <div className="text-xs mt-1" style={{ color: COLORS.textMuted }}>Started: ${p.startingBalance.toFixed(0)}</div>
+              </div>
+              <div className="p-4 rounded-xl" style={{ background: COLORS.card }}>
+                <div className="text-[11px] uppercase tracking-wider mb-1" style={{ color: COLORS.textMuted }}>Realized P&L</div>
+                <div className="text-xl font-bold" style={{ color: pnlColor(p.realizedPnl) }}>
+                  {pnlStr(p.realizedPnl)}
+                </div>
+                <div className="text-xs mt-1" style={{ color: COLORS.textMuted }}>
+                  Unrealized: {pnlStr(p.unrealizedPnl)}
                 </div>
               </div>
-            )
-          })}
-        </div>
-      )}
-    </main>
+              <div className="p-4 rounded-xl" style={{ background: COLORS.card }}>
+                <div className="text-[11px] uppercase tracking-wider mb-1" style={{ color: COLORS.textMuted }}>Win Rate</div>
+                <div className="text-xl font-bold text-white">
+                  {p.closedTrades > 0 ? `${Math.round(p.winRate * 100)}%` : '—'}
+                </div>
+                <div className="text-xs mt-1" style={{ color: COLORS.textMuted }}>{p.wins}W / {p.losses}L</div>
+              </div>
+              <div className="p-4 rounded-xl" style={{ background: COLORS.card }}>
+                <div className="text-[11px] uppercase tracking-wider mb-1" style={{ color: COLORS.textMuted }}>ROI</div>
+                <div className="text-xl font-bold" style={{ color: pnlColor(p.roi) }}>
+                  {p.closedTrades > 0 ? `${(p.roi * 100).toFixed(1)}%` : '—'}
+                </div>
+                <div className="text-xs mt-1" style={{ color: COLORS.textMuted }}>{p.openTrades} open / {p.totalTrades} total</div>
+              </div>
+            </div>
+          )}
+
+          {/* Settings row */}
+          <div className="flex flex-wrap items-center gap-3 mb-6 p-4 rounded-xl" style={{ background: COLORS.card }}>
+            <span className="text-xs font-medium" style={{ color: COLORS.textMuted }}>Settings</span>
+            <div className="flex items-center gap-2">
+              <span className="text-xs" style={{ color: COLORS.textMuted }}>Bet size:</span>
+              <input
+                type="number"
+                value={betSize}
+                onChange={(e) => setBetSize(e.target.value)}
+                className="w-20 px-2 py-1 text-sm rounded"
+                style={{ background: COLORS.surface, border: `1px solid ${COLORS.surface}`, color: COLORS.textLight }}
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs" style={{ color: COLORS.textMuted }}>Balance:</span>
+              <input
+                type="number"
+                value={startBal}
+                onChange={(e) => setStartBal(e.target.value)}
+                className="w-24 px-2 py-1 text-sm rounded"
+                style={{ background: COLORS.surface, border: `1px solid ${COLORS.surface}`, color: COLORS.textLight }}
+              />
+            </div>
+            <button
+              onClick={() => void saveSetting()}
+              className="px-3 py-1 text-xs rounded-lg transition-colors"
+              style={{ background: COLORS.surface, color: COLORS.textLight }}
+            >
+              Save
+            </button>
+          </div>
+
+          {/* Tabs */}
+          <div className="flex gap-2 mb-4">
+            {(['open', 'closed', 'all'] as const).map((t) => (
+              <button
+                key={t}
+                onClick={() => setTab(t)}
+                className="px-4 py-1.5 text-sm rounded-lg border transition-colors"
+                style={{
+                  background: tab === t ? COLORS.surface : 'transparent',
+                  borderColor: tab === t ? COLORS.teal : COLORS.surface,
+                  color: tab === t ? COLORS.teal : COLORS.textMuted,
+                }}
+              >
+                {t === 'open' ? `Open (${trades.filter((x) => x.status === 'open').length})` :
+                 t === 'closed' ? `Closed (${trades.filter((x) => x.status !== 'open').length})` :
+                 `All (${trades.length})`}
+              </button>
+            ))}
+          </div>
+
+          {/* Loading */}
+          {loading && (
+            <div className="text-center py-16">
+              <div className="inline-block w-8 h-8 border-2 border-t-transparent rounded-full animate-spin" style={{ borderColor: COLORS.teal, borderTopColor: 'transparent' }} />
+            </div>
+          )}
+
+          {/* Trades list */}
+          {!loading && filtered.length === 0 ? (
+            <div className="text-center py-16 border rounded-xl" style={{ borderColor: COLORS.surface }}>
+              <p style={{ color: COLORS.textMuted }}>No paper trades yet</p>
+              <p className="mt-2 text-sm" style={{ color: COLORS.surface }}>
+                Trades are auto-copied by the bot. Check{' '}
+                <Link href="/analytics" style={{ color: COLORS.teal }}>Analytics</Link>{' '}
+                for performance breakdown.
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {filtered.map((t) => {
+                const unrealized = t.curPrice != null ? t.shares * (t.curPrice - t.entryPrice) : 0
+                const displayPnl = t.status === 'open' ? unrealized : (t.pnl ?? 0)
+                const statusColor = t.status === 'open' ? COLORS.blue : t.status === 'won' ? COLORS.teal : COLORS.red
+
+                return (
+                  <div
+                    key={t.id}
+                    className="px-4 py-3 rounded-xl border"
+                    style={{
+                      background: COLORS.card,
+                      borderColor: t.status === 'open' ? COLORS.surface : t.status === 'won' ? `${COLORS.teal}33` : `${COLORS.red}33`,
+                    }}
+                  >
+                    <div className="flex items-center gap-3">
+                      {/* Status badge */}
+                      <span
+                        className="text-xs font-medium px-2 py-0.5 rounded"
+                        style={{ background: `${statusColor}22`, color: statusColor }}
+                      >
+                        {t.status.toUpperCase()}
+                      </span>
+
+                      {/* Domain */}
+                      {t.domain && (
+                        <span
+                          className="text-[10px] px-2 py-0.5 rounded-full"
+                          style={{
+                            background: `${DOMAIN_COLORS[t.domain] ?? COLORS.textMuted}22`,
+                            color: DOMAIN_COLORS[t.domain] ?? COLORS.textMuted,
+                          }}
+                        >
+                          {DOMAIN_LABELS[t.domain] ?? '?'}
+                        </span>
+                      )}
+
+                      {/* Side */}
+                      <span className="text-xs font-medium" style={{ color: t.side === 'YES' ? COLORS.teal : COLORS.red }}>
+                        {t.side}
+                      </span>
+
+                      {/* Title */}
+                      <span className="text-sm flex-1 truncate" style={{ color: COLORS.textLight }}>{t.title}</span>
+
+                      {/* Prices */}
+                      <div className="text-xs text-right" style={{ color: COLORS.textMuted }}>
+                        <span>{(t.entryPrice * 100).toFixed(0)}¢</span>
+                        <span style={{ color: COLORS.surface }}> → </span>
+                        <span style={{ color: t.status === 'open'
+                          ? ((t.curPrice ?? 0) > t.entryPrice ? COLORS.teal : COLORS.red)
+                          : (t.status === 'won' ? COLORS.teal : COLORS.red)
+                        }}>
+                          {(((t.status === 'open' ? t.curPrice : t.exitPrice) ?? 0) * 100).toFixed(0)}¢
+                        </span>
+                      </div>
+
+                      {/* PnL */}
+                      <div className="text-sm font-medium w-20 text-right" style={{ color: pnlColor(displayPnl) }}>
+                        {pnlStr(displayPnl)}
+                      </div>
+
+                      {/* Copied from */}
+                      <span className="text-[10px] w-20 text-right truncate" style={{ color: COLORS.textMuted }}>
+                        {t.copiedLabel ?? truncAddr(t.copiedFrom)}
+                      </span>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </main>
+      </div>
+    </div>
+  )
+}
+
+function SideLink({ href, children, active }: { href: string; children: React.ReactNode; active?: boolean }): React.ReactElement {
+  return (
+    <Link
+      href={href}
+      className="px-3 py-2 rounded-lg text-sm transition-colors"
+      style={{
+        background: active ? COLORS.surface : 'transparent',
+        color: active ? COLORS.teal : COLORS.textMuted,
+      }}
+    >
+      {children}
+    </Link>
   )
 }

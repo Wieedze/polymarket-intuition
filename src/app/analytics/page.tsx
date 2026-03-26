@@ -3,6 +3,21 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 
+// Design system — same as dashboard
+const COLORS = {
+  bg: '#171821',
+  card: '#21222D',
+  surface: '#2B2B36',
+  teal: '#A9DFD8',
+  amber: '#FCB859',
+  pink: '#F2C8ED',
+  red: '#EA1701',
+  green: '#029F04',
+  blue: '#28AEF3',
+  textMuted: '#87888C',
+  textLight: '#D2D2D2',
+}
+
 type Portfolio = {
   startingBalance: number
   currentBalance: number
@@ -52,7 +67,7 @@ type AnalyticsData = {
 }
 
 function pnlColor(n: number): string {
-  return n >= 0 ? 'text-emerald-400' : 'text-red-400'
+  return n >= 0 ? COLORS.teal : COLORS.red
 }
 
 function pnlStr(n: number): string {
@@ -83,11 +98,8 @@ export default function AnalyticsPage(): React.ReactElement {
 
   async function refresh(): Promise<void> {
     setRefreshing(true)
-    // Refresh prices first
     await fetch('/api/paper-trading?action=refresh').catch(() => {})
-    // Then check resolutions
     await fetch('/api/paper-trading?action=resolve').catch(() => {})
-    // Reload analytics
     await loadData()
     setRefreshing(false)
   }
@@ -96,233 +108,289 @@ export default function AnalyticsPage(): React.ReactElement {
     loadData().finally(() => setLoading(false))
   }, [])
 
-  if (loading) return <div className="min-h-screen flex items-center justify-center text-zinc-400">Loading analytics...</div>
-  if (error) return <div className="min-h-screen flex items-center justify-center text-red-400">{error}</div>
-  if (!data) return <div className="min-h-screen flex items-center justify-center text-zinc-400">No data</div>
+  if (loading) return (
+    <div className="min-h-screen flex items-center justify-center" style={{ background: COLORS.bg }}>
+      <div className="w-8 h-8 border-2 border-t-transparent rounded-full animate-spin" style={{ borderColor: COLORS.teal, borderTopColor: 'transparent' }} />
+    </div>
+  )
+
+  if (error) return (
+    <div className="min-h-screen flex items-center justify-center" style={{ background: COLORS.bg, color: COLORS.red }}>
+      {error}
+    </div>
+  )
+
+  if (!data) return (
+    <div className="min-h-screen flex items-center justify-center" style={{ background: COLORS.bg, color: COLORS.textMuted }}>
+      No data
+    </div>
+  )
 
   const p = data.portfolio
 
   return (
-    <main className="min-h-screen px-4 py-12 max-w-5xl mx-auto">
-      {/* Nav */}
-      <div className="flex items-center justify-between mb-8">
-        <Link href="/" className="text-zinc-500 hover:text-zinc-300 text-sm">&larr; Back</Link>
-        <div className="flex gap-3">
-          <Link href="/paper-trading" className="text-zinc-500 hover:text-zinc-300 text-sm">Paper Trading</Link>
-          <Link href="/leaderboard" className="text-zinc-500 hover:text-zinc-300 text-sm">Leaderboard</Link>
-        </div>
-      </div>
-
-      <div className="flex items-center justify-between mb-8">
-        <div>
-          <h1 className="text-3xl font-bold text-white">Analytics</h1>
-          <p className="mt-1 text-zinc-400">Paper trading performance breakdown</p>
-        </div>
-        <button
-          onClick={() => void refresh()}
-          disabled={refreshing}
-          className="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:bg-zinc-700 disabled:text-zinc-500 text-white text-sm font-medium rounded-lg transition-colors"
-        >
-          {refreshing ? 'Refreshing...' : 'Refresh All'}
-        </button>
-      </div>
-
-      {/* Portfolio overview — 2 rows */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-4">
-        <Stat label="Balance" value={`$${p.currentBalance.toFixed(0)}`} sub={`Started: $${p.startingBalance.toFixed(0)}`} color={p.currentBalance >= p.startingBalance ? 'text-emerald-400' : 'text-red-400'} />
-        <Stat label="Realized P&L" value={pnlStr(p.realizedPnl)} sub={`Unrealized: ${pnlStr(p.unrealizedPnl)}`} color={pnlColor(p.realizedPnl)} />
-        <Stat label="Win Rate" value={p.closedTrades > 0 ? wrStr(p.winRate) : '—'} sub={`${p.wins}W / ${p.losses}L`} color="text-white" />
-        <Stat label="ROI" value={p.closedTrades > 0 ? `${(p.roi * 100).toFixed(1)}%` : '—'} sub={`${p.openTrades} open / ${p.totalTrades} total`} color={pnlColor(p.roi)} />
-      </div>
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-10">
-        <Stat label="Invested (at risk)" value={`$${p.totalInvested.toFixed(0)}`} sub={`${p.openTrades} positions`} color="text-amber-400" />
-        <Stat label="Available Cash" value={`$${p.availableCash.toFixed(0)}`} sub={`${((p.availableCash / p.startingBalance) * 100).toFixed(0)}% of start`} color={p.availableCash > 0 ? 'text-zinc-300' : 'text-red-400'} />
-        <Stat label="Redeemable Value" value={`$${p.totalRedeemable.toFixed(0)}`} sub="If sold all now" color="text-cyan-400" />
-        <Stat label="Total Equity" value={`$${(p.availableCash + p.totalRedeemable).toFixed(0)}`} sub="Cash + positions" color={(p.availableCash + p.totalRedeemable) >= p.startingBalance ? 'text-emerald-400' : 'text-red-400'} />
-      </div>
-
-      {/* By Domain */}
-      {data.byDomain.length > 0 && (
-        <Section title="Performance by Domain">
-          <table className="w-full text-sm">
-            <thead><tr className="text-zinc-500 text-xs">
-              <th className="text-left py-2">Domain</th><th className="text-right">Trades</th><th className="text-right">Won</th><th className="text-right">WR</th><th className="text-right">P&L</th><th className="text-right">Avg</th>
-            </tr></thead>
-            <tbody>
-              {data.byDomain.map((d) => (
-                <tr key={d.domain} className="border-t border-zinc-800">
-                  <td className="py-2 text-white capitalize">{d.domain}</td>
-                  <td className="text-right text-zinc-400">{d.trades}</td>
-                  <td className="text-right text-zinc-400">{d.won}</td>
-                  <td className="text-right text-zinc-300">{wrStr(d.winRate)}</td>
-                  <td className={`text-right font-medium ${pnlColor(d.pnl)}`}>{pnlStr(d.pnl)}</td>
-                  <td className={`text-right ${pnlColor(d.avgPnl)}`}>{pnlStr(d.avgPnl)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </Section>
-      )}
-
-      {/* By Expert */}
-      {data.byExpert.length > 0 && (
-        <Section title="Performance by Expert">
-          <table className="w-full text-sm">
-            <thead><tr className="text-zinc-500 text-xs">
-              <th className="text-left py-2">Expert</th><th className="text-right">Trades</th><th className="text-right">WR</th><th className="text-right">P&L</th><th className="text-right">Avg</th>
-            </tr></thead>
-            <tbody>
-              {data.byExpert.map((e) => (
-                <tr key={e.expert} className="border-t border-zinc-800">
-                  <td className="py-2 text-white truncate max-w-[200px]">{e.expert}</td>
-                  <td className="text-right text-zinc-400">{e.trades}</td>
-                  <td className="text-right text-zinc-300">{wrStr(e.winRate)}</td>
-                  <td className={`text-right font-medium ${pnlColor(e.pnl)}`}>{pnlStr(e.pnl)}</td>
-                  <td className={`text-right ${pnlColor(e.avgPnl)}`}>{pnlStr(e.avgPnl)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </Section>
-      )}
-
-      {/* YES vs NO + Entry Price */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 mb-8">
-        <Section title="YES vs NO">
-          <div className="space-y-3">
-            <SideRow label="YES" stat={data.bySide.yes} />
-            <SideRow label="NO" stat={data.bySide.no} />
+    <div className="min-h-screen" style={{ background: COLORS.bg, color: COLORS.textLight }}>
+      <div className="flex">
+        {/* Sidebar */}
+        <aside className="hidden lg:flex flex-col w-56 min-h-screen p-5 border-r" style={{ background: COLORS.card, borderColor: COLORS.surface }}>
+          <div className="mb-10">
+            <h1 className="text-lg font-bold text-white">Copy Trader</h1>
+            <p className="text-xs mt-1" style={{ color: COLORS.textMuted }}>Paper simulation</p>
           </div>
-        </Section>
-
-        <Section title="Entry Price Analysis">
-          <div className="space-y-3">
-            {data.byEntry.map((b) => (
-              <div key={b.label} className="flex items-center justify-between text-sm">
-                <span className="text-zinc-300">{b.label}</span>
-                <div className="flex gap-4 text-xs">
-                  <span className="text-zinc-500">{b.trades}t</span>
-                  <span className="text-zinc-400">{wrStr(b.winRate)}</span>
-                  <span className={pnlColor(b.pnl)}>{pnlStr(b.pnl)}</span>
-                </div>
+          <nav className="flex flex-col gap-1">
+            <SideLink href="/">Dashboard</SideLink>
+            <SideLink href="/analytics" active>Analytics</SideLink>
+            <SideLink href="/paper-trading">Trades</SideLink>
+            <SideLink href="/leaderboard">Leaderboard</SideLink>
+          </nav>
+          <div className="mt-auto pt-8">
+            <div className="p-3 rounded-lg" style={{ background: COLORS.surface }}>
+              <div className="text-xs" style={{ color: COLORS.textMuted }}>Bot Status</div>
+              <div className="flex items-center gap-2 mt-1">
+                <span className="w-2 h-2 rounded-full animate-pulse" style={{ background: COLORS.green }} />
+                <span className="text-xs text-white">Running</span>
               </div>
-            ))}
-          </div>
-        </Section>
-      </div>
-
-      {/* Expert Trust */}
-      {data.expertTrust && data.expertTrust.length > 0 && (
-        <Section title="Expert Trust Levels">
-          <table className="w-full text-sm">
-            <thead><tr className="text-zinc-500 text-xs">
-              <th className="text-left py-2">Expert</th>
-              <th className="text-right">Phase</th>
-              <th className="text-right">Trust</th>
-              <th className="text-right">Trades</th>
-              <th className="text-right">WR</th>
-              <th className="text-right">P&L</th>
-              <th className="text-right">Status</th>
-            </tr></thead>
-            <tbody>
-              {data.expertTrust.map((e) => (
-                <tr key={e.expert} className="border-t border-zinc-800">
-                  <td className="py-2 text-white truncate max-w-[180px]">{e.expert}</td>
-                  <td className="text-right text-zinc-500 text-xs">{e.phase}</td>
-                  <td className="text-right">
-                    <span className={`font-medium ${
-                      e.trustLevel >= 1 ? 'text-emerald-400' :
-                      e.trustLevel >= 0.5 ? 'text-yellow-400' :
-                      e.trustLevel > 0 ? 'text-orange-400' : 'text-red-400'
-                    }`}>
-                      {(e.trustLevel * 100).toFixed(0)}%
-                    </span>
-                  </td>
-                  <td className="text-right text-zinc-400">{e.resolvedTrades}</td>
-                  <td className="text-right text-zinc-300">{e.resolvedTrades > 0 ? wrStr(e.winRate) : '—'}</td>
-                  <td className={`text-right font-medium ${pnlColor(e.pnl)}`}>{e.resolvedTrades > 0 ? pnlStr(e.pnl) : '—'}</td>
-                  <td className="text-right">
-                    <span className={`text-xs px-2 py-0.5 rounded ${
-                      e.status === 'active' ? 'bg-emerald-500/20 text-emerald-400' :
-                      e.status === 'reduced' ? 'bg-yellow-500/20 text-yellow-400' :
-                      'bg-red-500/20 text-red-400'
-                    }`}>
-                      {e.status}
-                    </span>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </Section>
-      )}
-
-      {/* Consensus vs Standard */}
-      <Section title="Standard vs Consensus Bets">
-        <div className="grid grid-cols-2 gap-4">
-          <div className="p-4 bg-zinc-800/50 rounded-lg">
-            <div className="text-xs text-zinc-500 mb-1">Standard ($100)</div>
-            <div className="text-lg font-bold text-white">{data.byBetSize.standard.trades} trades</div>
-            <div className="text-sm text-zinc-400">WR {wrStr(data.byBetSize.standard.winRate)}</div>
-            <div className={`text-sm font-medium ${pnlColor(data.byBetSize.standard.pnl)}`}>{pnlStr(data.byBetSize.standard.pnl)}</div>
-          </div>
-          <div className="p-4 bg-zinc-800/50 rounded-lg">
-            <div className="text-xs text-zinc-500 mb-1">Consensus (&gt;$100)</div>
-            <div className="text-lg font-bold text-white">{data.byBetSize.consensus.trades} trades</div>
-            <div className="text-sm text-zinc-400">WR {wrStr(data.byBetSize.consensus.winRate)}</div>
-            <div className={`text-sm font-medium ${pnlColor(data.byBetSize.consensus.pnl)}`}>{pnlStr(data.byBetSize.consensus.pnl)}</div>
-          </div>
-        </div>
-      </Section>
-
-      {/* Best & Worst */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 mb-8">
-        {data.bestTrades.length > 0 && (
-          <Section title="Top 5 Best Trades">
-            {data.bestTrades.map((t, i) => (
-              <TradeRow key={i} trade={t} />
-            ))}
-          </Section>
-        )}
-        {data.worstTrades.length > 0 && (
-          <Section title="Top 5 Worst Trades">
-            {data.worstTrades.map((t, i) => (
-              <TradeRow key={i} trade={t} />
-            ))}
-          </Section>
-        )}
-      </div>
-
-      {/* Open positions */}
-      {data.topOpen.length > 0 && (
-        <Section title="Top Open Positions (by unrealized P&L)">
-          {data.topOpen.map((t, i) => (
-            <div key={i} className="flex items-center gap-3 py-2 text-sm border-b border-zinc-800 last:border-0">
-              <span className={`font-medium ${pnlColor(t.unrealized)}`}>{pnlStr(t.unrealized)}</span>
-              <span className={`text-xs ${t.side === 'YES' ? 'text-emerald-400' : 'text-red-400'}`}>{t.side}</span>
-              <span className="text-zinc-300 flex-1 truncate">{t.title}</span>
-              <span className="text-zinc-500 text-xs">{(t.entryPrice * 100).toFixed(0)}¢ → {(t.curPrice * 100).toFixed(0)}¢</span>
             </div>
-          ))}
-        </Section>
-      )}
+          </div>
+        </aside>
 
-      {p.closedTrades === 0 && (
-        <div className="text-center py-16 border border-zinc-800 rounded-xl">
-          <p className="text-zinc-400 text-lg">No closed trades yet</p>
-          <p className="text-zinc-600 mt-2">Analytics will populate as markets resolve. Check back in 24-48h.</p>
-        </div>
-      )}
-    </main>
+        {/* Main content */}
+        <main className="flex-1 p-6 lg:p-8">
+          {/* Mobile nav */}
+          <div className="lg:hidden flex items-center justify-between mb-6">
+            <h1 className="text-lg font-bold text-white">Copy Trader</h1>
+            <div className="flex gap-2">
+              <Link href="/" className="text-xs px-3 py-1 rounded-lg" style={{ background: COLORS.surface, color: COLORS.textMuted }}>Dashboard</Link>
+              <Link href="/leaderboard" className="text-xs px-3 py-1 rounded-lg" style={{ background: COLORS.surface, color: COLORS.textMuted }}>Leaderboard</Link>
+            </div>
+          </div>
+
+          {/* Header */}
+          <div className="flex items-center justify-between mb-8">
+            <div>
+              <h2 className="text-2xl font-bold text-white">Analytics</h2>
+              <p className="mt-1 text-sm" style={{ color: COLORS.textMuted }}>Paper trading performance breakdown</p>
+            </div>
+            <button
+              onClick={() => void refresh()}
+              disabled={refreshing}
+              className="px-5 py-2 text-sm font-medium rounded-lg transition-colors"
+              style={{
+                background: refreshing ? COLORS.surface : COLORS.teal,
+                color: refreshing ? COLORS.textMuted : COLORS.bg,
+              }}
+            >
+              {refreshing ? 'Refreshing...' : 'Refresh All'}
+            </button>
+          </div>
+
+          {/* Portfolio overview */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-4">
+            <StatCard label="Balance" value={`$${p.currentBalance.toFixed(0)}`} sub={`Started: $${p.startingBalance.toFixed(0)}`} color={p.currentBalance >= p.startingBalance ? COLORS.teal : COLORS.red} />
+            <StatCard label="Realized P&L" value={pnlStr(p.realizedPnl)} sub={`Unrealized: ${pnlStr(p.unrealizedPnl)}`} color={pnlColor(p.realizedPnl)} />
+            <StatCard label="Win Rate" value={p.closedTrades > 0 ? wrStr(p.winRate) : '—'} sub={`${p.wins}W / ${p.losses}L`} color={COLORS.amber} />
+            <StatCard label="ROI" value={p.closedTrades > 0 ? `${(p.roi * 100).toFixed(1)}%` : '—'} sub={`${p.openTrades} open / ${p.totalTrades} total`} color={pnlColor(p.roi)} />
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-10">
+            <StatCard label="Invested (at risk)" value={`$${p.totalInvested.toFixed(0)}`} sub={`${p.openTrades} positions`} color={COLORS.amber} />
+            <StatCard label="Available Cash" value={`$${p.availableCash.toFixed(0)}`} sub={`${((p.availableCash / p.startingBalance) * 100).toFixed(0)}% of start`} color={p.availableCash > 0 ? COLORS.textLight : COLORS.red} />
+            <StatCard label="Redeemable Value" value={`$${p.totalRedeemable.toFixed(0)}`} sub="If sold all now" color={COLORS.blue} />
+            <StatCard label="Total Equity" value={`$${(p.availableCash + p.totalRedeemable).toFixed(0)}`} sub="Cash + positions" color={(p.availableCash + p.totalRedeemable) >= p.startingBalance ? COLORS.teal : COLORS.red} />
+          </div>
+
+          {/* By Domain */}
+          {data.byDomain.length > 0 && (
+            <Section title="Performance by Domain">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-xs" style={{ color: COLORS.textMuted }}>
+                    <th className="text-left py-2">Domain</th>
+                    <th className="text-right">Trades</th>
+                    <th className="text-right">Won</th>
+                    <th className="text-right">WR</th>
+                    <th className="text-right">P&L</th>
+                    <th className="text-right">Avg</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.byDomain.map((d) => (
+                    <tr key={d.domain} className="border-t" style={{ borderColor: COLORS.surface }}>
+                      <td className="py-2 capitalize" style={{ color: COLORS.textLight }}>{d.domain}</td>
+                      <td className="text-right" style={{ color: COLORS.textMuted }}>{d.trades}</td>
+                      <td className="text-right" style={{ color: COLORS.textMuted }}>{d.won}</td>
+                      <td className="text-right" style={{ color: COLORS.textLight }}>{wrStr(d.winRate)}</td>
+                      <td className="text-right font-medium" style={{ color: pnlColor(d.pnl) }}>{pnlStr(d.pnl)}</td>
+                      <td className="text-right" style={{ color: pnlColor(d.avgPnl) }}>{pnlStr(d.avgPnl)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </Section>
+          )}
+
+          {/* By Expert */}
+          {data.byExpert.length > 0 && (
+            <Section title="Performance by Expert">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-xs" style={{ color: COLORS.textMuted }}>
+                    <th className="text-left py-2">Expert</th>
+                    <th className="text-right">Trades</th>
+                    <th className="text-right">WR</th>
+                    <th className="text-right">P&L</th>
+                    <th className="text-right">Avg</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.byExpert.map((e) => (
+                    <tr key={e.expert} className="border-t" style={{ borderColor: COLORS.surface }}>
+                      <td className="py-2 truncate max-w-[200px]" style={{ color: COLORS.textLight }}>{e.expert}</td>
+                      <td className="text-right" style={{ color: COLORS.textMuted }}>{e.trades}</td>
+                      <td className="text-right" style={{ color: COLORS.textLight }}>{wrStr(e.winRate)}</td>
+                      <td className="text-right font-medium" style={{ color: pnlColor(e.pnl) }}>{pnlStr(e.pnl)}</td>
+                      <td className="text-right" style={{ color: pnlColor(e.avgPnl) }}>{pnlStr(e.avgPnl)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </Section>
+          )}
+
+          {/* YES vs NO + Entry Price */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 mb-8">
+            <Section title="YES vs NO">
+              <div className="space-y-3">
+                <SideRow label="YES" stat={data.bySide.yes} />
+                <SideRow label="NO" stat={data.bySide.no} />
+              </div>
+            </Section>
+            <Section title="Entry Price Analysis">
+              <div className="space-y-3">
+                {data.byEntry.map((b) => (
+                  <div key={b.label} className="flex items-center justify-between text-sm">
+                    <span style={{ color: COLORS.textLight }}>{b.label}</span>
+                    <div className="flex gap-4 text-xs">
+                      <span style={{ color: COLORS.textMuted }}>{b.trades}t</span>
+                      <span style={{ color: COLORS.textLight }}>{wrStr(b.winRate)}</span>
+                      <span style={{ color: pnlColor(b.pnl) }}>{pnlStr(b.pnl)}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </Section>
+          </div>
+
+          {/* Expert Trust */}
+          {data.expertTrust && data.expertTrust.length > 0 && (
+            <Section title="Expert Trust Levels">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-xs" style={{ color: COLORS.textMuted }}>
+                    <th className="text-left py-2">Expert</th>
+                    <th className="text-right">Phase</th>
+                    <th className="text-right">Trust</th>
+                    <th className="text-right">Trades</th>
+                    <th className="text-right">WR</th>
+                    <th className="text-right">P&L</th>
+                    <th className="text-right">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.expertTrust.map((e) => (
+                    <tr key={e.expert} className="border-t" style={{ borderColor: COLORS.surface }}>
+                      <td className="py-2 truncate max-w-[180px]" style={{ color: COLORS.textLight }}>{e.expert}</td>
+                      <td className="text-right text-xs" style={{ color: COLORS.textMuted }}>{e.phase}</td>
+                      <td className="text-right font-medium" style={{
+                        color: e.trustLevel >= 1 ? COLORS.teal :
+                          e.trustLevel >= 0.5 ? COLORS.amber :
+                          e.trustLevel > 0 ? '#fb923c' : COLORS.red
+                      }}>
+                        {(e.trustLevel * 100).toFixed(0)}%
+                      </td>
+                      <td className="text-right" style={{ color: COLORS.textMuted }}>{e.resolvedTrades}</td>
+                      <td className="text-right" style={{ color: COLORS.textLight }}>{e.resolvedTrades > 0 ? wrStr(e.winRate) : '—'}</td>
+                      <td className="text-right font-medium" style={{ color: pnlColor(e.pnl) }}>{e.resolvedTrades > 0 ? pnlStr(e.pnl) : '—'}</td>
+                      <td className="text-right">
+                        <span className="text-xs px-2 py-0.5 rounded" style={{
+                          background: e.status === 'active' ? `${COLORS.teal}22` :
+                            e.status === 'reduced' ? `${COLORS.amber}22` : `${COLORS.red}22`,
+                          color: e.status === 'active' ? COLORS.teal :
+                            e.status === 'reduced' ? COLORS.amber : COLORS.red,
+                        }}>
+                          {e.status}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </Section>
+          )}
+
+          {/* Standard vs Consensus */}
+          <Section title="Standard vs Consensus Bets">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="p-4 rounded-lg" style={{ background: COLORS.surface }}>
+                <div className="text-xs mb-1" style={{ color: COLORS.textMuted }}>Standard ($100)</div>
+                <div className="text-lg font-bold text-white">{data.byBetSize.standard.trades} trades</div>
+                <div className="text-sm" style={{ color: COLORS.textMuted }}>WR {wrStr(data.byBetSize.standard.winRate)}</div>
+                <div className="text-sm font-medium" style={{ color: pnlColor(data.byBetSize.standard.pnl) }}>{pnlStr(data.byBetSize.standard.pnl)}</div>
+              </div>
+              <div className="p-4 rounded-lg" style={{ background: COLORS.surface }}>
+                <div className="text-xs mb-1" style={{ color: COLORS.textMuted }}>Consensus (&gt;$100)</div>
+                <div className="text-lg font-bold text-white">{data.byBetSize.consensus.trades} trades</div>
+                <div className="text-sm" style={{ color: COLORS.textMuted }}>WR {wrStr(data.byBetSize.consensus.winRate)}</div>
+                <div className="text-sm font-medium" style={{ color: pnlColor(data.byBetSize.consensus.pnl) }}>{pnlStr(data.byBetSize.consensus.pnl)}</div>
+              </div>
+            </div>
+          </Section>
+
+          {/* Best & Worst */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 mb-8">
+            {data.bestTrades.length > 0 && (
+              <Section title="Top 5 Best Trades">
+                {data.bestTrades.map((t, i) => <TradeRow key={i} trade={t} />)}
+              </Section>
+            )}
+            {data.worstTrades.length > 0 && (
+              <Section title="Top 5 Worst Trades">
+                {data.worstTrades.map((t, i) => <TradeRow key={i} trade={t} />)}
+              </Section>
+            )}
+          </div>
+
+          {/* Open positions */}
+          {data.topOpen.length > 0 && (
+            <Section title="Top Open Positions (by unrealized P&L)">
+              {data.topOpen.map((t, i) => (
+                <div key={i} className="flex items-center gap-3 py-2 text-sm border-b last:border-0" style={{ borderColor: COLORS.surface }}>
+                  <span className="font-medium" style={{ color: pnlColor(t.unrealized) }}>{pnlStr(t.unrealized)}</span>
+                  <span className="text-xs" style={{ color: t.side === 'YES' ? COLORS.teal : COLORS.red }}>{t.side}</span>
+                  <span className="flex-1 truncate" style={{ color: COLORS.textLight }}>{t.title}</span>
+                  <span className="text-xs" style={{ color: COLORS.textMuted }}>{(t.entryPrice * 100).toFixed(0)}¢ → {(t.curPrice * 100).toFixed(0)}¢</span>
+                </div>
+              ))}
+            </Section>
+          )}
+
+          {p.closedTrades === 0 && (
+            <div className="text-center py-16 border rounded-xl" style={{ borderColor: COLORS.surface }}>
+              <p className="text-lg" style={{ color: COLORS.textMuted }}>No closed trades yet</p>
+              <p className="mt-2 text-sm" style={{ color: COLORS.surface }}>Analytics will populate as markets resolve. Check back in 24-48h.</p>
+            </div>
+          )}
+        </main>
+      </div>
+    </div>
   )
 }
 
-function Stat({ label, value, sub, color }: { label: string; value: string; sub: string; color: string }): React.ReactElement {
+function StatCard({ label, value, sub, color }: { label: string; value: string; sub: string; color: string }): React.ReactElement {
   return (
-    <div className="p-4 bg-zinc-900 border border-zinc-800 rounded-xl">
-      <div className="text-xs text-zinc-500 mb-1">{label}</div>
-      <div className={`text-xl font-bold ${color}`}>{value}</div>
-      <div className="text-xs text-zinc-600 mt-1">{sub}</div>
+    <div className="p-4 rounded-xl" style={{ background: COLORS.card }}>
+      <div className="text-[11px] uppercase tracking-wider mb-1" style={{ color: COLORS.textMuted }}>{label}</div>
+      <div className="text-xl font-bold" style={{ color }}>{value}</div>
+      <div className="text-xs mt-1" style={{ color: COLORS.textMuted }}>{sub}</div>
     </div>
   )
 }
@@ -330,8 +398,8 @@ function Stat({ label, value, sub, color }: { label: string; value: string; sub:
 function Section({ title, children }: { title: string; children: React.ReactNode }): React.ReactElement {
   return (
     <div className="mb-8">
-      <h2 className="text-sm uppercase tracking-wider text-zinc-500 mb-3">{title}</h2>
-      <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4">{children}</div>
+      <h2 className="text-xs uppercase tracking-wider mb-3" style={{ color: COLORS.textMuted }}>{title}</h2>
+      <div className="rounded-xl p-4" style={{ background: COLORS.card }}>{children}</div>
     </div>
   )
 }
@@ -339,24 +407,39 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 function SideRow({ label, stat }: { label: string; stat: { trades: number; won: number; winRate: number; pnl: number } }): React.ReactElement {
   return (
     <div className="flex items-center justify-between text-sm">
-      <span className={`font-medium ${label === 'YES' ? 'text-emerald-400' : 'text-red-400'}`}>{label}</span>
+      <span className="font-medium" style={{ color: label === 'YES' ? COLORS.teal : COLORS.red }}>{label}</span>
       <div className="flex gap-4 text-xs">
-        <span className="text-zinc-500">{stat.trades} trades</span>
-        <span className="text-zinc-400">WR {wrStr(stat.winRate)}</span>
-        <span className={pnlColor(stat.pnl)}>{pnlStr(stat.pnl)}</span>
+        <span style={{ color: COLORS.textMuted }}>{stat.trades} trades</span>
+        <span style={{ color: COLORS.textLight }}>WR {wrStr(stat.winRate)}</span>
+        <span style={{ color: pnlColor(stat.pnl) }}>{pnlStr(stat.pnl)}</span>
       </div>
     </div>
   )
 }
 
-function TradeRow({ trade }: { trade: TradeInfo }): React.ReactElement {
+function TradeRow({ trade }: { trade: { title: string; side: string; entryPrice: number; pnl: number; domain: string } }): React.ReactElement {
   return (
-    <div className="flex items-center gap-3 py-2 text-sm border-b border-zinc-800 last:border-0">
-      <span className={`font-medium w-16 text-right ${pnlColor(trade.pnl)}`}>{pnlStr(trade.pnl)}</span>
-      <span className={`text-xs ${trade.side === 'YES' ? 'text-emerald-400' : 'text-red-400'}`}>{trade.side}</span>
-      <span className="text-zinc-500 text-xs">{(trade.entryPrice * 100).toFixed(0)}¢</span>
-      <span className="text-zinc-300 flex-1 truncate">{trade.title}</span>
-      <span className="text-zinc-600 text-xs">{trade.domain}</span>
+    <div className="flex items-center gap-3 py-2 text-sm border-b last:border-0" style={{ borderColor: COLORS.surface }}>
+      <span className="font-medium w-16 text-right" style={{ color: pnlColor(trade.pnl) }}>{pnlStr(trade.pnl)}</span>
+      <span className="text-xs" style={{ color: trade.side === 'YES' ? COLORS.teal : COLORS.red }}>{trade.side}</span>
+      <span className="text-xs" style={{ color: COLORS.textMuted }}>{(trade.entryPrice * 100).toFixed(0)}¢</span>
+      <span className="flex-1 truncate" style={{ color: COLORS.textLight }}>{trade.title}</span>
+      <span className="text-xs" style={{ color: COLORS.textMuted }}>{trade.domain}</span>
     </div>
+  )
+}
+
+function SideLink({ href, children, active }: { href: string; children: React.ReactNode; active?: boolean }): React.ReactElement {
+  return (
+    <Link
+      href={href}
+      className="px-3 py-2 rounded-lg text-sm transition-colors"
+      style={{
+        background: active ? COLORS.surface : 'transparent',
+        color: active ? COLORS.teal : COLORS.textMuted,
+      }}
+    >
+      {children}
+    </Link>
   )
 }
