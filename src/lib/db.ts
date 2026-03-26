@@ -157,6 +157,14 @@ function initTables(db: Database.Database): void {
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS bot_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      type TEXT NOT NULL,
+      message TEXT NOT NULL,
+      detail TEXT,
+      created_at TEXT NOT NULL
+    );
   `)
 
   // Migration: add peak_price column if missing
@@ -693,6 +701,50 @@ export function paperTradeExistsForCondition(conditionId: string): boolean {
   ).get(conditionId)
   return row !== undefined
 }
+
+// ── Bot events operations ───────────────────────────────────────
+
+export type BotEvent = {
+  id: number
+  type: string
+  message: string
+  detail: string | null
+  createdAt: string
+}
+
+export function logBotEvent(type: string, message: string, detail?: string): void {
+  try {
+    const db = getDb()
+    db.prepare(
+      'INSERT INTO bot_events (type, message, detail, created_at) VALUES (?, ?, ?, ?)'
+    ).run(type, message, detail ?? null, new Date().toISOString())
+    // Keep only last 200 events
+    db.prepare(
+      'DELETE FROM bot_events WHERE id NOT IN (SELECT id FROM bot_events ORDER BY id DESC LIMIT 200)'
+    ).run()
+  } catch {
+    // Ignore DB errors for logging
+  }
+}
+
+export function getRecentBotEvents(limit: number = 30): BotEvent[] {
+  try {
+    const db = getDb()
+    return (db.prepare(
+      'SELECT id, type, message, detail, created_at FROM bot_events ORDER BY id DESC LIMIT ?'
+    ).all(limit) as Array<Record<string, unknown>>).map((r) => ({
+      id: r.id as number,
+      type: r.type as string,
+      message: r.message as string,
+      detail: r.detail as string | null,
+      createdAt: r.created_at as string,
+    }))
+  } catch {
+    return []
+  }
+}
+
+// ── Paper trade row mapper ──────────────────────────────────────
 
 function mapPaperRows(rows: unknown[]): PaperTrade[] {
   return (rows as Array<Record<string, unknown>>).map((r) => ({

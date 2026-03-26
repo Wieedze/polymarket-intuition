@@ -19,7 +19,7 @@ import { getActiveWatchedWallets, getOpenPaperTrades, openPaperTrade, paperTrade
 import { pollWallet, type PositionAlert } from '../src/lib/position-tracker'
 import { keywordClassify } from '../src/lib/classifier'
 import { fetchAllPages } from '../src/lib/polymarket'
-import { resolvePaperTrade, updatePaperTradePrice } from '../src/lib/db'
+import { resolvePaperTrade, updatePaperTradePrice, logBotEvent } from '../src/lib/db'
 import { evaluateExit, exitEmoji, type ExitConfig } from '../src/lib/exit-strategy'
 import { scoreSignal, shouldCopySignal, signalBetMultiplier, isContradictory } from '../src/lib/signal-scorer'
 import { evaluateExpertTrust, getAllExpertTrust } from '../src/lib/expert-trust'
@@ -198,7 +198,9 @@ function tryCopyWithSignal(alert: PositionAlert): boolean {
   const consensusTag = expertCount > 1 ? ` 🤝${expertCount}x` : ''
   const trustTag = trust.status === 'reduced' ? ' ⚡reduced' : ''
   const scoreTag = signal.score >= 80 ? '🔥' : signal.score >= 60 ? '✅' : '⚠️'
-  console.log(`  📋 ${scoreTag} COPY (${signal.score}/100) | ${side} @ ${(alert.position.curPrice * 100).toFixed(0)}¢ | $${betAmount.toFixed(0)}${consensusTag}${trustTag} | ${trust.phase} | ${signal.reasons.slice(0, 2).join(', ')} | ${alert.position.title} ${domainTag}`)
+  const logMsg = `${scoreTag} COPY (${signal.score}/100) | ${side} @ ${(alert.position.curPrice * 100).toFixed(0)}¢ | $${betAmount.toFixed(0)}${consensusTag}${trustTag} | ${trust.phase} | ${signal.reasons.slice(0, 2).join(', ')} | ${alert.position.title} ${domainTag}`
+  console.log(`  📋 ${logMsg}`)
+  logBotEvent('copy', `${side} @ ${(alert.position.curPrice * 100).toFixed(0)}¢ $${betAmount.toFixed(0)} | ${alert.position.title}`, `Score: ${signal.score}/100 | ${alert.walletLabel ?? alert.wallet.slice(0, 10)} | ${domainTag}`)
 
   return true
 }
@@ -318,6 +320,7 @@ function runExitStrategy(): Record<string, number> {
         resolvePaperTrade(trade.conditionId, exitPrice)
         const pnl = trade.shares * (exitPrice - trade.entryPrice)
         console.log(`  ${exitEmoji(decision.reason)} ${decision.reason.toUpperCase()} | ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)} | ${decision.message} | ${trade.title}`)
+        logBotEvent('exit', `${decision.reason} | ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)} | ${trade.title}`, decision.message)
         counts[decision.reason] = (counts[decision.reason] ?? 0) + 1
       } catch (err) {
         console.error(`  ⚠ Exit failed for ${trade.conditionId}: ${err instanceof Error ? err.message : String(err)}`)
