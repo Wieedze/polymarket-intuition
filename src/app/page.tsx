@@ -119,7 +119,7 @@ export default function Dashboard(): React.ReactElement {
         </aside>
 
         {/* Main content */}
-        <main className="flex-1 p-6 lg:p-8 max-w-[1200px]">
+        <main className="flex-1 p-6 lg:p-8">
           {/* Mobile nav */}
           <div className="lg:hidden flex items-center justify-between mb-6">
             <h1 className="text-lg font-bold text-white">Copy Trader</h1>
