@@ -21,6 +21,7 @@ import { keywordClassify } from '../src/lib/classifier'
 import { fetchAllPages } from '../src/lib/polymarket'
 import { resolvePaperTrade, updatePaperTradePrice } from '../src/lib/db'
 import { evaluateExit, exitEmoji, DEFAULT_CONFIG, type ExitConfig } from '../src/lib/exit-strategy'
+import { scoreSignal, shouldCopySignal, signalBetMultiplier } from '../src/lib/signal-scorer'
 
 const POLYMARKET_DATA_URL = process.env.POLYMARKET_DATA_URL ?? 'https://data-api.polymarket.com'
 
@@ -100,9 +101,9 @@ function getConsensusMultiplier(conditionId: string): number {
   return 1
 }
 
-// ── Auto-copy logic ──────────────────────────────────────────────
+// ── Auto-copy logic (signal-based) ───────────────────────────────
 
-function shouldCopy(alert: PositionAlert): boolean {
+function canCopy(alert: PositionAlert): boolean {
   if (alert.type !== 'NEW_POSITION') return false
 
   const price = alert.position.curPrice
@@ -124,18 +125,33 @@ function shouldCopy(alert: PositionAlert): boolean {
   return true
 }
 
-function autoCopy(alert: PositionAlert): void {
+function tryCopyWithSignal(alert: PositionAlert): boolean {
+  // Score the signal — is this a good trade to copy?
+  const signal = scoreSignal({
+    expertWallet: alert.wallet,
+    marketTitle: alert.position.title,
+    entryPrice: alert.position.curPrice,
+    positionSize: alert.position.size,
+  })
+
+  if (!shouldCopySignal(signal)) {
+    if (signal.score > 20) {
+      // Close to threshold — log why rejected
+      console.log(`  ⏭️  SKIP (${signal.score}/100) | ${signal.reasons[0]} | ${alert.position.title}`)
+    }
+    return false
+  }
+
   const domain = keywordClassify(alert.position.title)
   const side = alert.position.outcomeIndex === 0 ? 'YES' : 'NO'
 
-  // Dynamic sizing based on consensus
+  // Dynamic sizing: signal quality × consensus
+  const signalMulti = signalBetMultiplier(signal)
   const consensusMulti = getConsensusMultiplier(alert.position.conditionId)
+  const betAmount = Math.min(BET_SIZE * signalMulti * consensusMulti, BET_SIZE * 3)
+
   const consensusEntry = consensusMap.get(alert.position.conditionId)
   const expertCount = consensusEntry?.experts.length ?? 1
-
-  // Sizing: base × consensus multiplier
-  // Capped at 3x base bet
-  const betAmount = Math.min(BET_SIZE * consensusMulti, BET_SIZE * 3)
 
   openPaperTrade({
     conditionId: alert.position.conditionId,
@@ -149,8 +165,11 @@ function autoCopy(alert: PositionAlert): void {
   })
 
   const domainTag = domain ? `[${domain.domain.replace('pm-domain/', '')}]` : ''
-  const consensusTag = expertCount > 1 ? ` 🤝${expertCount}x consensus → $${betAmount}` : ` $${betAmount}`
-  console.log(`  📋 COPIED | ${side} @ ${(alert.position.curPrice * 100).toFixed(0)}¢ |${consensusTag} | ${alert.position.title} ${domainTag}`)
+  const consensusTag = expertCount > 1 ? ` 🤝${expertCount}x` : ''
+  const scoreTag = signal.score >= 80 ? '🔥' : signal.score >= 60 ? '✅' : '⚠️'
+  console.log(`  📋 ${scoreTag} COPY (${signal.score}/100) | ${side} @ ${(alert.position.curPrice * 100).toFixed(0)}¢ | $${betAmount.toFixed(0)}${consensusTag} | ${signal.reasons.slice(0, 2).join(', ')} | ${alert.position.title} ${domainTag}`)
+
+  return true
 }
 
 // ── Resolve logic ────────────────────────────────────────────────
@@ -358,8 +377,7 @@ async function pollOnce(): Promise<void> {
   for (const alert of allNewAlerts) {
     if (copiedConditions.has(alert.position.conditionId)) continue
 
-    if (shouldCopy(alert)) {
-      autoCopy(alert)
+    if (canCopy(alert) && tryCopyWithSignal(alert)) {
       copiedConditions.add(alert.position.conditionId)
       copied++
     }
