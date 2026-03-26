@@ -165,6 +165,12 @@ function initTables(db: Database.Database): void {
       detail TEXT,
       created_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS leaderboard_results_cache (
+      period TEXT PRIMARY KEY,
+      results_json TEXT NOT NULL,
+      computed_at TEXT NOT NULL
+    );
   `)
 
   // Migration: add peak_price column if missing
@@ -741,6 +747,40 @@ export function getRecentBotEvents(limit: number = 30): BotEvent[] {
     }))
   } catch {
     return []
+  }
+}
+
+// ── Leaderboard results cache ───────────────────────────────────
+
+const LEADERBOARD_CACHE_TTL_MS = 30 * 60 * 1000 // 30 minutes
+
+export function getLeaderboardResultsCache(period: string): unknown[] | null {
+  try {
+    const db = getDb()
+    const row = db.prepare(
+      'SELECT results_json, computed_at FROM leaderboard_results_cache WHERE period = ?'
+    ).get(period) as { results_json: string; computed_at: string } | undefined
+
+    if (!row) return null
+
+    const age = Date.now() - new Date(row.computed_at).getTime()
+    if (age > LEADERBOARD_CACHE_TTL_MS) return null
+
+    return JSON.parse(row.results_json) as unknown[]
+  } catch {
+    return null
+  }
+}
+
+export function setLeaderboardResultsCache(period: string, results: unknown[]): void {
+  try {
+    const db = getDb()
+    db.prepare(
+      `INSERT OR REPLACE INTO leaderboard_results_cache (period, results_json, computed_at)
+       VALUES (?, ?, ?)`
+    ).run(period, JSON.stringify(results), new Date().toISOString())
+  } catch {
+    // Non-critical — ignore cache write errors
   }
 }
 
