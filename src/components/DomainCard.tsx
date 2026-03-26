@@ -1,31 +1,28 @@
-import TrustBadge from './TrustBadge'
 import type { TradingStyle } from '../lib/scorer'
 
 type DomainCardProps = {
-  domain: string
-  winRate: number
-  trades: number
-  calibration: number
-  convictionScore: number
-  tradingStyle: TradingStyle
-  profitFactor: number
-  avgPnlPerTrade: number
+  domain              : string
+  winRate             : number
+  trades              : number
+  calibration         : number
+  convictionScore     : number
+  tradingStyle        : TradingStyle
+  profitFactor        : number
+  avgPnlPerTrade      : number
   maxConsecutiveLosses: number
-  copyabilityScore: number
-  compositeScore?: number
-  agentRank?: number
+  copyabilityScore    : number
 }
 
 const DOMAIN_LABELS: Record<string, { label: string; color: string }> = {
-  'pm-domain/ai-tech':     { label: 'AI & Tech',    color: 'bg-violet-500' },
-  'pm-domain/politics':    { label: 'Politics',     color: 'bg-blue-500' },
-  'pm-domain/crypto':      { label: 'Crypto',       color: 'bg-orange-500' },
-  'pm-domain/sports':      { label: 'Sports',       color: 'bg-green-500' },
-  'pm-domain/economics':   { label: 'Economics',    color: 'bg-yellow-500' },
-  'pm-domain/science':     { label: 'Science',      color: 'bg-cyan-500' },
-  'pm-domain/culture':     { label: 'Culture',      color: 'bg-pink-500' },
-  'pm-domain/weather':     { label: 'Weather',      color: 'bg-sky-500' },
-  'pm-domain/geopolitics': { label: 'Geopolitics',  color: 'bg-red-500' },
+  'pm-domain/ai-tech':     { label: 'AI & Tech',   color: 'bg-violet-500' },
+  'pm-domain/politics':    { label: 'Politics',    color: 'bg-blue-500' },
+  'pm-domain/crypto':      { label: 'Crypto',      color: 'bg-orange-500' },
+  'pm-domain/sports':      { label: 'Sports',      color: 'bg-green-500' },
+  'pm-domain/economics':   { label: 'Economics',   color: 'bg-yellow-500' },
+  'pm-domain/science':     { label: 'Science',     color: 'bg-cyan-500' },
+  'pm-domain/culture':     { label: 'Culture',     color: 'bg-pink-500' },
+  'pm-domain/weather':     { label: 'Weather',     color: 'bg-sky-500' },
+  'pm-domain/geopolitics': { label: 'Geopolitics', color: 'bg-red-500' },
 }
 
 const STYLE_LABELS: Record<TradingStyle, { label: string; color: string }> = {
@@ -58,14 +55,12 @@ export default function DomainCard({
   avgPnlPerTrade,
   maxConsecutiveLosses,
   copyabilityScore,
-  compositeScore,
-  agentRank,
 }: DomainCardProps): React.ReactElement {
   const meta = DOMAIN_LABELS[domain] ?? { label: domain, color: 'bg-zinc-500' }
-  const winPct = Math.round(winRate * 100)
-  const calPct = Math.round(calibration * 100)
+  const winPct  = Math.round(winRate * 100)
+  const calPct  = Math.round(calibration * 100)
   const copyPct = Math.round(copyabilityScore * 100)
-  const style = STYLE_LABELS[tradingStyle]
+  const style   = STYLE_LABELS[tradingStyle]
 
   return (
     <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-5 hover:border-zinc-700 transition-colors">
@@ -75,16 +70,12 @@ export default function DomainCard({
           <span className={`w-2.5 h-2.5 rounded-full ${meta.color}`} />
           <span className="font-semibold text-white">{meta.label}</span>
         </div>
-        {compositeScore !== undefined ? (
-          <TrustBadge score={compositeScore} rank={agentRank} />
-        ) : (
-          <span className={`text-[10px] px-2 py-0.5 rounded-full border ${style.color}`}>
-            {style.label}
-          </span>
-        )}
+        <span className={`text-[10px] px-2 py-0.5 rounded-full border ${style.color}`}>
+          {style.label}
+        </span>
       </div>
 
-      {/* Copyability Score — the hero metric */}
+      {/* Copyability Score */}
       <div className="mb-4 p-3 rounded-lg bg-zinc-800/50">
         <div className="flex items-center justify-between mb-1">
           <span className="text-xs font-medium text-zinc-300">Copyability</span>

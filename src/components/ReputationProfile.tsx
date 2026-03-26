@@ -140,8 +140,6 @@ export default function ReputationProfile({
             avgPnlPerTrade={d.avgPnlPerTrade}
             maxConsecutiveLosses={d.maxConsecutiveLosses}
             copyabilityScore={d.copyabilityScore}
-            compositeScore={d.compositeScore}
-            agentRank={d.agentRank}
           />
         ))}
       </div>

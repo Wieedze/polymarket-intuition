@@ -13,7 +13,6 @@ import {
 } from '@/lib/scorer'
 import { DOMAIN_ATOMS, type DomainAtomValue } from '@/lib/atoms'
 import type { WalletReputation, DomainReputation } from '@/types/reputation'
-import type { DomainAtom } from '@/types/attestation'
 import type { ResolvedTrade } from '@/types/polymarket'
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
@@ -74,7 +73,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     const totalPnl = trades.reduce((sum, t) => sum + t.pnl, 0)
 
     domains.push({
-      domain: domain as DomainAtom,
+      domain: domain as DomainReputation['domain'],
       winRate,
       trades: trades.length,
       calibration,
@@ -100,7 +99,6 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   } = {
     address,
     domains,
-    totalAttestations: 0,
     computedAt: new Date().toISOString(),
     totalPositions: walletTrades.totalPositions,
     resolvedTrades: walletTrades.totalTrades,
