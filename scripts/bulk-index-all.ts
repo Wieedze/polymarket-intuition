@@ -66,7 +66,7 @@ async function main(): Promise<void> {
         fetchedAt: new Date().toISOString(),
       })
 
-      const result = await indexWallet(entry.proxyWallet, false)
+      const result = await indexWallet(entry.proxyWallet)
 
       const stats = getWalletStats(entry.proxyWallet)
       let topCopyability = 0

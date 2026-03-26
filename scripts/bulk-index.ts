@@ -56,7 +56,7 @@ async function main(): Promise<void> {
     })
 
     // Index trades
-    const result = await indexWallet(entry.proxyWallet, false)
+    const result = await indexWallet(entry.proxyWallet)
 
     // Compute best copyability from stored stats
     const stats = getWalletStats(entry.proxyWallet)
