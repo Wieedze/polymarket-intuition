@@ -145,10 +145,12 @@ export async function fetchResolvedTrades(
     seenConditionIds.add(redeem.conditionId)
 
     const buys = buysByCondition.get(redeem.conditionId) ?? []
+    // Skip REDEEMs without matching BUY data — can't compute reliable entry price
+    if (buys.length === 0) continue
     const totalBuyUsdc = buys.reduce((s, b) => s + b.usdcSize, 0)
     const totalBuyShares = buys.reduce((s, b) => s + b.size, 0)
-    const avgEntryPrice =
-      totalBuyShares > 0 ? totalBuyUsdc / totalBuyShares : 0.5
+    if (totalBuyShares === 0) continue
+    const avgEntryPrice = totalBuyUsdc / totalBuyShares
     const outcomeIndex = buys[0]?.outcomeIndex ?? 0
     const pnl = redeem.usdcSize - totalBuyUsdc
 

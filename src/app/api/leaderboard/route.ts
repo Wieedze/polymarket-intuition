@@ -163,21 +163,8 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   const limit = Math.min(Math.max(parseInt(limitParam, 10) || 10, 1), 20)
   const refresh = request.nextUrl.searchParams.get('refresh') === 'true'
 
-  // Try cache first (populated by bulk-index script)
-  if (!refresh) {
-    const cached = buildFromCache(timePeriod)
-    if (cached && cached.length > 0) {
-      cached.sort((a, b) => b.topCopyability - a.topCopyability)
-      return NextResponse.json({
-        period: timePeriod,
-        wallets: cached.slice(0, limit),
-        source: 'cache',
-        computedAt: new Date().toISOString(),
-      })
-    }
-  }
-
-  // Fallback: live computation
+  // Always compute live for consistent data with profile pages
+  // Cache was producing inconsistent scores (missing profitFactor, maxConsecLosses)
   type LeaderboardEntry = {
     rank: string
     proxyWallet: string
