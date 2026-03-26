@@ -185,3 +185,31 @@ export function signalBetMultiplier(signal: SignalScore): number {
   if (signal.score >= 60) return 1.0
   return 0.5
 }
+
+/**
+ * Kelly Criterion simplified — optimal bet fraction.
+ *
+ * f* = (p × b - q) / b
+ * where p = win probability (winRate), q = 1-p, b = net odds (payout ratio)
+ *
+ * For Polymarket: b = (1/entryPrice) - 1
+ * E.g., entry at 0.40 → b = 1.5 (you risk $0.40 to win $0.60)
+ *
+ * Returns fraction of bankroll to bet (0-1), capped at 0.25 (quarter Kelly for safety).
+ * Returns 0 if no edge (negative Kelly).
+ */
+export function kellyBetFraction(
+  winRate: number,
+  entryPrice: number
+): number {
+  if (winRate <= 0 || entryPrice <= 0 || entryPrice >= 1) return 0
+
+  const b = (1 / entryPrice) - 1  // net odds
+  const q = 1 - winRate
+  const kelly = (winRate * b - q) / b
+
+  if (kelly <= 0) return 0
+
+  // Quarter Kelly for safety (full Kelly is too aggressive)
+  return Math.min(kelly * 0.25, 0.25)
+}

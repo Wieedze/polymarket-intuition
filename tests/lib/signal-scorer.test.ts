@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { scoreSignal, shouldCopySignal, signalBetMultiplier, isContradictory } from '../../src/lib/signal-scorer'
+import { scoreSignal, shouldCopySignal, signalBetMultiplier, isContradictory, kellyBetFraction } from '../../src/lib/signal-scorer'
 
 // Mock db module
 vi.mock('../../src/lib/db', () => ({
@@ -167,5 +167,40 @@ describe('isContradictory', () => {
 
   it('returns false for empty open trades', () => {
     expect(isContradictory('abc123', 'YES', [])).toBe(false)
+  })
+})
+
+describe('kellyBetFraction', () => {
+  it('returns 0 for no edge (50% WR at 50¢)', () => {
+    // b = 1, kelly = (0.5*1 - 0.5)/1 = 0 → no edge
+    expect(kellyBetFraction(0.50, 0.50)).toBe(0)
+  })
+
+  it('returns positive for good edge (60% WR at 50¢)', () => {
+    // b = 1, kelly = (0.6*1 - 0.4)/1 = 0.2, quarter = 0.05
+    const fraction = kellyBetFraction(0.60, 0.50)
+    expect(fraction).toBeGreaterThan(0)
+    expect(fraction).toBeLessThanOrEqual(0.25)
+  })
+
+  it('returns higher fraction for stronger edge', () => {
+    const weak = kellyBetFraction(0.55, 0.50)
+    const strong = kellyBetFraction(0.75, 0.40)
+    expect(strong).toBeGreaterThan(weak)
+  })
+
+  it('returns 0 for negative edge (30% WR at 70¢)', () => {
+    // Buying at 70¢ with only 30% win rate → losing proposition
+    expect(kellyBetFraction(0.30, 0.70)).toBe(0)
+  })
+
+  it('caps at 0.25 even for huge edge', () => {
+    expect(kellyBetFraction(0.95, 0.20)).toBeLessThanOrEqual(0.25)
+  })
+
+  it('returns 0 for invalid inputs', () => {
+    expect(kellyBetFraction(0, 0.50)).toBe(0)
+    expect(kellyBetFraction(0.50, 0)).toBe(0)
+    expect(kellyBetFraction(0.50, 1)).toBe(0)
   })
 })
