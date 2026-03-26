@@ -1,4 +1,4 @@
-import { getWalletStats, type WalletDomainStats } from './db'
+import { getWalletStats, getAllPaperTrades, type WalletDomainStats } from './db'
 import { keywordClassify } from './classifier'
 
 // ── Types ─────────────────────────────────────────────────────────
@@ -17,6 +17,40 @@ export type SignalScore = {
 // ── Config ────────────────────────────────────────────────────────
 
 const MIN_SIGNAL_SCORE = 40  // minimum score to copy
+
+/**
+ * Get our own paper trading performance by domain.
+ * Returns a multiplier: >1 for profitable domains, <1 for losing ones, 0 to block.
+ */
+function getDomainPerformanceMultiplier(domain: string | null): number {
+  if (!domain) return 0  // skip unknown domains entirely
+
+  try {
+    const allTrades = getAllPaperTrades()
+    const closedInDomain = allTrades.filter(
+      (t) => t.status !== 'open' && t.domain === domain
+    )
+
+    // Not enough data yet — neutral
+    if (closedInDomain.length < 5) return 1.0
+
+    const wins = closedInDomain.filter((t) => t.status === 'won').length
+    const winRate = wins / closedInDomain.length
+    const pnl = closedInDomain.reduce((s, t) => s + (t.pnl ?? 0), 0)
+
+    // Domain is losing money → penalize heavily
+    if (pnl < -100 && winRate < 0.40) return 0.3  // -70% penalty
+    if (pnl < 0 && winRate < 0.35) return 0.5     // -50% penalty
+
+    // Domain is profitable → boost
+    if (pnl > 500 && winRate > 0.50) return 1.5    // +50% boost
+    if (pnl > 100 && winRate > 0.45) return 1.2    // +20% boost
+
+    return 1.0
+  } catch {
+    return 1.0  // DB unavailable, neutral
+  }
+}
 
 // Markets that are pure noise — skip entirely
 const NOISE_PATTERNS = [
@@ -57,6 +91,16 @@ export function scoreSignal(params: {
         expertWinRate: 0, expertTrades: 0, betSizeSignal: 0,
         domain, reasons: ['Noise market filtered'],
       }
+    }
+  }
+
+  // Filter unknown domains and penalize/boost based on our performance
+  const domainMultiplier = getDomainPerformanceMultiplier(domain)
+  if (domainMultiplier === 0) {
+    return {
+      score: 0, domainMatch: false, expertCalibration: 0,
+      expertWinRate: 0, expertTrades: 0, betSizeSignal: 0,
+      domain, reasons: ['Unknown domain — skipped'],
     }
   }
 
@@ -136,7 +180,14 @@ export function scoreSignal(params: {
   else if (positionSize > 1000) { betSizeSignal = 4 }
   else { betSizeSignal = 1 }
 
-  const totalScore = domainScore + calibrationScore + winRateScore + entryScore + betSizeSignal
+  const rawScore = domainScore + calibrationScore + winRateScore + entryScore + betSizeSignal
+
+  // Apply domain performance multiplier (boost profitable domains, penalize losing ones)
+  const totalScore = Math.round(rawScore * domainMultiplier)
+
+  if (domainMultiplier !== 1.0) {
+    reasons.push(domainMultiplier > 1 ? `Domain boost ${domainMultiplier}x` : `Domain penalty ${domainMultiplier}x`)
+  }
 
   return {
     score: totalScore,

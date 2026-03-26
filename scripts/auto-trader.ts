@@ -9,7 +9,7 @@
  *
  * Env vars:
  *   POLL_INTERVAL_MS  — polling interval (default: 300000 = 5min)
- *   BET_SIZE_USDC     — simulated bet size (default: 100)
+ *   BET_PCT           — % of available cash per trade (default: 0.02 = 2%)
  *   MIN_ENTRY_PRICE   — skip longshots below this (default: 0.15)
  *   MAX_ENTRY_PRICE   — skip near-resolved above this (default: 0.90)
  *   MAX_OPEN_TRADES   — max simultaneous open paper trades (default: 50)
@@ -28,11 +28,31 @@ const POLYMARKET_DATA_URL = process.env.POLYMARKET_DATA_URL ?? 'https://data-api
 // ── Config ───────────────────────────────────────────────────────
 
 const POLL_INTERVAL_MS = parseInt(process.env.POLL_INTERVAL_MS ?? '300000', 10)
-const BET_SIZE = parseFloat(process.env.BET_SIZE_USDC ?? getPortfolioSetting('bet_size_usdc', '100'))
+const BET_PCT = parseFloat(process.env.BET_PCT ?? '0.02')  // 2% of available cash per trade
+const MIN_BET = 20    // never bet less than $20
+const MAX_BET = 500   // never bet more than $500
 const MIN_ENTRY = parseFloat(process.env.MIN_ENTRY_PRICE ?? '0.15')
-const MAX_ENTRY = parseFloat(process.env.MAX_ENTRY_PRICE ?? '0.90')
+const MAX_ENTRY = parseFloat(process.env.MAX_ENTRY_PRICE ?? '0.60')  // data shows 70-90¢ loses $3K
 const MAX_OPEN = parseInt(process.env.MAX_OPEN_TRADES ?? '50', 10)
 const MAX_CAPITAL_PCT = parseFloat(process.env.MAX_CAPITAL_PCT ?? '0.60')
+
+function getAvailableCash(): number {
+  const startBal = parseFloat(getPortfolioSetting('starting_balance', '10000'))
+  const allTrades = getAllPaperTrades()
+  const realizedPnl = allTrades
+    .filter((t) => t.status !== 'open')
+    .reduce((s, t) => s + (t.pnl ?? 0), 0)
+  const totalInvested = allTrades
+    .filter((t) => t.status === 'open')
+    .reduce((s, t) => s + t.simulatedUsdc, 0)
+  return startBal + realizedPnl - totalInvested
+}
+
+function getDynamicBetSize(): number {
+  const cash = getAvailableCash()
+  const bet = cash * BET_PCT
+  return Math.min(Math.max(bet, MIN_BET), MAX_BET)
+}
 
 // Exit strategy config (override via env vars)
 const EXIT_CONFIG: ExitConfig = {
@@ -120,7 +140,8 @@ function canCopy(alert: PositionAlert): boolean {
   const currentBalance = startBal + realizedPnl
   const totalInvested = openTrades.reduce((s, t) => s + t.simulatedUsdc, 0)
 
-  if (totalInvested + BET_SIZE > currentBalance * MAX_CAPITAL_PCT) return false
+  const betSize = getDynamicBetSize()
+  if (totalInvested + betSize > currentBalance * MAX_CAPITAL_PCT) return false
 
   return true
 }
@@ -145,10 +166,11 @@ function tryCopyWithSignal(alert: PositionAlert): boolean {
   const domain = keywordClassify(alert.position.title)
   const side = alert.position.outcomeIndex === 0 ? 'YES' : 'NO'
 
-  // Dynamic sizing: signal quality × consensus
+  // Dynamic sizing: base (% of cash) × signal quality × consensus
+  const baseBet = getDynamicBetSize()
   const signalMulti = signalBetMultiplier(signal)
   const consensusMulti = getConsensusMultiplier(alert.position.conditionId)
-  const betAmount = Math.min(BET_SIZE * signalMulti * consensusMulti, BET_SIZE * 3)
+  const betAmount = Math.min(baseBet * signalMulti * consensusMulti, MAX_BET)
 
   const consensusEntry = consensusMap.get(alert.position.conditionId)
   const expertCount = consensusEntry?.experts.length ?? 1
@@ -315,10 +337,15 @@ function printStats(): void {
     ? won.length / (won.length + lost.length)
     : 0
 
+  const totalInvested = open.reduce((s, t) => s + t.simulatedUsdc, 0)
+  const cash = startBal + realizedPnl - totalInvested
+  const nextBet = getDynamicBetSize()
+
   console.log(`\n  ┌─────────────────────────────────────┐`)
   console.log(`  │ Balance:  $${balance.toFixed(2).padStart(10)}  (start: $${startBal.toFixed(0)})`)
   console.log(`  │ Realized: ${realizedPnl >= 0 ? '+' : ''}${realizedPnl.toFixed(2).padStart(10)}`)
   console.log(`  │ Unreal:   ${unrealizedPnl >= 0 ? '+' : ''}${unrealizedPnl.toFixed(2).padStart(10)}`)
+  console.log(`  │ Cash:     $${cash.toFixed(0).padStart(10)}  (next bet: $${nextBet.toFixed(0)})`)
   console.log(`  │ Open:     ${open.length.toString().padStart(10)}  trades`)
   console.log(`  │ Win Rate: ${(winRate * 100).toFixed(0).padStart(9)}%  (${won.length}W / ${lost.length}L)`)
   console.log(`  └─────────────────────────────────────┘\n`)
@@ -426,14 +453,14 @@ async function main(): Promise<void> {
     setPortfolioSetting('starting_balance', '10000')
   }
   if (getPortfolioSetting('bet_size_usdc', '') === '') {
-    setPortfolioSetting('bet_size_usdc', BET_SIZE.toString())
+    setPortfolioSetting('bet_size_usdc', getDynamicBetSize().toString())
   }
 
   console.log('═══════════════════════════════════════════════')
   console.log('  AUTO PAPER TRADER')
   console.log('═══════════════════════════════════════════════')
   console.log(`  Wallets:    ${wallets.length}`)
-  console.log(`  Bet size:   $${BET_SIZE}`)
+  console.log(`  Bet sizing: ${(BET_PCT * 100).toFixed(0)}% of cash ($${MIN_BET}-$${MAX_BET})`)
   console.log(`  Entry range: ${(MIN_ENTRY * 100).toFixed(0)}¢ - ${(MAX_ENTRY * 100).toFixed(0)}¢`)
   console.log(`  Max open:   ${MAX_OPEN}`)
   console.log(`  Take profit: +${(EXIT_CONFIG.takeProfitPct * 100).toFixed(0)}%`)
