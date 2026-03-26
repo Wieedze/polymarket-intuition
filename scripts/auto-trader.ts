@@ -16,12 +16,12 @@
  */
 
 import { getActiveWatchedWallets, getOpenPaperTrades, openPaperTrade, paperTradeExistsForCondition, getPortfolioSetting, setPortfolioSetting, getAllPaperTrades, getPositionSnapshot } from '../src/lib/db'
-import { pollWallet, type PositionAlert, fetchOpenPositions } from '../src/lib/position-tracker'
+import { pollWallet, type PositionAlert } from '../src/lib/position-tracker'
 import { keywordClassify } from '../src/lib/classifier'
 import { fetchAllPages } from '../src/lib/polymarket'
 import { resolvePaperTrade, updatePaperTradePrice } from '../src/lib/db'
-import { evaluateExit, exitEmoji, DEFAULT_CONFIG, type ExitConfig } from '../src/lib/exit-strategy'
-import { scoreSignal, shouldCopySignal, signalBetMultiplier } from '../src/lib/signal-scorer'
+import { evaluateExit, exitEmoji, type ExitConfig } from '../src/lib/exit-strategy'
+import { scoreSignal, shouldCopySignal, signalBetMultiplier, isContradictory } from '../src/lib/signal-scorer'
 
 const POLYMARKET_DATA_URL = process.env.POLYMARKET_DATA_URL ?? 'https://data-api.polymarket.com'
 
@@ -376,6 +376,14 @@ async function pollOnce(): Promise<void> {
 
   for (const alert of allNewAlerts) {
     if (copiedConditions.has(alert.position.conditionId)) continue
+
+      // Check for contradictory positions
+    const side = alert.position.outcomeIndex === 0 ? 'YES' : 'NO'
+    const openTrades = getOpenPaperTrades()
+    if (isContradictory(alert.position.conditionId, side, openTrades)) {
+      console.log(`  ⚠️  CONTRA | Already holding opposite side | ${alert.position.title}`)
+      continue
+    }
 
     if (canCopy(alert) && tryCopyWithSignal(alert)) {
       copiedConditions.add(alert.position.conditionId)

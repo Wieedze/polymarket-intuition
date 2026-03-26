@@ -18,6 +18,14 @@ export type SignalScore = {
 
 const MIN_SIGNAL_SCORE = 40  // minimum score to copy
 
+// Markets that are pure noise — skip entirely
+const NOISE_PATTERNS = [
+  /up or down.*\d+:\d+[ap]m/i,        // "Bitcoin Up or Down - 10:20AM-10:25AM"
+  /\d+:\d+[ap]m.*\d+:\d+[ap]m/i,      // any 5-min time window
+  /close at \$[\d,]+[-–].*on the final day/i,  // narrow price range bets
+  /close at \$[\d,]+[-–]\$[\d,]+ on/i, // "close at $290-$295 on..."
+]
+
 // ── Signal scoring ───────────────────────────────────────────────
 
 /**
@@ -40,6 +48,17 @@ export function scoreSignal(params: {
   const classification = keywordClassify(marketTitle)
   const domain = classification?.domain ?? null
   const reasons: string[] = []
+
+  // Filter noise markets (5-min crypto, narrow price ranges)
+  for (const pattern of NOISE_PATTERNS) {
+    if (pattern.test(marketTitle)) {
+      return {
+        score: 0, domainMatch: false, expertCalibration: 0,
+        expertWinRate: 0, expertTrades: 0, betSizeSignal: 0,
+        domain, reasons: ['Noise market filtered'],
+      }
+    }
+  }
 
   // Get expert's stats across all domains
   const allStats = getWalletStats(expertWallet)
@@ -136,6 +155,23 @@ export function scoreSignal(params: {
  */
 export function shouldCopySignal(signal: SignalScore): boolean {
   return signal.score >= MIN_SIGNAL_SCORE
+}
+
+/**
+ * Check if a new trade would contradict an existing open trade.
+ * E.g., buying YES on "TSLA above $400" while holding NO on same market.
+ */
+export function isContradictory(
+  conditionId: string,
+  side: string,
+  openTrades: Array<{ conditionId: string; side: string; title: string }>
+): boolean {
+  for (const t of openTrades) {
+    if (t.conditionId === conditionId && t.side !== side) {
+      return true // opposite side on same market
+    }
+  }
+  return false
 }
 
 /**
