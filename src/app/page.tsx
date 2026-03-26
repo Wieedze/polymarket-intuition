@@ -169,7 +169,7 @@ export default function Dashboard(): React.ReactElement {
                     <CartesianGrid strokeDasharray="3 3" stroke={COLORS.surface} />
                     <XAxis dataKey="date" tickFormatter={(d: string) => d.slice(5)} tick={{ fill: COLORS.textMuted, fontSize: 10 }} axisLine={false} tickLine={false} />
                     <YAxis tickFormatter={(v: number) => `$${(v / 1000).toFixed(1)}K`} tick={{ fill: COLORS.textMuted, fontSize: 10 }} axisLine={false} tickLine={false} width={45} domain={['dataMin - 500', 'dataMax + 500']} />
-                    <Tooltip contentStyle={{ background: COLORS.surface, border: 'none', borderRadius: 8, fontSize: 12 }} formatter={(v: number) => [`$${v.toFixed(0)}`, 'Equity']} />
+                    <Tooltip contentStyle={{ background: COLORS.surface, border: 'none', borderRadius: 8, fontSize: 12 }} formatter={(value) => [`$${(typeof value === 'number' ? value : Number(value ?? 0)).toFixed(0)}`, 'Equity']} />                    
                     <ReferenceLine y={data.startingBalance} stroke={COLORS.textMuted} strokeDasharray="3 3" />
                     <Area type="monotone" dataKey="equity" stroke={COLORS.teal} fill="url(#eqFill)" strokeWidth={2} dot={false} />
                   </AreaChart>
@@ -224,7 +224,7 @@ export default function Dashboard(): React.ReactElement {
                     <CartesianGrid strokeDasharray="3 3" stroke={COLORS.surface} />
                     <XAxis dataKey="date" tickFormatter={(d: string) => d.slice(8)} tick={{ fill: COLORS.textMuted, fontSize: 10 }} axisLine={false} tickLine={false} />
                     <YAxis tickFormatter={(v: number) => `$${v}`} tick={{ fill: COLORS.textMuted, fontSize: 10 }} axisLine={false} tickLine={false} width={40} />
-                    <Tooltip contentStyle={{ background: COLORS.surface, border: 'none', borderRadius: 8, fontSize: 12 }} formatter={(v: number) => [`$${v.toFixed(2)}`, 'P&L']} />
+                    <Tooltip contentStyle={{ background: COLORS.surface, border: 'none', borderRadius: 8, fontSize: 12 }} formatter={(value) => [`${typeof value === 'number' ? value : Number(value ?? 0)}%`, 'Win Rate']} />
                     <ReferenceLine y={0} stroke={COLORS.textMuted} />
                     <Bar dataKey="dailyPnl" radius={[3, 3, 0, 0]}>
                       {data.chartData.map((entry, i) => (
@@ -244,8 +244,7 @@ export default function Dashboard(): React.ReactElement {
                     <CartesianGrid strokeDasharray="3 3" stroke={COLORS.surface} />
                     <XAxis dataKey="date" tickFormatter={(d: string) => d.slice(8)} tick={{ fill: COLORS.textMuted, fontSize: 10 }} axisLine={false} tickLine={false} />
                     <YAxis tickFormatter={(v: number) => `${v}%`} tick={{ fill: COLORS.textMuted, fontSize: 10 }} axisLine={false} tickLine={false} width={35} domain={[0, 100]} />
-                    <Tooltip contentStyle={{ background: COLORS.surface, border: 'none', borderRadius: 8, fontSize: 12 }} formatter={(v: number) => [`${v}%`, 'Win Rate']} />
-                    <ReferenceLine y={50} stroke={COLORS.amber} strokeDasharray="3 3" label={{ value: '50%', fill: COLORS.amber, fontSize: 10 }} />
+                    <Tooltip contentStyle={{ background: COLORS.surface, border: 'none', borderRadius: 8, fontSize: 12 }} formatter={(value) => [`$${(typeof value === 'number' ? value : Number(value ?? 0)).toFixed(2)}`, 'P&L']} />                    <ReferenceLine y={50} stroke={COLORS.amber} strokeDasharray="3 3" label={{ value: '50%', fill: COLORS.amber, fontSize: 10 }} />
                     <Line type="monotone" dataKey="winRate" stroke={COLORS.amber} strokeWidth={2} dot={{ r: 3, fill: COLORS.amber }} />
                   </LineChart>
                 </ResponsiveContainer>
