@@ -53,8 +53,31 @@ type ExpertTrustInfo = {
   reason: string
 }
 
+type Gate = { value: number; threshold: number; ok: boolean }
+type Gates = {
+  profitFactor: Gate
+  maxConsecutiveLosses: Gate
+  avgPnlPerTrade: Gate
+  minResolvedTrades: Gate
+  allOk: boolean
+}
+type Stats = {
+  profitFactor: number
+  maxConsecutiveLosses: number
+  avgPnlPerTrade: number
+  maxDrawdown: number
+  significance: 'not_significant' | 'low' | 'medium' | 'high'
+  winRateCI: { low: number; high: number }
+  grossWins: number
+  grossLosses: number
+}
+type EquityPoint = { day: string; balance: number; dailyPnl: number; trades: number }
+
 type AnalyticsData = {
   portfolio: Portfolio
+  gates: Gates
+  stats: Stats
+  equityCurve: EquityPoint[]
   byDomain: DomainStat[]
   byExpert: ExpertStat[]
   bySide: { yes: SideStat; no: SideStat }
@@ -198,6 +221,106 @@ export default function AnalyticsPage(): React.ReactElement {
             <StatCard label="Redeemable Value" value={`$${p.totalRedeemable.toFixed(0)}`} sub="If sold all now" color={COLORS.blue} />
             <StatCard label="Total Equity" value={`$${(p.availableCash + p.totalRedeemable).toFixed(0)}`} sub="Cash + positions" color={(p.availableCash + p.totalRedeemable) >= p.startingBalance ? COLORS.teal : COLORS.red} />
           </div>
+
+          {/* Validation Gates */}
+          {data.gates && (
+            <div className="mb-8 rounded-xl p-5 border" style={{ background: COLORS.card, borderColor: data.gates.allOk ? COLORS.teal : COLORS.amber }}>
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="font-semibold text-white">Validation Gates — Avant passage en réel</h3>
+                <span className="text-sm font-bold px-3 py-1 rounded-full" style={{
+                  background: data.gates.allOk ? COLORS.teal : COLORS.amber,
+                  color: COLORS.bg,
+                }}>
+                  {data.gates.allOk ? '✅ PRÊT' : '🔴 PAS ENCORE'}
+                </span>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                {[
+                  { label: 'Profit Factor', value: data.gates.profitFactor.value === 999 ? '∞' : data.gates.profitFactor.value.toFixed(2), threshold: '≥ 1.30', ok: data.gates.profitFactor.ok },
+                  { label: 'Max pertes consécutives', value: data.gates.maxConsecutiveLosses.value.toString(), threshold: '≤ 15', ok: data.gates.maxConsecutiveLosses.ok },
+                  { label: 'PnL moyen/trade', value: `${data.gates.avgPnlPerTrade.value >= 0 ? '+' : ''}$${data.gates.avgPnlPerTrade.value.toFixed(2)}`, threshold: '> +$5', ok: data.gates.avgPnlPerTrade.ok },
+                  { label: 'Trades résolus', value: data.gates.minResolvedTrades.value.toString(), threshold: '≥ 200', ok: data.gates.minResolvedTrades.ok },
+                ].map((g) => (
+                  <div key={g.label} className="rounded-lg p-3" style={{ background: COLORS.surface }}>
+                    <div className="text-xs mb-1" style={{ color: COLORS.textMuted }}>{g.label}</div>
+                    <div className="text-lg font-bold" style={{ color: g.ok ? COLORS.teal : COLORS.amber }}>{g.value}</div>
+                    <div className="text-xs mt-1" style={{ color: COLORS.textMuted }}>seuil: {g.threshold}</div>
+                    <div className="text-xs font-medium mt-1" style={{ color: g.ok ? COLORS.teal : COLORS.amber }}>{g.ok ? '✅' : '⏳'}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Advanced Stats */}
+          {data.stats && (
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
+              <StatCard
+                label="Profit Factor"
+                value={data.stats.profitFactor === 999 ? '∞' : data.stats.profitFactor.toFixed(2)}
+                sub={data.stats.profitFactor >= 1.3 ? '✅ Good edge' : '⏳ Need > 1.3'}
+                color={data.stats.profitFactor >= 1.3 ? COLORS.teal : COLORS.amber}
+              />
+              <StatCard
+                label="WR intervalle 95%"
+                value={`[${(data.stats.winRateCI.low * 100).toFixed(0)}%–${(data.stats.winRateCI.high * 100).toFixed(0)}%]`}
+                sub={{
+                  not_significant: '⚠️ < 30 trades',
+                  low: '🟡 30-100 trades',
+                  medium: '🟠 100-200 trades',
+                  high: '🟢 200+ trades',
+                }[data.stats.significance]}
+                color={COLORS.blue}
+              />
+              <StatCard
+                label="Max Drawdown"
+                value={`-${(data.stats.maxDrawdown * 100).toFixed(1)}%`}
+                sub="Depuis le pic"
+                color={data.stats.maxDrawdown < 0.2 ? COLORS.teal : COLORS.red}
+              />
+              <StatCard
+                label="Max pertes consécutives"
+                value={data.stats.maxConsecutiveLosses.toString()}
+                sub={data.stats.maxConsecutiveLosses <= 15 ? '✅ Ok' : '⚠️ Élevé'}
+                color={data.stats.maxConsecutiveLosses <= 15 ? COLORS.teal : COLORS.amber}
+              />
+            </div>
+          )}
+
+          {/* Equity Curve */}
+          {data.equityCurve && data.equityCurve.length > 1 && (
+            <Section title="Courbe d'équité">
+              <div className="space-y-1">
+                {(() => {
+                  const maxAbs = Math.max(...data.equityCurve.map((d) => Math.abs(d.dailyPnl)), 1)
+                  return data.equityCurve.map((d) => {
+                    const barPct = Math.abs(d.dailyPnl) / maxAbs * 100
+                    const isPos = d.dailyPnl >= 0
+                    return (
+                      <div key={d.day} className="flex items-center gap-3 text-xs">
+                        <span className="w-24 shrink-0" style={{ color: COLORS.textMuted }}>{d.day}</span>
+                        <span className="w-24 shrink-0 text-right font-mono text-white">${d.balance.toFixed(0)}</span>
+                        <div className="flex-1 h-4 rounded overflow-hidden" style={{ background: COLORS.surface }}>
+                          <div
+                            className="h-full rounded transition-all"
+                            style={{
+                              width: `${barPct}%`,
+                              background: isPos ? COLORS.teal : COLORS.red,
+                              opacity: 0.85,
+                            }}
+                          />
+                        </div>
+                        <span className="w-20 shrink-0 text-right font-mono" style={{ color: isPos ? COLORS.teal : COLORS.red }}>
+                          {isPos ? '+' : ''}{d.dailyPnl.toFixed(0)}
+                        </span>
+                        <span className="w-12 shrink-0 text-right" style={{ color: COLORS.textMuted }}>{d.trades}t</span>
+                      </div>
+                    )
+                  })
+                })()}
+              </div>
+            </Section>
+          )}
 
           {/* By Domain */}
           {data.byDomain.length > 0 && (
