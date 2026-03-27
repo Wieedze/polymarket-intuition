@@ -645,6 +645,8 @@ export function openPaperTrade(trade: {
     pnl: null,
     openedAt: now,
     resolvedAt: null,
+    sharesRemaining: null,
+    partialExits: [],
   }
 }
 
