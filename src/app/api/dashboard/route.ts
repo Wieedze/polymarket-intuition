@@ -10,12 +10,25 @@ export async function GET(): Promise<NextResponse> {
     const lost = closed.filter((t) => t.status === 'lost')
 
     const startBal = parseFloat(getPortfolioSetting('starting_balance', '10000'))
-    const realizedPnl = closed.reduce((s, t) => s + (t.pnl ?? 0), 0)
+    const POLYMARKET_FEE_RATE = 0.02
+
+    const partialExitsPnl = open.reduce((s, t) =>
+      s + t.partialExits.reduce((ps, e) => ps + e.pnl, 0), 0)
+    const realizedPnl = closed.reduce((s, t) => s + (t.pnl ?? 0), 0) + partialExitsPnl
+
+    // Remaining cost basis — partial exits return capital so reduce proportionally
+    const totalInvested = open.reduce((s, t) => {
+      const fraction = t.sharesRemaining != null && t.shares > 0 ? t.sharesRemaining / t.shares : 1
+      return s + t.simulatedUsdc * fraction
+    }, 0)
+
+    // True unrealized: proceeds if sold now (after 2% exit fee) minus remaining cost basis
     const unrealizedPnl = open.reduce((s, t) => {
       if (t.curPrice == null) return s
-      return s + t.shares * (t.curPrice - t.entryPrice)
+      const sharesNow = t.sharesRemaining ?? t.shares
+      const fraction = t.shares > 0 ? sharesNow / t.shares : 1
+      return s + sharesNow * t.curPrice * (1 - POLYMARKET_FEE_RATE) - t.simulatedUsdc * fraction
     }, 0)
-    const totalInvested = open.reduce((s, t) => s + t.simulatedUsdc, 0)
 
     // ── Chart data: daily metrics ────────────────────────────────
     const dailyMap = new Map<string, { pnl: number; trades: number; wins: number }>()
@@ -85,7 +98,8 @@ export async function GET(): Promise<NextResponse> {
       totalInvested,
       totalEquity: startBal + realizedPnl - totalInvested + open.reduce((s, t) => {
         if (t.curPrice == null) return s
-        return s + t.shares * t.curPrice
+        const sharesNow = t.sharesRemaining ?? t.shares
+        return s + sharesNow * t.curPrice * (1 - POLYMARKET_FEE_RATE)
       }, 0),
       winRate: closed.length > 0 ? won.length / closed.length : 0,
       wins: won.length,

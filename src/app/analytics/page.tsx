@@ -22,11 +22,14 @@ type Portfolio = {
   startingBalance: number
   currentBalance: number
   realizedPnl: number
+  partialExitsPnl: number
   unrealizedPnl: number
   totalInvested: number
   availableCash: number
   totalRedeemable: number
   roi: number
+  tradingDays: number
+  avgHoldDays: number
   totalTrades: number
   openTrades: number
   closedTrades: number
@@ -37,7 +40,7 @@ type Portfolio = {
 
 type DomainStat = { domain: string; trades: number; won: number; lost: number; winRate: number; pnl: number; avgPnl: number }
 type ExpertStat = { expert: string; trades: number; won: number; lost: number; winRate: number; pnl: number; avgPnl: number }
-type EntryBucket = { label: string; trades: number; won: number; winRate: number; pnl: number }
+type EntryBucket = { label: string; trades: number; won: number; winRate: number; expectedWinRate: number; implicitEdge: number; pnl: number }
 type SideStat = { trades: number; won: number; winRate: number; pnl: number }
 type TradeInfo = { title: string; side: string; entryPrice: number; pnl: number; expert: string; domain: string }
 type OpenInfo = { title: string; side: string; entryPrice: number; curPrice: number; unrealized: number; expert: string; domain: string }
@@ -239,8 +242,23 @@ export default function AnalyticsPage(): React.ReactElement {
                 <div className="text-2xl font-bold" style={{ color: pnlColor(p.realizedPnl) }}>
                   {pnlStr(p.realizedPnl)} realized
                 </div>
-                <div className="text-sm" style={{ color: COLORS.textMuted }}>
-                  {pnlStr(p.unrealizedPnl)} unrealized · {(p.roi * 100).toFixed(1)}% ROI
+                <div className="text-sm mt-0.5" style={{ color: COLORS.textMuted }}>
+                  {pnlStr(p.unrealizedPnl)} unrealized (after fees if sold now)
+                </div>
+                <div className="text-sm mt-0.5" style={{ color: COLORS.textMuted }}>
+                  <span style={{ color: pnlColor(p.roi) }}>{(p.roi * 100).toFixed(1)}% ROI</span>
+                  {' '}over {p.tradingDays.toFixed(0)} days
+                  {p.tradingDays > 0 && (
+                    <span> · {pnlStr(p.realizedPnl / p.tradingDays)}/day avg</span>
+                  )}
+                </div>
+                {p.partialExitsPnl !== 0 && (
+                  <div className="text-xs mt-1" style={{ color: COLORS.teal }}>
+                    incl. {pnlStr(p.partialExitsPnl)} from partial exits still open
+                  </div>
+                )}
+                <div className="text-xs mt-0.5" style={{ color: COLORS.textMuted }}>
+                  avg hold: {p.avgHoldDays.toFixed(1)} days/trade
                 </div>
               </div>
             </div>
@@ -569,18 +587,42 @@ export default function AnalyticsPage(): React.ReactElement {
                 <SideRow label="NO" stat={data.bySide.no} />
               </div>
             </Section>
-            <Section title="Entry Price Analysis">
-              <div className="space-y-3">
+            <Section title="Entry Price — Actual vs Expected Win Rate">
+              <div className="space-y-4">
                 {data.byEntry.map((b) => (
-                  <div key={b.label} className="flex items-center justify-between text-sm">
-                    <span style={{ color: COLORS.textLight }}>{b.label}</span>
-                    <div className="flex gap-4 text-xs">
-                      <span style={{ color: COLORS.textMuted }}>{b.trades}t</span>
-                      <span style={{ color: COLORS.textLight }}>{wrStr(b.winRate)}</span>
-                      <span style={{ color: pnlColor(b.pnl) }}>{pnlStr(b.pnl)}</span>
+                  <div key={b.label}>
+                    <div className="flex items-center justify-between text-sm mb-1">
+                      <span style={{ color: COLORS.textLight }}>{b.label}</span>
+                      <span style={{ color: pnlColor(b.pnl) }} className="font-medium">{pnlStr(b.pnl)}</span>
+                    </div>
+                    {/* WR bar: expected vs actual */}
+                    <div className="relative h-4 rounded overflow-hidden" style={{ background: COLORS.surface }}>
+                      {/* Expected (market implied) */}
+                      <div className="absolute h-full rounded" style={{
+                        width: `${b.expectedWinRate * 100}%`,
+                        background: COLORS.textMuted,
+                        opacity: 0.4,
+                      }} />
+                      {/* Actual */}
+                      <div className="absolute h-full rounded" style={{
+                        width: `${b.winRate * 100}%`,
+                        background: b.implicitEdge >= 0 ? COLORS.teal : COLORS.red,
+                        opacity: 0.85,
+                      }} />
+                    </div>
+                    <div className="flex justify-between text-xs mt-1">
+                      <span style={{ color: COLORS.textMuted }}>
+                        Market expected: {wrStr(b.expectedWinRate)} · Actual: {wrStr(b.winRate)}
+                      </span>
+                      <span style={{ color: b.implicitEdge >= 0 ? COLORS.teal : COLORS.red, fontWeight: 600 }}>
+                        {b.implicitEdge >= 0 ? '+' : ''}{(b.implicitEdge * 100).toFixed(0)}pts edge · {b.trades}t
+                      </span>
                     </div>
                   </div>
                 ))}
+                <div className="text-xs pt-1" style={{ color: COLORS.textMuted }}>
+                  Edge = actual win rate − market's implied probability at entry. Positive = we beat the market.
+                </div>
               </div>
             </Section>
           </div>

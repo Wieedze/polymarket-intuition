@@ -117,17 +117,50 @@ export async function GET(): Promise<NextResponse> {
     const lost = closed.filter((t) => t.status === 'lost')
 
     const startBal = parseFloat(getPortfolioSetting('starting_balance', '10000'))
-    const realizedPnl = pnlOf(closed)
-    const unrealizedPnl = open.reduce((s, t) => {
-      if (t.curPrice == null) return s
-      return s + t.shares * (t.curPrice - t.entryPrice)
+    const POLYMARKET_FEE_RATE = 0.02
+
+    // Partial exit PnL from still-open trades (booked profit not yet in closed trades)
+    const partialExitsPnl = open.reduce((s, t) =>
+      s + t.partialExits.reduce((ps, e) => ps + e.pnl, 0), 0)
+    const realizedPnl = pnlOf(closed) + partialExitsPnl
+
+    // Remaining cost basis for open positions (accounts for partial exits returning capital)
+    const totalInvested = open.reduce((s, t) => {
+      const fraction = t.sharesRemaining != null && t.shares > 0 ? t.sharesRemaining / t.shares : 1
+      return s + t.simulatedUsdc * fraction
     }, 0)
-    const totalInvested = open.reduce((s, t) => s + t.simulatedUsdc, 0)
-    const availableCash = startBal + realizedPnl - totalInvested
+
+    // What you'd actually get if you sold all open positions right now (after 2% exit fee)
     const totalRedeemable = open.reduce((s, t) => {
       if (t.curPrice == null) return s
-      return s + t.shares * t.curPrice
+      const sharesNow = t.sharesRemaining ?? t.shares
+      return s + sharesNow * t.curPrice * (1 - POLYMARKET_FEE_RATE)
     }, 0)
+
+    // True unrealized: proceeds if sold now minus remaining cost basis
+    const unrealizedPnl = open.reduce((s, t) => {
+      if (t.curPrice == null) return s
+      const sharesNow = t.sharesRemaining ?? t.shares
+      const fraction = t.shares > 0 ? sharesNow / t.shares : 1
+      const costBasis = t.simulatedUsdc * fraction
+      return s + sharesNow * t.curPrice * (1 - POLYMARKET_FEE_RATE) - costBasis
+    }, 0)
+
+    const availableCash = startBal + realizedPnl - totalInvested
+
+    // Trading duration
+    const allDates = all.map((t) => new Date(t.openedAt).getTime())
+    const firstTradeAt = allDates.length > 0 ? Math.min(...allDates) : Date.now()
+    const tradingDays = Math.max((Date.now() - firstTradeAt) / (1000 * 60 * 60 * 24), 1)
+
+    // Average hold time for closed trades
+    const tradesWithHold = closed.filter((t) => t.resolvedAt != null)
+    const avgHoldDays = tradesWithHold.length > 0
+      ? tradesWithHold.reduce((s, t) => {
+          const ms = new Date(t.resolvedAt!).getTime() - new Date(t.openedAt).getTime()
+          return s + ms / (1000 * 60 * 60 * 24)
+        }, 0) / tradesWithHold.length
+      : 0
 
     // By domain
     const byDomainMap = groupBy(closed, (t) => t.domain ?? 'unknown')
@@ -186,22 +219,28 @@ export async function GET(): Promise<NextResponse> {
       },
     }
 
-    // Entry price buckets
+    // Entry price buckets — with expected WR (market implied) vs actual WR (our edge)
     const buckets = [
-      { label: '15-30¢ longshot', min: 0.15, max: 0.30 },
-      { label: '30-50¢ value', min: 0.30, max: 0.50 },
-      { label: '50-70¢ mid', min: 0.50, max: 0.70 },
-      { label: '70-90¢ favorite', min: 0.70, max: 0.90 },
+      { label: '15-30¢ longshot', min: 0.15, max: 0.30, expectedWR: 0.225 },
+      { label: '30-50¢ value',    min: 0.30, max: 0.50, expectedWR: 0.40  },
+      { label: '50-65¢ mid',      min: 0.50, max: 0.65, expectedWR: 0.575 },
     ]
     const byEntry: EntryBucket[] = buckets
       .map((b) => {
         const trades = closed.filter((t) => t.entryPrice >= b.min && t.entryPrice < b.max)
         const w = trades.filter((t) => t.status === 'won').length
+        const actualWR = trades.length > 0 ? w / trades.length : 0
+        // True expected WR = average entry price in this bucket (market's implied probability)
+        const avgEntry = trades.length > 0
+          ? trades.reduce((s, t) => s + t.entryPrice, 0) / trades.length
+          : b.expectedWR
         return {
           label: b.label,
           trades: trades.length,
           won: w,
-          winRate: trades.length > 0 ? w / trades.length : 0,
+          winRate: actualWR,
+          expectedWinRate: avgEntry,  // market's implied probability at entry
+          implicitEdge: actualWR - avgEntry,  // our actual edge vs market
           pnl: pnlOf(trades),
         }
       })
@@ -225,28 +264,32 @@ export async function GET(): Promise<NextResponse> {
       },
     }
 
-    // Trading costs (fees + estimated slippage)
-    const POLYMARKET_FEE = 0.02
-    const totalEntryFees = all.reduce((s, t) => s + t.simulatedUsdc * POLYMARKET_FEE, 0)
-    const totalExitFees = closed.reduce((s, t) => {
-      if (t.exitPrice == null) return s
-      return s + t.shares * t.exitPrice * POLYMARKET_FEE
-    }, 0)
-    const totalFees = totalEntryFees + totalExitFees
-
-    // Slippage estimate based on entry price range (mirrors auto-trader logic)
+    // Trading costs — scoped to CLOSED trades only so preCostPnl is consistent with realizedPnl
+    // (open trade fees are not yet realized so must not be mixed with realized P&L)
     function estimateSlippage(entryPrice: number, betAmount: number): number {
       const base = entryPrice < 0.20 ? 0.06 : entryPrice < 0.30 ? 0.05 : entryPrice < 0.50 ? 0.03 : 0.02
       const sizeImpact = (betAmount / 100) * 0.005
       return base + sizeImpact
     }
+
+    const closedEntryFees = closed.reduce((s, t) => s + t.simulatedUsdc * POLYMARKET_FEE_RATE, 0)
+    const closedExitFees = closed.reduce((s, t) => {
+      if (t.exitPrice == null) return s
+      return s + t.shares * t.exitPrice * POLYMARKET_FEE_RATE
+    }, 0)
+    const closedSlippage = closed.reduce((s, t) => s + estimateSlippage(t.entryPrice, t.simulatedUsdc) * t.simulatedUsdc, 0)
+
+    // For display: show all-trades fees (what the bot has spent total including open positions)
+    const totalEntryFees = all.reduce((s, t) => s + t.simulatedUsdc * POLYMARKET_FEE_RATE, 0)
+    const totalExitFees = closedExitFees
+    const totalFees = totalEntryFees + totalExitFees
     const totalSlippage = all.reduce((s, t) => s + estimateSlippage(t.entryPrice, t.simulatedUsdc) * t.simulatedUsdc, 0)
     const totalCost = totalFees + totalSlippage
     const totalDeployed = all.reduce((s, t) => s + t.simulatedUsdc, 0)
 
-    // Pre-cost alpha = what we would have made without fees or slippage
-    // Since fees and slippage are already baked into pnl, we add them back to get the gross
-    const preCostPnl = realizedPnl + totalFees + totalSlippage
+    // Pre-cost alpha: closed-trades only (consistent scope with realizedPnl)
+    const closedPnlBeforePartials = pnlOf(closed)
+    const preCostPnl = closedPnlBeforePartials + closedEntryFees + closedExitFees + closedSlippage
 
     const costs = {
       totalEntryFees,
@@ -310,11 +353,14 @@ export async function GET(): Promise<NextResponse> {
         startingBalance: startBal,
         currentBalance: startBal + realizedPnl,
         realizedPnl,
+        partialExitsPnl,
         unrealizedPnl,
         totalInvested,
         availableCash,
         totalRedeemable,
         roi: startBal > 0 ? realizedPnl / startBal : 0,
+        tradingDays: Math.round(tradingDays * 10) / 10,
+        avgHoldDays: Math.round(avgHoldDays * 10) / 10,
         totalTrades: all.length,
         openTrades: open.length,
         closedTrades: closed.length,
