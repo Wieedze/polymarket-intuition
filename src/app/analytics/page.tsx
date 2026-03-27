@@ -36,7 +36,6 @@ type Portfolio = {
   wins: number
   losses: number
   winRate: number
-  closedTrades: number
 }
 
 type DomainStat = { domain: string; trades: number; won: number; lost: number; winRate: number; pnl: number; avgPnl: number }
