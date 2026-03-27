@@ -528,7 +528,8 @@ async function main(): Promise<void> {
   console.log(`  Stale exit:  ${EXIT_CONFIG.staleDays}d < ${(EXIT_CONFIG.staleThreshold * 100).toFixed(0)}¢ move`)
   console.log(`  Expert exit: ${EXIT_CONFIG.followExpertExit ? 'ON' : 'OFF'}`)
   console.log(`  Max capital: ${(MAX_CAPITAL_PCT * 100).toFixed(0)}%`)
-  console.log(`  Consensus:   2x→1.5x, 3x→2x, 5x→3x sizing`)
+  console.log(`  Near-res:    >${(EXIT_CONFIG.nearResolutionThreshold * 100).toFixed(0)}¢ YES / <${((1 - EXIT_CONFIG.nearResolutionThreshold) * 100).toFixed(0)}¢ NO`)
+  console.log(`  Consensus:   1x=1.0 | 2x=0.7 | 3x=0.5 | 5x=0.3 (inverted)`)
   console.log(`  Poll every: ${POLL_INTERVAL_MS / 1000}s`)
   console.log('═══════════════════════════════════════════════')
 

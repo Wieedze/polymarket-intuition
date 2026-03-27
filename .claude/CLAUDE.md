@@ -1,19 +1,27 @@
-# POLYMARKET × INTUITION — CLAUDE.md
+# POLYMARKET COPY TRADER — CLAUDE.md
 > Briefing complet pour Claude Code. Lire entièrement avant chaque session.
 
 ---
 
 ## Vision du projet
 
-Indexer les résolutions de trades Polymarket et créer des attestations Intuition
-on-chain pour chaque wallet — construisant la première couche de réputation
-prédictive vérifiable, permanente et composable pour les prediction markets.
+Un bot de copy-trading papier (simulation) sur Polymarket.
+Il indexe les trades résolus des meilleurs wallets, les classe par domaine, calcule un score de signal pour chaque opportunité, et simule des positions avec gestion des risques (Kelly sizing, stop-loss, near-resolution exit).
 
-**Ce que ça prouve :**
-- Un wallet qui trade bien sur les marchés AI → attestation `predicted-correctly-in` → `pm-domain/ai-tech`
-- Après N trades → score de réputation calibré par domaine
-- Page publique partageable : `/profile/0x...`
-- Trust Score MCP (EigenTrust, AgentRank) lisible depuis n'importe quel agent
+**Ce que ça fait concrètement :**
+- Indexe ~400 trades/jour depuis l'API Polymarket
+- Classe chaque marché dans un des 9 domaines (sports, crypto, politique...)
+- Évalue chaque expert par domaine (win rate, calibration, implicit edge)
+- Score chaque signal 0–100 avant de copier
+- Simule des positions paper trading avec exits automatiques
+- Dashboard web temps réel avec refresh auto toutes les 30s
+- Leaderboard des meilleurs wallets avec score de copiabilité
+
+**Décisions importantes déjà prises :**
+- Pas d'attestations Intuition on-chain (supprimé)
+- Pas de Trust MCP / AgentRank (supprimé)
+- Pas de fallback LLM dans le classifier (pure keyword, deterministe)
+- Gate "prêt pour le réel" : 4000 trades résolus minimum
 
 ---
 
@@ -22,25 +30,30 @@ prédictive vérifiable, permanente et composable pour les prediction markets.
 | Couche | Technologie |
 |--------|-------------|
 | Framework | Next.js 14 App Router + TypeScript strict |
-| UI | Tailwind CSS |
-| On-chain | Wagmi v2 + Viem |
-| Intuition | @0xintuition/intuition-ts SDK |
-| Trust scores | Intuition Trust Score MCP (mcp.intuition.box) |
+| UI | Tailwind CSS + inline styles (design system COLORS) |
+| Base de données | SQLite (better-sqlite3, WAL mode) |
 | Tests | Vitest |
-| Deploy | Vercel |
+| Deploy | VPS + PM2 |
 
 **Règle TypeScript** : pas de `any`, jamais. Chaque fonction a un return type explicite.
+
+**Design system** : toutes les pages utilisent le même objet COLORS :
+```typescript
+const COLORS = {
+  bg: '#171821', card: '#21222D', surface: '#2B2B36',
+  teal: '#A9DFD8', amber: '#FCB859', pink: '#F2C8ED',
+  red: '#EA1701', green: '#029F04', blue: '#28AEF3',
+  textMuted: '#87888C', textLight: '#D2D2D2',
+}
+```
 
 ---
 
 ## APIs externes
 
 ```
-Polymarket Gamma  : https://gamma-api.polymarket.com
 Polymarket Data   : https://data-api.polymarket.com
-Intuition Graph   : https://graph.intuition.systems/graphql
-Trust Score MCP   : https://mcp.intuition.box
-Intuition RPC     : https://rpc.intuition.systems  (chain ID 1155)
+Polymarket Gamma  : https://gamma-api.polymarket.com
 ```
 
 ---
@@ -52,7 +65,6 @@ polymarket-intuition/
 ├── .claude/
 │   ├── CLAUDE.md                     ← CE FICHIER
 │   └── commands/
-│       ├── init-atoms.md             ← /init-atoms
 │       ├── index-wallet.md           ← /index-wallet [address]
 │       ├── check-profile.md          ← /check-profile [address]
 │       ├── run-tests.md              ← /run-tests
@@ -60,253 +72,127 @@ polymarket-intuition/
 │
 ├── src/
 │   ├── app/
-│   │   ├── page.tsx                  ← Landing + barre de recherche
+│   │   ├── page.tsx                  ← Dashboard principal (equity curve, stats)
+│   │   ├── analytics/page.tsx        ← Analytics avancés (gates, by domain/expert)
+│   │   ├── paper-trading/page.tsx    ← Liste des trades paper (open/closed)
+│   │   ├── leaderboard/page.tsx      ← Leaderboard copyabilité (chargement manuel)
+│   │   ├── settings/page.tsx         ← Gestion des wallets surveillés
 │   │   ├── profile/[address]/
-│   │   │   └── page.tsx              ← Page profil publique
+│   │   │   └── page.tsx              ← Page profil publique wallet
 │   │   └── api/
+│   │       ├── dashboard/route.ts    ← Stats portfolio + equity curve
+│   │       ├── analytics/route.ts    ← Analytics détaillés + validation gates
+│   │       ├── paper-trading/route.ts← CRUD trades paper + actions refresh/resolve
+│   │       ├── leaderboard/route.ts  ← Calcul leaderboard (cache 30min)
+│   │       ├── settings/wallets/route.ts ← CRUD watched_wallets
 │   │       ├── polymarket/
 │   │       │   ├── trades/route.ts
 │   │       │   └── classify/route.ts
-│   │       ├── intuition/
-│   │       │   ├── attest/route.ts
-│   │       │   └── reputation/route.ts
-│   │       └── trust/
-│   │           └── score/route.ts
+│   │       └── intuition/
+│   │           └── reputation/route.ts
 │   │
 │   ├── lib/
-│   │   ├── atoms.ts                  ← Constantes atomes Intuition
-│   │   ├── polymarket.ts             ← Client Polymarket API
-│   │   ├── classifier.ts             ← Marché → domaine
-│   │   ├── scorer.ts                 ← Win rate + calibration
-│   │   ├── intuition.ts              ← Client Intuition SDK
-│   │   └── trust-mcp.ts             ← Client Trust Score MCP
+│   │   ├── atoms.ts                  ← Constantes domaines (DOMAIN_ATOMS)
+│   │   ├── polymarket.ts             ← Client API Polymarket (fetch trades)
+│   │   ├── classifier.ts             ← Marché → domaine (keyword scoring pur)
+│   │   ├── scorer.ts                 ← Win rate, calibration, Kelly, implicit edge
+│   │   ├── signal-scorer.ts          ← Score 0-100 pour chaque signal à copier
+│   │   ├── exit-strategy.ts          ← Stop-loss, near-resolution, trailing, partial
+│   │   ├── expert-trust.ts           ← Phases observation/evaluation/proven par expert
+│   │   ├── position-tracker.ts       ← Suivi des positions ouvertes (prix live)
+│   │   ├── real-trader.ts            ← Fichiers wallets experts réels surveillés
+│   │   ├── indexer.ts                ← Orchestration : fetch → classify → save stats
+│   │   └── db.ts                     ← SQLite : toutes les queries
 │   │
 │   ├── components/
 │   │   ├── ReputationProfile.tsx
 │   │   ├── DomainCard.tsx
-│   │   ├── TradeHistory.tsx
-│   │   ├── TrustBadge.tsx
 │   │   └── SearchBar.tsx
 │   │
 │   └── types/
-│       ├── polymarket.ts
-│       ├── attestation.ts
-│       └── reputation.ts
+│       ├── polymarket.ts             ← ResolvedTrade, WalletTrades
+│       ├── attestation.ts            ← DomainAtom (type only, pas d'on-chain)
+│       └── reputation.ts             ← DomainReputation, WalletReputation
+│
+├── scripts/
+│   ├── auto-trader.ts                ← Bot principal (PM2) : poll → score → copy
+│   ├── bulk-index.ts                 ← Indexe une liste de wallets
+│   ├── bulk-index-all.ts             ← Indexe tous les wallets watched_wallets
+│   ├── live-trader.ts                ← Variante trader en temps réel
+│   ├── monitor.ts                    ← Monitoring console du bot
+│   ├── analytics.ts                  ← Analytics CLI
+│   └── debug-*.ts                    ← Scripts de debug
 │
 └── tests/
     └── lib/
+        ├── classifier.test.ts        ← 100% précision sur 45 cas réels
+        ├── indexer.test.ts
         ├── polymarket.test.ts
-        ├── classifier.test.ts    ← LE PLUS CRITIQUE
         ├── scorer.test.ts
-        └── trust-mcp.test.ts
+        └── signal-scorer.test.ts
 ```
 
 ---
 
-## Types TypeScript
+## Base de données SQLite
 
-### src/types/polymarket.ts
+Tables principales :
+- `trades` — tous les trades résolus indexés (avec domain, classifier_confidence)
+- `wallet_stats` — stats agrégées par (wallet, domain) : win_rate, calibration, implicit_edge, decay_factor...
+- `paper_trades` — positions paper trading simulées
+- `paper_portfolio` — balance, starting_balance, bet_size
+- `watched_wallets` — wallets experts à surveiller (avec label, active flag)
+- `position_snapshots` — snapshot prix live des positions ouvertes
+- `leaderboard_cache` — cache leaderboard Polymarket (TTL 30min via `leaderboard_results_cache`)
+- `update_queue` — file de mise à jour prioritaire des wallets
 
-```typescript
-export type ResolvedTrade = {
-  id: string
-  marketId: string
-  marketQuestion: string
-  side: 'YES' | 'NO'
-  entryPrice: number
-  size: number
-  outcome: 'won' | 'lost'
-  pnl: number
-  resolvedAt: string
-  transactionHash: string
-}
+---
 
-export type WalletTrades = {
-  address: string
-  trades: ResolvedTrade[]
-  totalTrades: number
-  totalPnl: number
-}
+## Flux principal (auto-trader)
+
 ```
-
-### src/types/attestation.ts
-
-```typescript
-export type DomainAtom =
-  | 'pm-domain/ai-tech'
-  | 'pm-domain/politics'
-  | 'pm-domain/crypto'
-  | 'pm-domain/sports'
-  | 'pm-domain/economics'
-  | 'pm-domain/science'
-  | 'pm-domain/culture'
-  | 'pm-domain/weather'
-  | 'pm-domain/geopolitics'
-
-export type PredicateAtom =
-  | 'predicted-correctly-in'
-  | 'predicted-incorrectly-in'
-  | 'has-prediction-reputation-in'
-
-export type AtomicAttestation = {
-  subject  : `0x${string}`
-  predicate: 'predicted-correctly-in' | 'predicted-incorrectly-in'
-  object   : DomainAtom
-  metadata : {
-    platform             : 'polymarket'
-    marketId             : string
-    marketQuestion       : string
-    conviction           : number
-    entryPrice           : number
-    resolvedAt           : string
-    pnl                  : number
-    classifierConfidence : number
-  }
-}
-
-export type AggregatedAttestation = {
-  subject  : `0x${string}`
-  predicate: 'has-prediction-reputation-in'
-  object   : DomainAtom
-  metadata : {
-    winRate       : number
-    trades        : number
-    calibration   : number
-    avgConviction : number
-    totalPnl      : number
-    lastUpdated   : string
-    source        : 'polymarket-indexer-v1'
-  }
-}
-```
-
-### src/types/reputation.ts
-
-```typescript
-import type { DomainAtom } from './attestation'
-
-export type DomainReputation = {
-  domain         : DomainAtom
-  winRate        : number
-  trades         : number
-  calibration    : number
-  avgConviction  : number
-  totalPnl       : number
-  agentRank?     : number
-  compositeScore?: number
-  lastUpdated    : string
-}
-
-export type WalletReputation = {
-  address           : string
-  domains           : DomainReputation[]
-  totalAttestations : number
-  computedAt        : string
-}
+[PM2] auto-trader.ts toutes les N minutes
+  → fetchPositionSnapshots() — prix live des experts
+  → pour chaque expert actif :
+      → fetchResolvedTrades() → indexWallet() → wallet_stats à jour
+      → detectNewPositions() → signaux potentiels
+      → scoreSignal() → 0-100 (domain match + calibration + winRate + entryPrice + betSize)
+      → si score >= seuil → simulateCopy() → paper_trades
+  → checkExits() — stop-loss / near-resolution / trailing / stale
+  → logBotEvent()
 ```
 
 ---
 
-## src/lib/atoms.ts
+## Signal scoring (signal-scorer.ts)
 
-```typescript
-export const DOMAIN_ATOMS = {
-  AI_TECH     : 'pm-domain/ai-tech',
-  POLITICS    : 'pm-domain/politics',
-  CRYPTO      : 'pm-domain/crypto',
-  SPORTS      : 'pm-domain/sports',
-  ECONOMICS   : 'pm-domain/economics',
-  SCIENCE     : 'pm-domain/science',
-  CULTURE     : 'pm-domain/culture',
-  WEATHER     : 'pm-domain/weather',
-  GEOPOLITICS : 'pm-domain/geopolitics',
-} as const
-
-export const PREDICATE_ATOMS = {
-  PREDICTED_CORRECTLY  : 'predicted-correctly-in',
-  PREDICTED_INCORRECTLY: 'predicted-incorrectly-in',
-  HAS_REPUTATION       : 'has-prediction-reputation-in',
-} as const
-
-export type DomainAtomKey   = keyof typeof DOMAIN_ATOMS
-export type DomainAtomValue = typeof DOMAIN_ATOMS[DomainAtomKey]
-export const ATOM_IDS: Partial<Record<DomainAtomValue | string, string>> = {}
-```
+Score 0–100 composé de :
+- **Domain performance** (×1.0–2.0) : calibration + winRate de l'expert dans ce domaine
+- **Entry price edge** : longshots 15–30¢ ont le meilleur edge observé
+- **Bet size** : consensus (>$100) légèrement favorisé
+- **Decay factor** : pénalise les experts inactifs
 
 ---
 
-## src/lib/polymarket.ts
+## Exit strategy (exit-strategy.ts)
 
-- Endpoint : `{POLYMARKET_DATA_URL}/activity?user={address}&limit=500`
-- Filtrer : `type === 'TRADE'` ET `outcome !== null`
-- Parser side, outcome, entryPrice, size, pnl (tout en string dans l'API → number)
-- totalPnl = somme de tous les pnl
-- Throw `Error('Polymarket API error: {status}')` si non-200
-
----
-
-## src/lib/classifier.ts
-
-**LE COMPOSANT LE PLUS CRITIQUE.**
-
-Stratégie : keywords matching → si confiance < 0.85 → LLM fallback → si confiance < 0.70 → null
-
-```typescript
-export type ClassificationResult = {
-  domain    : DomainAtomValue
-  confidence: number
-} | null
-
-export async function classifyMarket(
-  question: string,
-  category?: string
-): Promise<ClassificationResult>
-```
-
-Keywords par domaine :
-- ai-tech : ai, gpt, claude, openai, llm, nvidia, chip, robot, tech, software, ipo
-- politics : election, president, congress, vote, trump, prime minister, party
-- crypto : bitcoin, btc, ethereum, eth, defi, nft, token, coinbase, etf, halving
-- sports : nba, nfl, world cup, super bowl, championship, tournament, match
-- economics : fed, cpi, inflation, gdp, interest rate, recession, nfp, fomc
-- science : fda, vaccine, nasa, spacex, rocket, mars, clinical trial, disease
-- culture : oscar, grammy, movie, album, netflix, spotify, celebrity, award
-- weather : temperature, celsius, rain, hurricane, storm, highest temp, forecast
-- geopolitics : war, invasion, nato, russia, ukraine, china, taiwan, sanctions
-
-Seuil minimum pour créer une attestation : confiance >= 0.70
-Minimum de trades par domaine pour attestation niveau 2 : 5
+Config `DEFAULT_CONFIG` :
+- `stopLossPct: 0.5` — exit si perte > 50% de la mise
+- `nearResolutionThreshold: 0.85` — YES exit à >=85¢, NO exit à <=15¢
+- `staleAfterDays: 30` — ferme les positions trop vieilles
+- Partial exits à +100% et +150% de profit (improvements branch)
 
 ---
 
-## src/lib/scorer.ts
+## Validation gates (analytics)
 
-```typescript
-// Win rate simple
-export function calculateWinRate(trades: ResolvedTrade[]): number
+Pour valider que le système est prêt à passer en réel :
+- Profit Factor ≥ 1.30
+- Max pertes consécutives ≤ 15
+- PnL moyen/trade > +$5
+- **Trades résolus ≥ 4000** (≈10 jours à 400/jour)
 
-// Brier Score inversé — calibration
-// predictedProb = entryPrice si YES, (1 - entryPrice) si NO
-// outcome = 1 si won, 0 si lost
-// calibration = 1 - moyenne((predictedProb - outcome)²)
-// 1.0 = parfait | 0.75 = aléatoire | <0.75 = pire que hasard
-export function calculateCalibration(trades: ResolvedTrade[]): number
-```
-
----
-
-## Flux complet
-
-```
-fetchResolvedTrades(address)
-  → classifyMarket(question) → domain | null
-  → skip si null
-  → calculateWinRate + calculateCalibration par domaine
-  → createAtomicAttestation() si nouvelle trade
-  → createAggregatedAttestation() si >= 5 trades dans domaine
-  → getCompositeScore() + getAgentRank() depuis Trust MCP
-  → afficher /profile/[address]
-```
+Significance statistique du win rate : < 100 = non significatif, 100–1000 = low, 1000–4000 = medium, 4000+ = high.
 
 ---
 
@@ -315,42 +201,24 @@ fetchResolvedTrades(address)
 ```bash
 POLYMARKET_API_URL=https://gamma-api.polymarket.com
 POLYMARKET_DATA_URL=https://data-api.polymarket.com
-INTUITION_PRIVATE_KEY=
-INTUITION_RPC_URL=https://rpc.intuition.systems
-INTUITION_GRAPH_URL=https://graph.intuition.systems/graphql
-TRUST_MCP_URL=https://mcp.intuition.box
-ANTHROPIC_API_KEY=
-```
-
----
-
-## Phases — ordre strict, pas de saut
-
-```
-Phase 1 — polymarket.ts + tests          → Critère : tous les tests passent
-Phase 2 — classifier.ts + tests          → Critère : > 90% précision
-Phase 3 — scorer.ts + intuition.ts       → Critère : attestations dans le graphe
-Phase 4 — trust-mcp.ts + API routes      → Critère : scores cohérents
-Phase 5 — UI Next.js + Vercel deploy     → Critère : URL publique partageable
 ```
 
 ---
 
 ## Commands disponibles
 
-- `/init-atoms` — crée les 9 atomes de domaine + 3 prédicats dans Intuition
-- `/index-wallet [address]` — indexe un wallet complet (trades → attestations)
-- `/check-profile [address]` — lecture seule, affiche réputation actuelle
+- `/index-wallet [address]` — indexe un wallet complet
+- `/check-profile [address]` — affiche réputation actuelle
 - `/run-tests` — lance vitest run
-- `/validate-classifier` — teste précision sur 50 marchés réels
+- `/validate-classifier` — teste précision sur marchés réels
 
 ---
 
 ## Règles absolues
 
-1. Pas de `any` TypeScript
+1. Pas de `any` TypeScript — jamais
 2. Return type explicite sur chaque fonction
-3. Toujours `attestationExists()` avant de créer
-4. Ne jamais sauter une phase si les tests échouent
-5. Toutes les constantes dans `atoms.ts`
+3. Pas de fallback LLM dans le classifier
+4. Pas d'attestations on-chain ni Trust MCP
+5. Toutes les constantes de domaine dans `atoms.ts`
 6. Lire ce CLAUDE.md au début de chaque session
