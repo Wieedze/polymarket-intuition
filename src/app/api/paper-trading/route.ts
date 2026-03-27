@@ -99,24 +99,51 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
     const startingBalance = parseFloat(getPortfolioSetting('starting_balance', '10000'))
     const betSizeUsdc = parseFloat(getPortfolioSetting('bet_size_usdc', '100'))
+    const FEE = 0.02
 
-    const realizedPnl = closedTrades.reduce((s, t) => s + (t.pnl ?? 0), 0)
-    const unrealizedPnl = openTrades.reduce((s, t) => {
-      if (t.curPrice == null) return s
-      return s + t.shares * (t.curPrice - t.entryPrice)
+    // Partial exit PnL from still-open trades
+    const partialExitsPnl = openTrades.reduce((s, t) =>
+      s + t.partialExits.reduce((ps, e) => ps + e.pnl, 0), 0)
+    const realizedPnl = closedTrades.reduce((s, t) => s + (t.pnl ?? 0), 0) + partialExitsPnl
+
+    // Remaining cost basis (partial exits return capital proportionally)
+    const totalInvested = openTrades.reduce((s, t) => {
+      const fraction = t.sharesRemaining != null && t.shares > 0 ? t.sharesRemaining / t.shares : 1
+      return s + t.simulatedUsdc * fraction
     }, 0)
 
-    const totalInvested = openTrades.reduce((s, t) => s + t.simulatedUsdc, 0)
+    // True unrealized: proceeds if sold now (after 2% exit fee) minus remaining cost basis
+    const unrealizedPnl = openTrades.reduce((s, t) => {
+      if (t.curPrice == null) return s
+      const sharesNow = t.sharesRemaining ?? t.shares
+      const fraction = t.shares > 0 ? sharesNow / t.shares : 1
+      return s + sharesNow * t.curPrice * (1 - FEE) - t.simulatedUsdc * fraction
+    }, 0)
+
     const currentBalance = startingBalance + realizedPnl
     const wins = closedTrades.filter((t) => t.status === 'won').length
     const losses = closedTrades.filter((t) => t.status === 'lost').length
     const winRate = closedTrades.length > 0 ? wins / closedTrades.length : 0
+
+    // Trading duration
+    const allDates = allTrades.map((t) => new Date(t.openedAt).getTime())
+    const firstTradeAt = allDates.length > 0 ? Math.min(...allDates) : Date.now()
+    const tradingDays = Math.max((Date.now() - firstTradeAt) / (1000 * 60 * 60 * 24), 1)
+
+    // Avg hold time for closed trades
+    const tradesWithHold = closedTrades.filter((t) => t.resolvedAt != null)
+    const avgHoldDays = tradesWithHold.length > 0
+      ? tradesWithHold.reduce((s, t) => {
+          return s + (new Date(t.resolvedAt!).getTime() - new Date(t.openedAt).getTime()) / (1000 * 60 * 60 * 24)
+        }, 0) / tradesWithHold.length
+      : 0
 
     return NextResponse.json({
       portfolio: {
         startingBalance,
         currentBalance,
         realizedPnl,
+        partialExitsPnl,
         unrealizedPnl,
         totalInvested,
         betSizeUsdc,
@@ -127,6 +154,8 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
         losses,
         winRate,
         roi: startingBalance > 0 ? realizedPnl / startingBalance : 0,
+        tradingDays: Math.round(tradingDays * 10) / 10,
+        avgHoldDays: Math.round(avgHoldDays * 10) / 10,
       },
       trades: allTrades,
     })

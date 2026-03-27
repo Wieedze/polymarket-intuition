@@ -18,6 +18,8 @@ const COLORS = {
   textLight: '#D2D2D2',
 }
 
+type PartialExit = { pct: number; price: number; pnl: number; at: string }
+
 type PaperTrade = {
   id: string
   conditionId: string
@@ -27,6 +29,8 @@ type PaperTrade = {
   entryPrice: number
   simulatedUsdc: number
   shares: number
+  sharesRemaining: number | null
+  partialExits: PartialExit[]
   copiedFrom: string
   copiedLabel: string | null
   status: 'open' | 'won' | 'lost'
@@ -41,9 +45,12 @@ type Portfolio = {
   startingBalance: number
   currentBalance: number
   realizedPnl: number
+  partialExitsPnl: number
   unrealizedPnl: number
   totalInvested: number
   betSizeUsdc: number
+  tradingDays: number
+  avgHoldDays: number
   totalTrades: number
   openTrades: number
   closedTrades: number
@@ -175,7 +182,9 @@ export default function PaperTradingPage(): React.ReactElement {
             <SideLink href="/">Dashboard</SideLink>
             <SideLink href="/analytics">Analytics</SideLink>
             <SideLink href="/paper-trading" active>Trades</SideLink>
+            <SideLink href="/activity">Activity</SideLink>
             <SideLink href="/leaderboard">Leaderboard</SideLink>
+            <SideLink href="/settings">Settings</SideLink>
           </nav>
           <div className="mt-auto pt-8">
             <div className="p-3 rounded-lg" style={{ background: COLORS.surface }}>
@@ -236,38 +245,56 @@ export default function PaperTradingPage(): React.ReactElement {
             <div className="mb-6 text-sm" style={{ color: COLORS.red }}>{error}</div>
           )}
 
-          {/* Portfolio stats */}
+          {/* Portfolio summary */}
           {p && (
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
-              <div className="p-4 rounded-xl" style={{ background: COLORS.card }}>
-                <div className="text-[11px] uppercase tracking-wider mb-1" style={{ color: COLORS.textMuted }}>Balance</div>
-                <div className="text-xl font-bold" style={{ color: p.currentBalance >= p.startingBalance ? COLORS.teal : COLORS.red }}>
-                  ${p.currentBalance.toFixed(0)}
+            <div className="rounded-xl p-5 mb-6" style={{ background: COLORS.card }}>
+              <div className="flex flex-wrap items-end gap-6 mb-4">
+                <div>
+                  <div className="text-xs uppercase tracking-wider mb-1" style={{ color: COLORS.textMuted }}>Total Equity</div>
+                  <div className="text-3xl font-bold" style={{ color: (p.currentBalance - p.totalInvested + p.unrealizedPnl + p.totalInvested) >= p.startingBalance ? COLORS.teal : COLORS.red }}>
+                    ${(p.currentBalance - p.totalInvested + p.totalInvested + p.unrealizedPnl).toFixed(0)}
+                  </div>
+                  <div className="text-xs mt-0.5" style={{ color: COLORS.textMuted }}>started ${p.startingBalance.toFixed(0)}</div>
                 </div>
-                <div className="text-xs mt-1" style={{ color: COLORS.textMuted }}>Started: ${p.startingBalance.toFixed(0)}</div>
+                <div>
+                  <div className="text-xl font-bold" style={{ color: pnlColor(p.realizedPnl) }}>{pnlStr(p.realizedPnl)} realized</div>
+                  <div className="text-xs mt-0.5" style={{ color: COLORS.textMuted }}>
+                    {pnlStr(p.unrealizedPnl)} unrealized (after fees)
+                    {p.partialExitsPnl !== 0 && <span style={{ color: COLORS.teal }}> · incl. {pnlStr(p.partialExitsPnl)} partial exits</span>}
+                  </div>
+                  <div className="text-xs mt-0.5" style={{ color: COLORS.textMuted }}>
+                    <span style={{ color: pnlColor(p.roi) }}>{(p.roi * 100).toFixed(1)}% ROI</span>
+                    {' '}over {p.tradingDays.toFixed(0)} days · avg hold {p.avgHoldDays.toFixed(1)}d
+                  </div>
+                </div>
               </div>
-              <div className="p-4 rounded-xl" style={{ background: COLORS.card }}>
-                <div className="text-[11px] uppercase tracking-wider mb-1" style={{ color: COLORS.textMuted }}>Realized P&L</div>
-                <div className="text-xl font-bold" style={{ color: pnlColor(p.realizedPnl) }}>
-                  {pnlStr(p.realizedPnl)}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <div className="rounded-lg p-3" style={{ background: COLORS.surface }}>
+                  <div className="text-xs mb-1" style={{ color: COLORS.textMuted }}>Win Rate</div>
+                  <div className="text-lg font-bold" style={{ color: COLORS.amber }}>
+                    {p.closedTrades > 0 ? `${Math.round(p.winRate * 100)}%` : '—'}
+                  </div>
+                  <div className="text-xs" style={{ color: COLORS.textMuted }}>{p.wins}W · {p.losses}L</div>
                 </div>
-                <div className="text-xs mt-1" style={{ color: COLORS.textMuted }}>
-                  Unrealized: {pnlStr(p.unrealizedPnl)}
+                <div className="rounded-lg p-3" style={{ background: COLORS.surface }}>
+                  <div className="text-xs mb-1" style={{ color: COLORS.textMuted }}>At Risk (open)</div>
+                  <div className="text-lg font-bold" style={{ color: COLORS.blue }}>${p.totalInvested.toFixed(0)}</div>
+                  <div className="text-xs" style={{ color: COLORS.textMuted }}>{p.openTrades} positions</div>
                 </div>
-              </div>
-              <div className="p-4 rounded-xl" style={{ background: COLORS.card }}>
-                <div className="text-[11px] uppercase tracking-wider mb-1" style={{ color: COLORS.textMuted }}>Win Rate</div>
-                <div className="text-xl font-bold text-white">
-                  {p.closedTrades > 0 ? `${Math.round(p.winRate * 100)}%` : '—'}
+                <div className="rounded-lg p-3" style={{ background: COLORS.surface }}>
+                  <div className="text-xs mb-1" style={{ color: COLORS.textMuted }}>Available Cash</div>
+                  <div className="text-lg font-bold" style={{ color: p.currentBalance - p.totalInvested >= 0 ? COLORS.textLight : COLORS.red }}>
+                    ${(p.currentBalance - p.totalInvested).toFixed(0)}
+                  </div>
+                  <div className="text-xs" style={{ color: COLORS.textMuted }}>{((( p.currentBalance - p.totalInvested) / p.startingBalance) * 100).toFixed(0)}% of start</div>
                 </div>
-                <div className="text-xs mt-1" style={{ color: COLORS.textMuted }}>{p.wins}W / {p.losses}L</div>
-              </div>
-              <div className="p-4 rounded-xl" style={{ background: COLORS.card }}>
-                <div className="text-[11px] uppercase tracking-wider mb-1" style={{ color: COLORS.textMuted }}>ROI</div>
-                <div className="text-xl font-bold" style={{ color: pnlColor(p.roi) }}>
-                  {p.closedTrades > 0 ? `${(p.roi * 100).toFixed(1)}%` : '—'}
+                <div className="rounded-lg p-3" style={{ background: COLORS.surface }}>
+                  <div className="text-xs mb-1" style={{ color: COLORS.textMuted }}>Avg P&L / trade</div>
+                  <div className="text-lg font-bold" style={{ color: pnlColor(p.closedTrades > 0 ? p.realizedPnl / p.closedTrades : 0) }}>
+                    {p.closedTrades > 0 ? pnlStr(p.realizedPnl / p.closedTrades) : '—'}
+                  </div>
+                  <div className="text-xs" style={{ color: COLORS.textMuted }}>{p.closedTrades} closed</div>
                 </div>
-                <div className="text-xs mt-1" style={{ color: COLORS.textMuted }}>{p.openTrades} open / {p.totalTrades} total</div>
               </div>
             </div>
           )}
@@ -344,9 +371,21 @@ export default function PaperTradingPage(): React.ReactElement {
           ) : (
             <div className="space-y-2">
               {filtered.map((t) => {
-                const unrealized = t.curPrice != null ? t.shares * (t.curPrice - t.entryPrice) : 0
+                const FEE = 0.02
+                const sharesNow = t.sharesRemaining ?? t.shares
+                const fraction = t.shares > 0 ? sharesNow / t.shares : 1
+                // Unrealized: proceeds if sold now (after 2% fee) minus remaining cost basis
+                const unrealized = t.curPrice != null
+                  ? sharesNow * t.curPrice * (1 - FEE) - t.simulatedUsdc * fraction
+                  : 0
+                const partialPnl = (t.partialExits ?? []).reduce((s, e) => s + e.pnl, 0)
                 const displayPnl = t.status === 'open' ? unrealized : (t.pnl ?? 0)
+                const totalPnl = t.status === 'open' ? unrealized + partialPnl : (t.pnl ?? 0)
                 const statusColor = t.status === 'open' ? COLORS.blue : t.status === 'won' ? COLORS.teal : COLORS.red
+                const hasPartials = (t.partialExits ?? []).length > 0
+                const holdDays = t.resolvedAt
+                  ? ((new Date(t.resolvedAt).getTime() - new Date(t.openedAt).getTime()) / 86400000).toFixed(1)
+                  : ((Date.now() - new Date(t.openedAt).getTime()) / 86400000).toFixed(1)
 
                 return (
                   <div
@@ -359,53 +398,54 @@ export default function PaperTradingPage(): React.ReactElement {
                   >
                     <div className="flex items-center gap-3">
                       {/* Status badge */}
-                      <span
-                        className="text-xs font-medium px-2 py-0.5 rounded"
-                        style={{ background: `${statusColor}22`, color: statusColor }}
-                      >
+                      <span className="text-xs font-medium px-2 py-0.5 rounded shrink-0" style={{ background: `${statusColor}22`, color: statusColor }}>
                         {t.status.toUpperCase()}
                       </span>
 
                       {/* Domain */}
                       {t.domain && (
-                        <span
-                          className="text-[10px] px-2 py-0.5 rounded-full"
-                          style={{
-                            background: `${DOMAIN_COLORS[t.domain] ?? COLORS.textMuted}22`,
-                            color: DOMAIN_COLORS[t.domain] ?? COLORS.textMuted,
-                          }}
-                        >
+                        <span className="text-[10px] px-2 py-0.5 rounded-full shrink-0" style={{
+                          background: `${DOMAIN_COLORS[t.domain] ?? COLORS.textMuted}22`,
+                          color: DOMAIN_COLORS[t.domain] ?? COLORS.textMuted,
+                        }}>
                           {DOMAIN_LABELS[t.domain] ?? '?'}
                         </span>
                       )}
 
                       {/* Side */}
-                      <span className="text-xs font-medium" style={{ color: t.side === 'YES' ? COLORS.teal : COLORS.red }}>
+                      <span className="text-xs font-medium shrink-0" style={{ color: t.side === 'YES' ? COLORS.teal : COLORS.red }}>
                         {t.side}
                       </span>
 
                       {/* Title */}
                       <span className="text-sm flex-1 truncate" style={{ color: COLORS.textLight }}>{t.title}</span>
 
+                      {/* Hold time */}
+                      <span className="text-[10px] shrink-0" style={{ color: COLORS.textMuted }}>{holdDays}d</span>
+
+                      {/* Partial exits badge */}
+                      {hasPartials && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded shrink-0" style={{ background: `${COLORS.teal}22`, color: COLORS.teal }}>
+                          +{pnlStr(partialPnl)} partial
+                        </span>
+                      )}
+
                       {/* Prices */}
-                      <div className="text-xs text-right" style={{ color: COLORS.textMuted }}>
+                      <div className="text-xs text-right shrink-0" style={{ color: COLORS.textMuted }}>
                         <span>{(t.entryPrice * 100).toFixed(0)}¢</span>
-                        <span style={{ color: COLORS.surface }}> → </span>
-                        <span style={{ color: t.status === 'open'
-                          ? ((t.curPrice ?? 0) > t.entryPrice ? COLORS.teal : COLORS.red)
-                          : (t.status === 'won' ? COLORS.teal : COLORS.red)
-                        }}>
+                        <span> → </span>
+                        <span style={{ color: displayPnl >= 0 ? COLORS.teal : COLORS.red }}>
                           {(((t.status === 'open' ? t.curPrice : t.exitPrice) ?? 0) * 100).toFixed(0)}¢
                         </span>
                       </div>
 
-                      {/* PnL */}
-                      <div className="text-sm font-medium w-20 text-right" style={{ color: pnlColor(displayPnl) }}>
-                        {pnlStr(displayPnl)}
+                      {/* PnL — total including partials for open trades */}
+                      <div className="text-sm font-medium w-20 text-right shrink-0" style={{ color: pnlColor(totalPnl) }}>
+                        {pnlStr(totalPnl)}
                       </div>
 
                       {/* Copied from */}
-                      <span className="text-[10px] w-20 text-right truncate" style={{ color: COLORS.textMuted }}>
+                      <span className="text-[10px] w-20 text-right truncate shrink-0" style={{ color: COLORS.textMuted }}>
                         {t.copiedLabel ?? truncAddr(t.copiedFrom)}
                       </span>
                     </div>

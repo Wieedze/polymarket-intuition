@@ -90,11 +90,22 @@ export async function GET(): Promise<NextResponse> {
       }))
       .sort((a, b) => b.pnl - a.pnl)
 
+    const allDates = all.map((t) => new Date(t.openedAt).getTime())
+    const firstTradeAt = allDates.length > 0 ? Math.min(...allDates) : Date.now()
+    const tradingDays = Math.max((Date.now() - firstTradeAt) / (1000 * 60 * 60 * 24), 1)
+    const tradesWithHold = closed.filter((t) => t.resolvedAt != null)
+    const avgHoldDays = tradesWithHold.length > 0
+      ? tradesWithHold.reduce((s, t) => s + (new Date(t.resolvedAt!).getTime() - new Date(t.openedAt).getTime()) / (1000 * 60 * 60 * 24), 0) / tradesWithHold.length
+      : 0
+
     return NextResponse.json({
       balance: startBal + realizedPnl,
       startingBalance: startBal,
       realizedPnl,
+      partialExitsPnl,
       unrealizedPnl,
+      tradingDays: Math.round(tradingDays * 10) / 10,
+      avgHoldDays: Math.round(avgHoldDays * 10) / 10,
       totalInvested,
       totalEquity: startBal + realizedPnl - totalInvested + open.reduce((s, t) => {
         if (t.curPrice == null) return s

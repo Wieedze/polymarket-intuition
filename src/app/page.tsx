@@ -23,7 +23,10 @@ type DashboardData = {
   balance: number
   startingBalance: number
   realizedPnl: number
+  partialExitsPnl: number
   unrealizedPnl: number
+  tradingDays: number
+  avgHoldDays: number
   totalInvested: number
   totalEquity: number
   winRate: number
@@ -146,11 +149,36 @@ export default function Dashboard(): React.ReactElement {
 
           {/* Top stats */}
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4 mb-8">
-            <BigStat label="Total Equity" value={`$${data.totalEquity.toFixed(0)}`} change={data.roi} color={COLORS.teal} />
-            <BigStat label="Realized P&L" value={pnlStr(data.realizedPnl)} color={data.realizedPnl >= 0 ? COLORS.green : COLORS.red} />
-            <BigStat label="Win Rate" value={data.wins + data.losses > 0 ? `${(data.winRate * 100).toFixed(0)}%` : '—'} sub={`${data.wins}W · ${data.losses}L`} color={COLORS.amber} />
-            <BigStat label="Open Trades" value={`${data.openTrades}`} sub={`$${data.totalInvested.toFixed(0)} invested`} color={COLORS.blue} />
-            <BigStat label="Unrealized" value={pnlStr(data.unrealizedPnl)} color={data.unrealizedPnl >= 0 ? COLORS.teal : COLORS.red} />
+            <BigStat
+              label="Total Equity"
+              value={`$${data.totalEquity.toFixed(0)}`}
+              sub={`${(data.roi * 100).toFixed(1)}% over ${data.tradingDays.toFixed(0)}d`}
+              color={COLORS.teal}
+            />
+            <BigStat
+              label="Realized P&L"
+              value={pnlStr(data.realizedPnl)}
+              sub={data.partialExitsPnl !== 0 ? `incl. ${pnlStr(data.partialExitsPnl)} partials` : `avg hold ${data.avgHoldDays.toFixed(1)}d`}
+              color={data.realizedPnl >= 0 ? COLORS.green : COLORS.red}
+            />
+            <BigStat
+              label="Win Rate"
+              value={data.wins + data.losses > 0 ? `${(data.winRate * 100).toFixed(0)}%` : '—'}
+              sub={`${data.wins}W · ${data.losses}L`}
+              color={COLORS.amber}
+            />
+            <BigStat
+              label="Open Trades"
+              value={`${data.openTrades}`}
+              sub={`$${data.totalInvested.toFixed(0)} at risk`}
+              color={COLORS.blue}
+            />
+            <BigStat
+              label="Unrealized"
+              value={pnlStr(data.unrealizedPnl)}
+              sub="after 2% exit fee"
+              color={data.unrealizedPnl >= 0 ? COLORS.teal : COLORS.red}
+            />
           </div>
 
           {/* Charts */}
