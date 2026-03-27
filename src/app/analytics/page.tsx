@@ -183,8 +183,8 @@ export default function AnalyticsPage(): React.ReactElement {
             <SideLink href="/">Dashboard</SideLink>
             <SideLink href="/analytics" active>Analytics</SideLink>
             <SideLink href="/paper-trading">Trades</SideLink>
-            <SideLink href="/leaderboard">Leaderboard</SideLink>
             <SideLink href="/activity">Activity</SideLink>
+            <SideLink href="/leaderboard">Leaderboard</SideLink>
             <SideLink href="/settings">Settings</SideLink>
           </nav>
           <div className="mt-auto pt-8">
