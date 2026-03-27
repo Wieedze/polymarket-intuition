@@ -686,44 +686,45 @@ export function resolvePaperTrade(
 
   const db = getDb()
   const rows = db.prepare(
-    "SELECT id, entry_price, shares, simulated_usdc, side FROM paper_trades WHERE condition_id = ? AND status = 'open'"
+    "SELECT id, entry_price, shares, shares_remaining, simulated_usdc, side FROM paper_trades WHERE condition_id = ? AND status = 'open'"
   ).all(conditionId) as Array<Record<string, unknown>>
 
   for (const row of rows) {
     const entryPrice = row.entry_price as number
     const shares = row.shares as number
+    const sharesRemaining = (row.shares_remaining as number | null) ?? shares
     const simulatedUsdc = row.simulated_usdc as number
     const side = row.side as string
     const id = row.id as string
+    // fraction of original position still open after any partial exits
+    const fraction = sharesRemaining / shares
 
-    // PnL calculation for binary markets
-    // YES side: paid entryPrice per share, receives $1 if YES resolves, $0 if NO
-    // NO side: paid (1-entryPrice) per share, receives $1 if NO resolves, $0 if YES
-    // shares = simulatedUsdc / entryPrice (so shares × entryPrice = investment)
+    // PnL calculation — using only remaining shares/investment (partial exits already recorded)
+    // shares = simulatedUsdc / entryPrice (so sharesRemaining × entryPrice = remaining investment)
     let pnl: number
     let status: string
     if (exitPrice > 0.95) {
       // Market resolved YES
       if (side === 'YES') {
-        pnl = shares * (1 - entryPrice)  // paid entryPrice, got $1
+        pnl = sharesRemaining * (1 - entryPrice)  // paid entryPrice, got $1 per remaining share
         status = 'won'
       } else {
-        pnl = -simulatedUsdc  // lost entire investment
+        pnl = -(simulatedUsdc * fraction)  // lost remaining portion of investment
         status = 'lost'
       }
     } else if (exitPrice < 0.05) {
       // Market resolved NO — NO token resolves to $1, same payout structure as YES
       if (side === 'NO') {
-        pnl = shares * (1 - entryPrice)  // paid entryPrice, got $1 per share
+        pnl = sharesRemaining * (1 - entryPrice)  // paid entryPrice, got $1 per remaining share
         status = 'won'
       } else {
-        pnl = -simulatedUsdc  // lost entire investment
+        pnl = -(simulatedUsdc * fraction)  // lost remaining portion of investment
         status = 'lost'
       }
     } else {
       // Not fully resolved — paper exit at current price (selling = taker fee applies)
-      const netProceeds = shares * exitPrice * (1 - POLYMARKET_FEE)
-      pnl = netProceeds - simulatedUsdc
+      const netProceeds = sharesRemaining * exitPrice * (1 - POLYMARKET_FEE)
+      pnl = netProceeds - simulatedUsdc * fraction
       status = pnl > 0 ? 'won' : 'lost'
     }
 
@@ -758,22 +759,17 @@ export function partialExitPaperTrade(
   const entryPrice = row.entry_price as number
   const totalShares = row.shares as number
   const sharesRemaining = (row.shares_remaining as number | null) ?? totalShares
-  const side = row.side as string
   const existingExits: PartialExit[] = JSON.parse((row.partial_exits as string | null) ?? '[]')
 
   // Shares to sell in this partial exit
   const sharesToSell = sharesRemaining * exitPriceFraction
 
   // PnL on the sold portion (selling early = taker fee applies on proceeds)
+  // entryPrice and curPrice are always the token's own price (YES or NO), so the
+  // formula is identical for both sides: profit when curPrice > entryPrice.
   const costBasis = sharesToSell * entryPrice
   const netProceeds = sharesToSell * curPrice * (1 - POLYMARKET_FEE)
-  let pnl: number
-  if (side === 'YES') {
-    pnl = netProceeds - costBasis
-  } else {
-    // NO side: profit when price drops — cost basis is (1-entryPrice) per share
-    pnl = sharesToSell * (1 - curPrice) * (1 - POLYMARKET_FEE) - sharesToSell * (1 - entryPrice)
-  }
+  const pnl = netProceeds - costBasis
 
   const newSharesRemaining = sharesRemaining - sharesToSell
 

@@ -85,9 +85,7 @@ export function evaluateExit(
   // Calculate PnL percentage based on side
   const pnlPct = calcPnlPct(trade.side, trade.entryPrice, trade.curPrice)
   const peakPrice = trade.peakPrice ?? trade.curPrice
-  const peakPnlPct = trade.side === 'YES'
-    ? calcPnlPct('YES', trade.entryPrice, peakPrice)
-    : pnlPct // For NO, peak tracking is complex — use current
+  const peakPnlPct = calcPnlPct(trade.side, trade.entryPrice, peakPrice)
 
   // 0. PARTIAL EXITS — free capital at profit milestones without closing position
   //    Check how many partial exits already done to avoid re-triggering
@@ -118,8 +116,9 @@ export function evaluateExit(
   }
 
   // 1. NEAR-RESOLUTION early exit — capture ~85% of max value without waiting
-  //    YES: exit when price >= 0.85 (e.g. 85¢ → already near certain YES)
-  //    NO:  exit when price <= 0.15 (e.g. 15¢ → near certain YES means NO lost)
+  //    YES: exit when YES token >= 0.85 (near certain YES win)
+  //    NO:  exit when NO token >= 0.85 (near certain NO win)
+  //         OR when NO token <= 0.15 (near certain YES = cut losses early)
   const threshold = config.nearResolutionThreshold
   if (trade.side === 'YES' && trade.curPrice >= threshold) {
     return {
@@ -130,13 +129,22 @@ export function evaluateExit(
       message: `Near-resolution exit: YES at ${(trade.curPrice * 100).toFixed(0)}¢ (threshold: ${(threshold * 100).toFixed(0)}¢)`,
     }
   }
+  if (trade.side === 'NO' && trade.curPrice >= threshold) {
+    return {
+      shouldExit: true,
+      reason: 'near-resolution',
+      pnlPct,
+      peakPnlPct,
+      message: `Near-resolution exit: NO token at ${(trade.curPrice * 100).toFixed(0)}¢ — capturing gains`,
+    }
+  }
   if (trade.side === 'NO' && trade.curPrice <= (1 - threshold)) {
     return {
       shouldExit: true,
       reason: 'near-resolution',
       pnlPct,
       peakPnlPct,
-      message: `Near-resolution exit: NO at ${(trade.curPrice * 100).toFixed(0)}¢ (threshold: ${((1 - threshold) * 100).toFixed(0)}¢)`,
+      message: `Near-resolution cut: NO token at ${(trade.curPrice * 100).toFixed(0)}¢ — YES near certain`,
     }
   }
 
@@ -212,13 +220,11 @@ export function evaluateExit(
 
 // ── Helpers ──────────────────────────────────────────────────────
 
-function calcPnlPct(side: string, entryPrice: number, curPrice: number): number {
+function calcPnlPct(_side: string, entryPrice: number, curPrice: number): number {
   if (entryPrice === 0) return 0
-  if (side === 'YES') {
-    return (curPrice - entryPrice) / entryPrice
-  }
-  // NO side: profit when price drops
-  return (entryPrice - curPrice) / entryPrice
+  // Both YES and NO: entryPrice and curPrice are the token's own price.
+  // Profit when the token price rises above entry (for YES: YES token rises; for NO: NO token rises).
+  return (curPrice - entryPrice) / entryPrice
 }
 
 /**

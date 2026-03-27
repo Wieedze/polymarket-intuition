@@ -40,7 +40,7 @@ describe('scoreSignal', () => {
     vi.mocked(getWalletStats).mockReturnValue([])
     const signal = scoreSignal({
       expertWallet: '0xtest',
-      marketTitle: 'Will Bitcoin reach $100K?',
+      marketTitle: 'Will there be a US government shutdown in 2025?',
       entryPrice: 0.50,
       positionSize: 1000,
     })
@@ -51,7 +51,7 @@ describe('scoreSignal', () => {
   it('scores high for expert in their best domain', () => {
     vi.mocked(getWalletStats).mockReturnValue([
       {
-        wallet: '0xtest', domain: 'pm-domain/crypto',
+        wallet: '0xtest', domain: 'pm-domain/politics',
         winRate: 0.65, calibration: 0.82, tradesCount: 30,
         avgConviction: 0.5, totalPnl: 5000, decayFactor: 1,
         lastTradeAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
@@ -60,7 +60,7 @@ describe('scoreSignal', () => {
     ])
     const signal = scoreSignal({
       expertWallet: '0xtest',
-      marketTitle: 'Will Bitcoin reach $100K?',
+      marketTitle: 'Will there be a US government shutdown in 2025?',
       entryPrice: 0.45,
       positionSize: 50000,
     })
@@ -94,7 +94,7 @@ describe('scoreSignal', () => {
   it('gives better score for good entry price range', () => {
     vi.mocked(getWalletStats).mockReturnValue([
       {
-        wallet: '0xtest', domain: 'pm-domain/crypto',
+        wallet: '0xtest', domain: 'pm-domain/sports',
         winRate: 0.55, calibration: 0.70, tradesCount: 10,
         avgConviction: 0.5, totalPnl: 1000, decayFactor: 1,
         lastTradeAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
@@ -103,13 +103,13 @@ describe('scoreSignal', () => {
     ])
     const goodEntry = scoreSignal({
       expertWallet: '0xtest',
-      marketTitle: 'Will ETH reach $5000?',
+      marketTitle: 'Will the Kansas City Chiefs win the Super Bowl?',
       entryPrice: 0.40,
       positionSize: 5000,
     })
     const badEntry = scoreSignal({
       expertWallet: '0xtest',
-      marketTitle: 'Will ETH reach $5000?',
+      marketTitle: 'Will the Kansas City Chiefs win the Super Bowl?',
       entryPrice: 0.88,
       positionSize: 5000,
     })

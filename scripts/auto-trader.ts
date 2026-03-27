@@ -369,7 +369,7 @@ function runExitStrategy(): Record<string, number> {
     try {
       // Partial exit — sell a fraction, keep the rest open
       if ((decision.reason === 'partial-exit-100' || decision.reason === 'partial-exit-150') && decision.partialFraction) {
-        partialExitPaperTrade(trade.conditionId, exitPrice, decision.partialFraction)
+        partialExitPaperTrade(trade.conditionId, decision.partialFraction, exitPrice)
         const sharesRemaining = (trade.sharesRemaining ?? trade.shares)
         const sharesSold = sharesRemaining * decision.partialFraction
         const pnl = sharesSold * (exitPrice - trade.entryPrice)
@@ -401,7 +401,9 @@ function printStats(): void {
   const realizedPnl = [...won, ...lost].reduce((s, t) => s + (t.pnl ?? 0), 0)
   const unrealizedPnl = open.reduce((s, t) => {
     if (t.curPrice == null) return s
-    return s + t.shares * (t.curPrice - t.entryPrice)
+    const sharesNow = t.sharesRemaining ?? t.shares
+    const fraction = sharesNow / t.shares
+    return s + sharesNow * t.curPrice * (1 - 0.02) - t.simulatedUsdc * fraction
   }, 0)
   const startBal = parseFloat(getPortfolioSetting('starting_balance', '10000'))
   const balance = startBal + realizedPnl

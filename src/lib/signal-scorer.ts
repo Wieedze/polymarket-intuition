@@ -83,16 +83,8 @@ export function scoreSignal(params: {
   const domain = classification?.domain ?? null
   const reasons: string[] = []
 
-  // Block domains with proven negative edge
-  if (domain && BLOCKED_DOMAINS.has(domain)) {
-    return {
-      score: 0, domainMatch: false, expertCalibration: 0,
-      expertWinRate: 0, expertTrades: 0, betSizeSignal: 0,
-      expertImplicitEdge: 0, domain, reasons: [`Domain ${domain} blocked — negative edge`],
-    }
-  }
-
-  // Filter noise markets (5-min crypto, narrow price ranges)
+  // Filter noise markets first (5-min crypto, narrow price ranges)
+  // Must run before domain blocking so noise titles are always caught
   for (const pattern of NOISE_PATTERNS) {
     if (pattern.test(marketTitle)) {
       return {
@@ -100,6 +92,15 @@ export function scoreSignal(params: {
         expertWinRate: 0, expertTrades: 0, betSizeSignal: 0,
         expertImplicitEdge: 0, domain, reasons: ['Noise market filtered'],
       }
+    }
+  }
+
+  // Block domains with proven negative edge
+  if (domain && BLOCKED_DOMAINS.has(domain)) {
+    return {
+      score: 0, domainMatch: false, expertCalibration: 0,
+      expertWinRate: 0, expertTrades: 0, betSizeSignal: 0,
+      expertImplicitEdge: 0, domain, reasons: [`Domain ${domain} blocked — negative edge`],
     }
   }
 
