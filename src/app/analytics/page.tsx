@@ -129,6 +129,8 @@ export default function AnalyticsPage(): React.ReactElement {
 
   useEffect(() => {
     loadData().finally(() => setLoading(false))
+    const interval = setInterval(() => { void loadData() }, 30_000)
+    return () => clearInterval(interval)
   }, [])
 
   if (loading) return (
@@ -239,7 +241,7 @@ export default function AnalyticsPage(): React.ReactElement {
                   { label: 'Profit Factor', value: data.gates.profitFactor.value === 999 ? '∞' : data.gates.profitFactor.value.toFixed(2), threshold: '≥ 1.30', ok: data.gates.profitFactor.ok },
                   { label: 'Max pertes consécutives', value: data.gates.maxConsecutiveLosses.value.toString(), threshold: '≤ 15', ok: data.gates.maxConsecutiveLosses.ok },
                   { label: 'PnL moyen/trade', value: `${data.gates.avgPnlPerTrade.value >= 0 ? '+' : ''}$${data.gates.avgPnlPerTrade.value.toFixed(2)}`, threshold: '> +$5', ok: data.gates.avgPnlPerTrade.ok },
-                  { label: 'Trades résolus', value: data.gates.minResolvedTrades.value.toString(), threshold: '≥ 200', ok: data.gates.minResolvedTrades.ok },
+                  { label: 'Trades résolus', value: data.gates.minResolvedTrades.value.toString(), threshold: '≥ 4000', ok: data.gates.minResolvedTrades.ok },
                 ].map((g) => (
                   <div key={g.label} className="rounded-lg p-3" style={{ background: COLORS.surface }}>
                     <div className="text-xs mb-1" style={{ color: COLORS.textMuted }}>{g.label}</div>
@@ -265,10 +267,10 @@ export default function AnalyticsPage(): React.ReactElement {
                 label="WR intervalle 95%"
                 value={`[${(data.stats.winRateCI.low * 100).toFixed(0)}%–${(data.stats.winRateCI.high * 100).toFixed(0)}%]`}
                 sub={{
-                  not_significant: '⚠️ < 30 trades',
-                  low: '🟡 30-100 trades',
-                  medium: '🟠 100-200 trades',
-                  high: '🟢 200+ trades',
+                  not_significant: '⚠️ < 100 trades',
+                  low: '🟡 100-1000 trades',
+                  medium: '🟠 1000-4000 trades',
+                  high: '🟢 4000+ trades',
                 }[data.stats.significance]}
                 color={COLORS.blue}
               />

@@ -13,16 +13,10 @@ vi.mock('../../src/lib/classifier', () => ({
   classifyMarket: vi.fn(),
 }))
 
-vi.mock('../../src/lib/intuition', () => ({
-  upsertAggregatedAttestation: vi.fn().mockResolvedValue('0xmocktxhash'),
-  attestationExists: vi.fn().mockResolvedValue(false),
-}))
-
 import { indexWallet } from '../../src/lib/indexer'
 import { fetchResolvedTrades } from '../../src/lib/polymarket'
 import { classifyMarket } from '../../src/lib/classifier'
-import { upsertAggregatedAttestation } from '../../src/lib/intuition'
-import { tradeExists, getWalletStats } from '../../src/lib/db'
+import { getWalletStats } from '../../src/lib/db'
 
 // ── Helpers ───────────────────────────────────────────────────────
 
@@ -87,6 +81,7 @@ beforeEach(() => {
       trades_count INTEGER NOT NULL,
       avg_conviction REAL NOT NULL,
       total_pnl REAL NOT NULL,
+      implicit_edge REAL DEFAULT 0,
       decay_factor REAL NOT NULL,
       last_trade_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
@@ -131,8 +126,6 @@ beforeEach(() => {
 
   vi.mocked(fetchResolvedTrades).mockReset()
   vi.mocked(classifyMarket).mockReset()
-  vi.mocked(upsertAggregatedAttestation).mockReset()
-  vi.mocked(upsertAggregatedAttestation).mockResolvedValue('0xmocktxhash')
 })
 
 afterEach(() => {
@@ -143,21 +136,18 @@ afterEach(() => {
 // ── Tests ─────────────────────────────────────────────────────────
 
 describe('indexWallet', () => {
-  it('indexes 10 trades into SQLite (paper mode)', async () => {
+  it('indexes 10 trades into SQLite', async () => {
     vi.mocked(fetchResolvedTrades).mockResolvedValue(makeWalletTrades(10))
     vi.mocked(classifyMarket).mockResolvedValue({
       domain: 'pm-domain/crypto',
       confidence: 0.92,
     })
 
-    const result = await indexWallet(WALLET, false)
+    const result = await indexWallet(WALLET)
 
     expect(result.tradesIndexed).toBe(10)
     expect(result.tradesSkipped).toBe(0)
     expect(result.errors).toHaveLength(0)
-    // No on-chain attestation in paper mode
-    expect(result.domainsAttested).toHaveLength(0)
-    expect(upsertAggregatedAttestation).not.toHaveBeenCalled()
   })
 
   it('is idempotent — re-indexing skips already-indexed trades', async () => {
@@ -168,10 +158,10 @@ describe('indexWallet', () => {
     })
 
     // First run
-    await indexWallet(WALLET, false)
+    await indexWallet(WALLET)
 
     // Second run — same trades
-    const result = await indexWallet(WALLET, false)
+    const result = await indexWallet(WALLET)
 
     expect(result.tradesIndexed).toBe(0)
     expect(result.tradesSkipped).toBe(10)
@@ -181,44 +171,37 @@ describe('indexWallet', () => {
     vi.mocked(fetchResolvedTrades).mockResolvedValue(makeWalletTrades(5))
     vi.mocked(classifyMarket).mockResolvedValue(null) // unclassifiable
 
-    const result = await indexWallet(WALLET, false)
+    const result = await indexWallet(WALLET)
 
     // Trades are saved (domain=null) but counted as skipped
     expect(result.tradesSkipped).toBe(5)
     expect(result.tradesIndexed).toBe(0)
   })
 
-  it('does not create attestation if < 5 trades in a domain', async () => {
+  it('does not save wallet stats if < 1 trade in a domain', async () => {
     vi.mocked(fetchResolvedTrades).mockResolvedValue(makeWalletTrades(3))
-    vi.mocked(classifyMarket).mockResolvedValue({
-      domain: 'pm-domain/ai-tech',
-      confidence: 0.95,
-    })
+    vi.mocked(classifyMarket).mockResolvedValue(null) // all unclassified
 
-    const result = await indexWallet(WALLET, true) // writeOnChain = true
+    await indexWallet(WALLET)
 
-    expect(result.domainsAttested).toHaveLength(0)
-    expect(upsertAggregatedAttestation).not.toHaveBeenCalled()
+    const stats = getWalletStats(WALLET)
+    expect(stats).toHaveLength(0)
   })
 
-  it('creates attestation when >= 5 trades in domain and writeOnChain=true', async () => {
+  it('saves wallet stats when >= 1 classified trade exists', async () => {
     vi.mocked(fetchResolvedTrades).mockResolvedValue(makeWalletTrades(7))
     vi.mocked(classifyMarket).mockResolvedValue({
       domain: 'pm-domain/ai-tech',
       confidence: 0.95,
     })
 
-    const result = await indexWallet(WALLET, true)
+    const result = await indexWallet(WALLET)
 
-    expect(result.domainsAttested).toContain('pm-domain/ai-tech')
-    expect(upsertAggregatedAttestation).toHaveBeenCalledOnce()
-    expect(upsertAggregatedAttestation).toHaveBeenCalledWith(
-      expect.objectContaining({
-        subject: WALLET,
-        predicate: 'has-prediction-reputation-in',
-        object: 'pm-domain/ai-tech',
-      })
-    )
+    expect(result.tradesIndexed).toBe(7)
+    const stats = getWalletStats(WALLET)
+    expect(stats).toHaveLength(1)
+    expect(stats[0]!.domain).toBe('pm-domain/ai-tech')
+    expect(stats[0]!.tradesCount).toBe(7)
   })
 
   it('saves wallet stats to SQLite', async () => {
@@ -228,7 +211,7 @@ describe('indexWallet', () => {
       confidence: 0.9,
     })
 
-    await indexWallet(WALLET, false)
+    await indexWallet(WALLET)
 
     const stats = getWalletStats(WALLET)
     expect(stats).toHaveLength(1)
@@ -243,7 +226,7 @@ describe('indexWallet', () => {
       new Error('Polymarket API error: 503')
     )
 
-    const result = await indexWallet(WALLET, false)
+    const result = await indexWallet(WALLET)
 
     expect(result.errors).toHaveLength(1)
     expect(result.errors[0]).toContain('Failed to fetch trades')
@@ -257,16 +240,16 @@ describe('indexWallet', () => {
     let callCount = 0
     vi.mocked(classifyMarket).mockImplementation(async () => {
       callCount++
-      if (callCount === 3) throw new Error('LLM timeout')
+      if (callCount === 3) throw new Error('classifier timeout')
       return { domain: 'pm-domain/sports' as const, confidence: 0.88 }
     })
 
-    const result = await indexWallet(WALLET, false)
+    const result = await indexWallet(WALLET)
 
     // 4 classified + 1 errored
     expect(result.tradesIndexed).toBe(4)
     expect(result.errors).toHaveLength(1)
-    expect(result.errors[0]).toContain('LLM timeout')
+    expect(result.errors[0]).toContain('classifier timeout')
   })
 
   it('classifies trades into multiple domains correctly', async () => {
@@ -293,7 +276,7 @@ describe('indexWallet', () => {
       return { domain: 'pm-domain/sports' as const, confidence: 0.9 }
     })
 
-    await indexWallet(WALLET, false)
+    await indexWallet(WALLET)
 
     const stats = getWalletStats(WALLET)
     expect(stats).toHaveLength(2)

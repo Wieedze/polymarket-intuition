@@ -148,7 +148,11 @@ export default function PaperTradingPage(): React.ReactElement {
     await fetchData()
   }
 
-  useEffect(() => { void fetchData() }, [])
+  useEffect(() => {
+    void fetchData()
+    const interval = setInterval(() => { void fetchData() }, 30_000)
+    return () => clearInterval(interval)
+  }, [])
 
   const p = data?.portfolio
   const trades = data?.trades ?? []

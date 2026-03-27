@@ -76,11 +76,16 @@ export default function Dashboard(): React.ReactElement {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    fetch('/api/dashboard')
-      .then(async (res) => res.ok ? (await res.json()) as DashboardData : null)
-      .then(setData)
-      .catch(() => null)
-      .finally(() => setLoading(false))
+    function loadData(): void {
+      fetch('/api/dashboard')
+        .then(async (res) => res.ok ? (await res.json()) as DashboardData : null)
+        .then((d) => { if (d) setData(d) })
+        .catch(() => null)
+        .finally(() => setLoading(false))
+    }
+    loadData()
+    const interval = setInterval(loadData, 30_000)
+    return () => clearInterval(interval)
   }, [])
 
   if (loading) return (

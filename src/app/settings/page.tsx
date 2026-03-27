@@ -89,7 +89,7 @@ export default function SettingsPage(): React.ReactElement {
 
   return (
     <div className="min-h-screen" style={{ background: COLORS.bg, color: COLORS.textLight }}>
-      <div className="flex">
+      <div className="flex min-h-screen">
         {/* Sidebar */}
         <aside className="hidden lg:flex flex-col w-56 min-h-screen p-5 border-r" style={{ background: COLORS.card, borderColor: COLORS.surface }}>
           <div className="mb-10">
@@ -122,7 +122,7 @@ export default function SettingsPage(): React.ReactElement {
             <Link href="/" className="text-xs px-3 py-1 rounded-lg" style={{ background: COLORS.surface, color: COLORS.textMuted }}>Dashboard</Link>
           </div>
 
-          <div className="max-w-2xl">
+          <div>
             <div className="mb-8">
               <h2 className="text-2xl font-bold text-white">Settings</h2>
               <p className="mt-1 text-sm" style={{ color: COLORS.textMuted }}>Manage expert wallets to monitor and copy</p>
