@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { useRefresh } from '../providers'
 import Link from 'next/link'
 
 // Design system — same as dashboard
@@ -123,6 +124,7 @@ export default function AnalyticsPage(): React.ReactElement {
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const { tick, refresh: triggerRefresh } = useRefresh()
 
   async function loadData(): Promise<void> {
     try {
@@ -140,15 +142,13 @@ export default function AnalyticsPage(): React.ReactElement {
     setRefreshing(true)
     await fetch('/api/paper-trading?action=refresh').catch(() => {})
     await fetch('/api/paper-trading?action=resolve').catch(() => {})
-    await loadData()
+    triggerRefresh()
     setRefreshing(false)
   }
 
   useEffect(() => {
-    loadData().finally(() => setLoading(false))
-    const interval = setInterval(() => { void loadData() }, 30_000)
-    return () => clearInterval(interval)
-  }, [])
+    void loadData().finally(() => setLoading(false))
+  }, [tick])
 
   if (loading) return (
     <div className="min-h-screen flex items-center justify-center" style={{ background: COLORS.bg }}>

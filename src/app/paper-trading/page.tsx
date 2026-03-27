@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { useRefresh } from '../providers'
 import Link from 'next/link'
 
 // Design system — same as dashboard
@@ -110,6 +111,7 @@ export default function PaperTradingPage(): React.ReactElement {
   const [tab, setTab] = useState<'open' | 'closed' | 'all'>('open')
   const [betSize, setBetSize] = useState('100')
   const [startBal, setStartBal] = useState('10000')
+  const { tick, refresh: triggerRefresh } = useRefresh()
 
   async function fetchData(): Promise<void> {
     setLoading(true)
@@ -131,14 +133,14 @@ export default function PaperTradingPage(): React.ReactElement {
   async function refreshPrices(): Promise<void> {
     setRefreshing(true)
     await fetch('/api/paper-trading?action=refresh')
-    await fetchData()
+    triggerRefresh()
     setRefreshing(false)
   }
 
   async function checkResolutions(): Promise<void> {
     setResolving(true)
     await fetch('/api/paper-trading?action=resolve')
-    await fetchData()
+    triggerRefresh()
     setResolving(false)
   }
 
@@ -157,9 +159,7 @@ export default function PaperTradingPage(): React.ReactElement {
 
   useEffect(() => {
     void fetchData()
-    const interval = setInterval(() => { void fetchData() }, 30_000)
-    return () => clearInterval(interval)
-  }, [])
+  }, [tick])
 
   const p = data?.portfolio
   const trades = data?.trades ?? []

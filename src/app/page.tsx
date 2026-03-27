@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { useRefresh } from './providers'
 import Link from 'next/link'
 import {
   AreaChart, Area, BarChart, Bar, LineChart, Line,
@@ -77,6 +78,7 @@ function pnlStr(n: number): string { return `${n >= 0 ? '+' : ''}$${Math.abs(n).
 export default function Dashboard(): React.ReactElement {
   const [data, setData] = useState<DashboardData | null>(null)
   const [loading, setLoading] = useState(true)
+  const { tick } = useRefresh()
 
   useEffect(() => {
     function loadData(): void {
@@ -87,9 +89,7 @@ export default function Dashboard(): React.ReactElement {
         .finally(() => setLoading(false))
     }
     loadData()
-    const interval = setInterval(loadData, 30_000)
-    return () => clearInterval(interval)
-  }, [])
+  }, [tick])
 
   if (loading) return (
     <div className="min-h-screen flex items-center justify-center" style={{ background: COLORS.bg }}>

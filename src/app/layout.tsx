@@ -1,5 +1,6 @@
 import type { Metadata } from 'next'
 import './globals.css'
+import { RefreshProvider } from './providers'
 
 export const metadata: Metadata = {
   title: 'Proof of Prediction',
@@ -14,7 +15,9 @@ export default function RootLayout({
 }): React.ReactElement {
   return (
     <html lang="en">
-      <body className="min-h-screen antialiased">{children}</body>
+      <body className="min-h-screen antialiased">
+        <RefreshProvider>{children}</RefreshProvider>
+      </body>
     </html>
   )
 }

@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
+import { useRefresh } from '../providers'
 import Link from 'next/link'
 
 const COLORS = {
@@ -78,6 +79,7 @@ export default function ActivityPage(): React.ReactElement {
   const [data, setData] = useState<ActivityData | null>(null)
   const [loading, setLoading] = useState(true)
   const [activeType, setActiveType] = useState<string | null>(null)
+  const { tick } = useRefresh()
   const [search, setSearch] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [limit, setLimit] = useState(200)
@@ -104,13 +106,7 @@ export default function ActivityPage(): React.ReactElement {
   useEffect(() => {
     setLoading(true)
     loadData()
-  }, [loadData])
-
-  // Auto-refresh every 15s
-  useEffect(() => {
-    const interval = setInterval(loadData, 15_000)
-    return () => clearInterval(interval)
-  }, [loadData])
+  }, [loadData, tick])
 
   const allTypes = data?.typeCounts ?? []
   const totalEvents = allTypes.reduce((s, t) => s + t.count, 0)
