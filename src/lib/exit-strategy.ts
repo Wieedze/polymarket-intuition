@@ -234,5 +234,6 @@ export function exitEmoji(reason: ExitDecision['reason']): string {
     case 'expert-exit': return '👋'
     case 'partial-exit-100': return '💸'
     case 'partial-exit-150': return '💸'
+    default: return '🚪'
   }
 }
