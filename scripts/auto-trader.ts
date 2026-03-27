@@ -183,10 +183,18 @@ function tryCopyWithSignal(alert: PositionAlert): boolean {
 
   // ── Slippage simulation ─────────────────────────────────────────
   // In reality we enter AFTER the sharp — price has already moved.
-  // Longshots (15-30¢) have wide spreads → bigger slippage.
-  // Value zone (30-55¢) has better liquidity → smaller slippage.
+  // Two components:
+  //   1. Base slippage: thin order books on longshots → wide spread
+  //   2. Size impact: larger bets consume multiple price levels in the book
+  //      Each $100 adds ~0.5% additional slippage (thin Polymarket CLOBs)
+  //      $100 bet → +0.5% | $300 → +1.5% | $500 → +2.5%
   const rawPrice = alert.position.curPrice
-  const slippage = rawPrice < 0.30 ? 0.05 : 0.03
+  const baseSlippage = rawPrice < 0.20 ? 0.06
+    : rawPrice < 0.30 ? 0.05
+    : rawPrice < 0.50 ? 0.03
+    : 0.02
+  const sizeImpact = (betAmount / 100) * 0.005
+  const slippage = baseSlippage + sizeImpact
   const entryPrice = Math.min(rawPrice + slippage, 0.95)
 
   // ── Kelly-based sizing ──────────────────────────────────────────

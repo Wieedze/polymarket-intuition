@@ -225,6 +225,37 @@ export async function GET(): Promise<NextResponse> {
       },
     }
 
+    // Trading costs (fees + estimated slippage)
+    const POLYMARKET_FEE = 0.02
+    const totalEntryFees = all.reduce((s, t) => s + t.simulatedUsdc * POLYMARKET_FEE, 0)
+    const totalExitFees = closed.reduce((s, t) => {
+      if (t.exitPrice == null) return s
+      return s + t.shares * t.exitPrice * POLYMARKET_FEE
+    }, 0)
+    const totalFees = totalEntryFees + totalExitFees
+
+    // Slippage estimate based on entry price range (mirrors auto-trader logic)
+    function estimateSlippage(entryPrice: number, betAmount: number): number {
+      const base = entryPrice < 0.20 ? 0.06 : entryPrice < 0.30 ? 0.05 : entryPrice < 0.50 ? 0.03 : 0.02
+      const sizeImpact = (betAmount / 100) * 0.005
+      return base + sizeImpact
+    }
+    const totalSlippage = all.reduce((s, t) => s + estimateSlippage(t.entryPrice, t.simulatedUsdc) * t.simulatedUsdc, 0)
+    const totalCost = totalFees + totalSlippage
+    const totalDeployed = all.reduce((s, t) => s + t.simulatedUsdc, 0)
+
+    const costs = {
+      totalEntryFees,
+      totalExitFees,
+      totalFees,
+      totalSlippage,
+      totalCost,
+      costPct: totalDeployed > 0 ? totalCost / totalDeployed : 0,
+      feePct: totalDeployed > 0 ? totalFees / totalDeployed : 0,
+      slippagePct: totalDeployed > 0 ? totalSlippage / totalDeployed : 0,
+      totalDeployed,
+    }
+
     // Best and worst trades
     const bestTrades = [...closed].sort((a, b) => (b.pnl ?? 0) - (a.pnl ?? 0)).slice(0, 5).map((t) => ({
       title: t.title, side: t.side, entryPrice: t.entryPrice, pnl: t.pnl ?? 0,
@@ -303,6 +334,7 @@ export async function GET(): Promise<NextResponse> {
       bySide,
       byEntry,
       byBetSize,
+      costs,
       bestTrades,
       worstTrades,
       topOpen,

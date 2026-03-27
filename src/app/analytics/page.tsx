@@ -73,10 +73,23 @@ type Stats = {
 }
 type EquityPoint = { day: string; balance: number; dailyPnl: number; trades: number }
 
+type Costs = {
+  totalEntryFees: number
+  totalExitFees: number
+  totalFees: number
+  totalSlippage: number
+  totalCost: number
+  costPct: number
+  feePct: number
+  slippagePct: number
+  totalDeployed: number
+}
+
 type AnalyticsData = {
   portfolio: Portfolio
   gates: Gates
   stats: Stats
+  costs: Costs
   equityCurve: EquityPoint[]
   byDomain: DomainStat[]
   byExpert: ExpertStat[]
@@ -287,6 +300,37 @@ export default function AnalyticsPage(): React.ReactElement {
                 color={data.stats.maxConsecutiveLosses <= 15 ? COLORS.teal : COLORS.amber}
               />
             </div>
+          )}
+
+          {/* Trading Costs */}
+          {data.costs && (
+            <Section title="Trading Costs (Fees + Slippage)">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-4">
+                <div className="rounded-lg p-3" style={{ background: COLORS.surface }}>
+                  <div className="text-xs mb-1" style={{ color: COLORS.textMuted }}>Entry Fees (2%)</div>
+                  <div className="text-lg font-bold" style={{ color: COLORS.amber }}>${data.costs.totalEntryFees.toFixed(2)}</div>
+                  <div className="text-xs mt-1" style={{ color: COLORS.textMuted }}>{(data.costs.feePct * 100).toFixed(1)}% of deployed</div>
+                </div>
+                <div className="rounded-lg p-3" style={{ background: COLORS.surface }}>
+                  <div className="text-xs mb-1" style={{ color: COLORS.textMuted }}>Exit Fees (2%)</div>
+                  <div className="text-lg font-bold" style={{ color: COLORS.amber }}>${data.costs.totalExitFees.toFixed(2)}</div>
+                  <div className="text-xs mt-1" style={{ color: COLORS.textMuted }}>Early exits only</div>
+                </div>
+                <div className="rounded-lg p-3" style={{ background: COLORS.surface }}>
+                  <div className="text-xs mb-1" style={{ color: COLORS.textMuted }}>Estimated Slippage</div>
+                  <div className="text-lg font-bold" style={{ color: COLORS.amber }}>${data.costs.totalSlippage.toFixed(2)}</div>
+                  <div className="text-xs mt-1" style={{ color: COLORS.textMuted }}>{(data.costs.slippagePct * 100).toFixed(1)}% of deployed</div>
+                </div>
+                <div className="rounded-lg p-3" style={{ background: COLORS.surface }}>
+                  <div className="text-xs mb-1" style={{ color: COLORS.textMuted }}>Total Cost</div>
+                  <div className="text-lg font-bold" style={{ color: COLORS.red }}>${data.costs.totalCost.toFixed(2)}</div>
+                  <div className="text-xs mt-1" style={{ color: COLORS.textMuted }}>{(data.costs.costPct * 100).toFixed(1)}% of ${data.costs.totalDeployed.toFixed(0)} deployed</div>
+                </div>
+              </div>
+              <div className="text-xs px-1 pt-1" style={{ color: COLORS.textMuted }}>
+                Slippage estimated: 6% &lt;20¢, 5% 20-30¢, 3% 30-50¢, 2% &gt;50¢ + 0.5%/100$ size impact · Fees: 2% Polymarket taker fee at entry + early exit
+              </div>
+            </Section>
           )}
 
           {/* Equity Curve */}
