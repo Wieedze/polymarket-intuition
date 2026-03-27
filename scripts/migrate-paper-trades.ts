@@ -104,28 +104,24 @@ for (const t of trades) {
   }
 
   // Recalculate pnl for closed trades
+  // Note: exit_price in DB = price of the BOUGHT token at exit (YES price for YES trades,
+  // NO token price for NO trades). Formula is identical for both sides.
   let newPnl: number | null = t.pnl
   if (t.status !== 'open' && t.exit_price != null) {
     if (t.exit_price >= 0.95) {
-      // Resolved YES — no exit fee at resolution
+      // Token resolved to 1 (win) — no exit fee at resolution
       newPnl = newShares * 1.0 - t.simulated_usdc
     } else if (t.exit_price <= 0.05) {
-      // Resolved NO — full loss (same regardless of fee)
+      // Token resolved to 0 (loss) — no payout
       newPnl = -t.simulated_usdc
     } else {
-      // Early exit (stop loss, near-resolution, stale, etc.) — exit fee applies
-      if (t.side === 'YES') {
-        newPnl = newShares * t.exit_price * (1 - FEE) - t.simulated_usdc
-      } else {
-        // NO side: profit when price drops
-        newPnl = newShares * (1 - t.exit_price) * (1 - FEE) - t.simulated_usdc * (1 - t.entry_price) / t.entry_price * t.entry_price
-        // Simplified: cost basis on NO = usdc, payout = shares × (1-exitPrice) × 0.98
-        newPnl = newShares * (1 - t.exit_price) * (1 - FEE) - t.simulated_usdc
-      }
+      // Early exit — exit fee applies (same formula for YES and NO)
+      newPnl = newShares * t.exit_price * (1 - FEE) - t.simulated_usdc
     }
   }
 
   // Recalculate partial exits pnl with new shares
+  // e.price = price of the bought token at partial exit (same convention as exit_price)
   let newPartialExits: string | null = t.partial_exits
   if (t.partial_exits && t.partial_exits !== '[]') {
     const exits = JSON.parse(t.partial_exits) as PartialExit[]
@@ -134,9 +130,7 @@ for (const t of trades) {
       const sharesToSell = remainingForCalc * e.pct
       const costBasis = sharesToSell * adjustedEntry
       const proceeds = sharesToSell * e.price * (1 - FEE)
-      const pnl = t.side === 'YES'
-        ? proceeds - costBasis
-        : sharesToSell * (1 - e.price) * (1 - FEE) - sharesToSell * (1 - adjustedEntry)
+      const pnl = proceeds - costBasis
       remainingForCalc -= sharesToSell
       return { ...e, pnl }
     })
