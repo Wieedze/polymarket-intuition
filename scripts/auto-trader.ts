@@ -16,6 +16,7 @@
  */
 
 import { getActiveWatchedWallets, getOpenPaperTrades, openPaperTrade, paperTradeExistsForCondition, getPortfolioSetting, setPortfolioSetting, getAllPaperTrades, getPositionSnapshot } from '../src/lib/db'
+import { indexWallet } from '../src/lib/indexer'
 import { pollWallet, type PositionAlert } from '../src/lib/position-tracker'
 import { keywordClassify } from '../src/lib/classifier'
 import { fetchAllPages } from '../src/lib/polymarket'
@@ -511,6 +512,33 @@ async function pollOnce(): Promise<void> {
   printStats()
 }
 
+// ── 24h Re-index scheduler ───────────────────────────────────────
+
+async function reindexAllWallets(): Promise<void> {
+  const wallets = getActiveWatchedWallets()
+  const time = new Date().toISOString().slice(11, 19)
+  console.log(`\n[${time}] 📊 DAILY RE-INDEX — ${wallets.length} wallets`)
+
+  let indexed = 0
+  let errors = 0
+
+  for (const { wallet, label } of wallets) {
+    try {
+      const result = await indexWallet(wallet)
+      indexed += result.tradesIndexed
+      if (result.errors.length > 0) errors++
+      if (result.tradesIndexed > 0) {
+        console.log(`  ✓ ${(label ?? wallet.slice(0, 12)).padEnd(24)} +${result.tradesIndexed} trades`)
+      }
+    } catch {
+      errors++
+    }
+    await new Promise((r) => setTimeout(r, 1000))
+  }
+
+  console.log(`  → Re-index done: ${indexed} new trades, ${errors} errors\n`)
+}
+
 async function main(): Promise<void> {
   const wallets = getActiveWatchedWallets()
 
@@ -556,6 +584,15 @@ async function main(): Promise<void> {
       console.error(`Poll error: ${err instanceof Error ? err.message : String(err)}`)
     })
   }, POLL_INTERVAL_MS)
+
+  // Re-index all wallets every 24h to keep wallet_stats fresh
+  // (calibration, implicit_edge, win_rate updated with latest resolved trades)
+  const REINDEX_INTERVAL_MS = 24 * 60 * 60 * 1000
+  setInterval(() => {
+    reindexAllWallets().catch((err) => {
+      console.error(`Re-index error: ${err instanceof Error ? err.message : String(err)}`)
+    })
+  }, REINDEX_INTERVAL_MS)
 }
 
 main().catch(console.error)
