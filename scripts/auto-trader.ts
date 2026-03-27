@@ -28,7 +28,7 @@ const POLYMARKET_DATA_URL = process.env.POLYMARKET_DATA_URL ?? 'https://data-api
 
 // ── Config ───────────────────────────────────────────────────────
 
-const POLL_INTERVAL_MS = parseInt(process.env.POLL_INTERVAL_MS ?? '300000', 10)
+const POLL_INTERVAL_MS = parseInt(process.env.POLL_INTERVAL_MS ?? '30000', 10)
 const BET_PCT = parseFloat(process.env.BET_PCT ?? '0.02')  // 2% of available cash per trade
 const MIN_BET = 20    // never bet less than $20
 const MAX_BET = 500   // never bet more than $500
@@ -350,17 +350,28 @@ function runExitStrategy(): Record<string, number> {
 
     const decision = evaluateExit(trade, EXIT_CONFIG, expertStillHolding)
 
-    if (decision.shouldExit) {
-      const exitPrice = trade.curPrice ?? trade.entryPrice
-      try {
+    if (!decision.shouldExit) continue
+
+    const exitPrice = trade.curPrice ?? trade.entryPrice
+    try {
+      // Partial exit — sell a fraction, keep the rest open
+      if ((decision.reason === 'partial-exit-100' || decision.reason === 'partial-exit-150') && decision.partialFraction) {
+        partialExitPaperTrade(trade.conditionId, exitPrice, decision.partialFraction)
+        const sharesRemaining = (trade.sharesRemaining ?? trade.shares)
+        const sharesSold = sharesRemaining * decision.partialFraction
+        const pnl = sharesSold * (exitPrice - trade.entryPrice)
+        console.log(`  ${exitEmoji(decision.reason)} ${decision.reason.toUpperCase()} | ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)} | ${(decision.partialFraction * 100).toFixed(0)}% sold @ ${(exitPrice * 100).toFixed(0)}¢ | ${trade.title}`)
+        logBotEvent('exit', `${decision.reason} | ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)} | ${trade.title}`, decision.message)
+      } else {
+        // Full exit
         resolvePaperTrade(trade.conditionId, exitPrice)
         const pnl = trade.shares * (exitPrice - trade.entryPrice)
         console.log(`  ${exitEmoji(decision.reason)} ${decision.reason.toUpperCase()} | ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)} | ${decision.message} | ${trade.title}`)
         logBotEvent('exit', `${decision.reason} | ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)} | ${trade.title}`, decision.message)
-        counts[decision.reason] = (counts[decision.reason] ?? 0) + 1
-      } catch (err) {
-        console.error(`  ⚠ Exit failed for ${trade.conditionId}: ${err instanceof Error ? err.message : String(err)}`)
       }
+      counts[decision.reason] = (counts[decision.reason] ?? 0) + 1
+    } catch (err) {
+      console.error(`  ⚠ Exit failed for ${trade.conditionId}: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
 

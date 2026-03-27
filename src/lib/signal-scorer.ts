@@ -49,6 +49,9 @@ function getDomainPerformanceMultiplier(domain: string | null, expertWallet: str
   }
 }
 
+// Domains with negative edge — skip entirely based on paper trading data
+const BLOCKED_DOMAINS = new Set(['pm-domain/crypto'])
+
 // Markets that are pure noise — skip entirely
 const NOISE_PATTERNS = [
   /up or down.*\d+:\d+[ap]m/i,        // "Bitcoin Up or Down - 10:20AM-10:25AM"
@@ -79,6 +82,15 @@ export function scoreSignal(params: {
   const classification = keywordClassify(marketTitle)
   const domain = classification?.domain ?? null
   const reasons: string[] = []
+
+  // Block domains with proven negative edge
+  if (domain && BLOCKED_DOMAINS.has(domain)) {
+    return {
+      score: 0, domainMatch: false, expertCalibration: 0,
+      expertWinRate: 0, expertTrades: 0, betSizeSignal: 0,
+      expertImplicitEdge: 0, domain, reasons: [`Domain ${domain} blocked — negative edge`],
+    }
+  }
 
   // Filter noise markets (5-min crypto, narrow price ranges)
   for (const pattern of NOISE_PATTERNS) {

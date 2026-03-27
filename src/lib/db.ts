@@ -592,6 +592,9 @@ export function setPortfolioSetting(key: string, value: string): void {
   db.prepare('INSERT OR REPLACE INTO paper_portfolio (key, value) VALUES (?, ?)').run(key, value)
 }
 
+// Polymarket taker fee — charged on buy AND early sell, not on resolution redemption
+const POLYMARKET_FEE = 0.02
+
 export function openPaperTrade(trade: {
   conditionId: string
   title: string
@@ -603,7 +606,8 @@ export function openPaperTrade(trade: {
   copiedLabel: string | null
 }): PaperTrade {
   const db = getDb()
-  const shares = trade.simulatedUsdc / trade.entryPrice
+  // Entry fee: spend $100 but only get 98¢ worth of shares
+  const shares = (trade.simulatedUsdc * (1 - POLYMARKET_FEE)) / trade.entryPrice
   const id = `paper-${trade.conditionId}-${Date.now()}`
   const now = new Date().toISOString()
 
@@ -717,8 +721,9 @@ export function resolvePaperTrade(
         status = 'lost'
       }
     } else {
-      // Not fully resolved — paper exit at current price
-      pnl = shares * (exitPrice - entryPrice)
+      // Not fully resolved — paper exit at current price (selling = taker fee applies)
+      const netProceeds = shares * exitPrice * (1 - POLYMARKET_FEE)
+      pnl = netProceeds - simulatedUsdc
       status = pnl > 0 ? 'won' : 'lost'
     }
 
@@ -759,13 +764,15 @@ export function partialExitPaperTrade(
   // Shares to sell in this partial exit
   const sharesToSell = sharesRemaining * exitPriceFraction
 
-  // PnL on the sold portion
+  // PnL on the sold portion (selling early = taker fee applies on proceeds)
+  const costBasis = sharesToSell * entryPrice
+  const netProceeds = sharesToSell * curPrice * (1 - POLYMARKET_FEE)
   let pnl: number
   if (side === 'YES') {
-    pnl = sharesToSell * (curPrice - entryPrice)
+    pnl = netProceeds - costBasis
   } else {
-    // NO side: profit when price drops
-    pnl = sharesToSell * (entryPrice - curPrice)
+    // NO side: profit when price drops — cost basis is (1-entryPrice) per share
+    pnl = sharesToSell * (1 - curPrice) * (1 - POLYMARKET_FEE) - sharesToSell * (1 - entryPrice)
   }
 
   const newSharesRemaining = sharesRemaining - sharesToSell
