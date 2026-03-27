@@ -712,9 +712,9 @@ export function resolvePaperTrade(
         status = 'lost'
       }
     } else if (exitPrice < 0.05) {
-      // Market resolved NO
+      // Market resolved NO — NO token resolves to $1, same payout structure as YES
       if (side === 'NO') {
-        pnl = shares * entryPrice  // NO shares: profit = entryPrice per share
+        pnl = shares * (1 - entryPrice)  // paid entryPrice, got $1 per share
         status = 'won'
       } else {
         pnl = -simulatedUsdc  // lost entire investment
