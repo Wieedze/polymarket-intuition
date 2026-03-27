@@ -193,15 +193,14 @@ function tryCopyWithSignal(alert: PositionAlert): boolean {
     : rawPrice < 0.30 ? 0.05
     : rawPrice < 0.50 ? 0.03
     : 0.02
-  const sizeImpact = (betAmount / 100) * 0.005
-  const slippage = baseSlippage + sizeImpact
-  const entryPrice = Math.min(rawPrice + slippage, 0.95)
 
   // ── Kelly-based sizing ──────────────────────────────────────────
   // Kelly tells us how much to bet given our edge at this entry price.
   // Use expert's win rate as our probability estimate.
   // Quarter-Kelly already applied inside kellyBetFraction().
-  const kellyFraction = kellyBetFraction(trust.winRate, entryPrice)
+  // Use baseSlippage estimate for Kelly (size not yet known)
+  const entryPriceEst = Math.min(rawPrice * (1 + baseSlippage), 0.95)
+  const kellyFraction = kellyBetFraction(trust.winRate, entryPriceEst)
   const bankroll = parseFloat(getPortfolioSetting('starting_balance', '10000'))
   const allTrades = getAllPaperTrades()
   const realizedPnl = allTrades.filter(t => t.status !== 'open').reduce((s, t) => s + (t.pnl ?? 0), 0)
@@ -217,6 +216,11 @@ function tryCopyWithSignal(alert: PositionAlert): boolean {
   const consensusMulti = getConsensusMultiplier(alert.position.conditionId)
   const trustMulti = trust.trustLevel
   const betAmount = Math.min(baseBet * signalMulti * consensusMulti * trustMulti, MAX_BET)
+
+  // Final entry price with size-adjusted slippage
+  const sizeImpact = (betAmount / 100) * 0.005
+  const slippage = baseSlippage + sizeImpact
+  const entryPrice = Math.min(rawPrice * (1 + slippage), 0.95)
 
   // Dynamic stop loss: tighter on longshots (they resolve fast, no need for wide stop)
   // 15-30¢ → -20% stop | 30-55¢ → -25% stop
