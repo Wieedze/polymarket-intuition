@@ -65,6 +65,8 @@ const EXIT_CONFIG: ExitConfig = {
   staleDays: parseInt(process.env.STALE_DAYS ?? '7', 10),
   staleThreshold: parseFloat(process.env.STALE_THRESHOLD ?? '0.03'),
   followExpertExit: process.env.FOLLOW_EXPERT_EXIT !== 'false',
+  partialExitAt100Pct: parseFloat(process.env.PARTIAL_EXIT_100 ?? '0.50'),
+  partialExitAt150Pct: parseFloat(process.env.PARTIAL_EXIT_150 ?? '0.30'),
 }
 
 // ── Consensus tracking ───────────────────────────────────────────

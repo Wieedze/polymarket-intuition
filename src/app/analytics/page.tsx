@@ -228,25 +228,25 @@ export default function AnalyticsPage(): React.ReactElement {
           {data.gates && (
             <div className="mb-8 rounded-xl p-5 border" style={{ background: COLORS.card, borderColor: data.gates.allOk ? COLORS.teal : COLORS.amber }}>
               <div className="flex items-center justify-between mb-4">
-                <h3 className="font-semibold text-white">Validation Gates — Avant passage en réel</h3>
+                <h3 className="font-semibold text-white">Validation Gates — Ready for live trading?</h3>
                 <span className="text-sm font-bold px-3 py-1 rounded-full" style={{
                   background: data.gates.allOk ? COLORS.teal : COLORS.amber,
                   color: COLORS.bg,
                 }}>
-                  {data.gates.allOk ? '✅ PRÊT' : '🔴 PAS ENCORE'}
+                  {data.gates.allOk ? '✅ READY' : '🔴 NOT YET'}
                 </span>
               </div>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 {[
                   { label: 'Profit Factor', value: data.gates.profitFactor.value === 999 ? '∞' : data.gates.profitFactor.value.toFixed(2), threshold: '≥ 1.30', ok: data.gates.profitFactor.ok },
-                  { label: 'Max pertes consécutives', value: data.gates.maxConsecutiveLosses.value.toString(), threshold: '≤ 15', ok: data.gates.maxConsecutiveLosses.ok },
-                  { label: 'PnL moyen/trade', value: `${data.gates.avgPnlPerTrade.value >= 0 ? '+' : ''}$${data.gates.avgPnlPerTrade.value.toFixed(2)}`, threshold: '> +$5', ok: data.gates.avgPnlPerTrade.ok },
-                  { label: 'Trades résolus', value: data.gates.minResolvedTrades.value.toString(), threshold: '≥ 4000', ok: data.gates.minResolvedTrades.ok },
+                  { label: 'Max consecutive losses', value: data.gates.maxConsecutiveLosses.value.toString(), threshold: '≤ 15', ok: data.gates.maxConsecutiveLosses.ok },
+                  { label: 'Avg PnL/trade', value: `${data.gates.avgPnlPerTrade.value >= 0 ? '+' : ''}$${data.gates.avgPnlPerTrade.value.toFixed(2)}`, threshold: '> +$5', ok: data.gates.avgPnlPerTrade.ok },
+                  { label: 'Resolved trades', value: data.gates.minResolvedTrades.value.toString(), threshold: '≥ 4000', ok: data.gates.minResolvedTrades.ok },
                 ].map((g) => (
                   <div key={g.label} className="rounded-lg p-3" style={{ background: COLORS.surface }}>
                     <div className="text-xs mb-1" style={{ color: COLORS.textMuted }}>{g.label}</div>
                     <div className="text-lg font-bold" style={{ color: g.ok ? COLORS.teal : COLORS.amber }}>{g.value}</div>
-                    <div className="text-xs mt-1" style={{ color: COLORS.textMuted }}>seuil: {g.threshold}</div>
+                    <div className="text-xs mt-1" style={{ color: COLORS.textMuted }}>threshold: {g.threshold}</div>
                     <div className="text-xs font-medium mt-1" style={{ color: g.ok ? COLORS.teal : COLORS.amber }}>{g.ok ? '✅' : '⏳'}</div>
                   </div>
                 ))}
@@ -264,7 +264,7 @@ export default function AnalyticsPage(): React.ReactElement {
                 color={data.stats.profitFactor >= 1.3 ? COLORS.teal : COLORS.amber}
               />
               <StatCard
-                label="WR intervalle 95%"
+                label="Win Rate 95% CI"
                 value={`[${(data.stats.winRateCI.low * 100).toFixed(0)}%–${(data.stats.winRateCI.high * 100).toFixed(0)}%]`}
                 sub={{
                   not_significant: '⚠️ < 100 trades',
@@ -277,13 +277,13 @@ export default function AnalyticsPage(): React.ReactElement {
               <StatCard
                 label="Max Drawdown"
                 value={`-${(data.stats.maxDrawdown * 100).toFixed(1)}%`}
-                sub="Depuis le pic"
+                sub="From peak"
                 color={data.stats.maxDrawdown < 0.2 ? COLORS.teal : COLORS.red}
               />
               <StatCard
-                label="Max pertes consécutives"
+                label="Max consecutive losses"
                 value={data.stats.maxConsecutiveLosses.toString()}
-                sub={data.stats.maxConsecutiveLosses <= 15 ? '✅ Ok' : '⚠️ Élevé'}
+                sub={data.stats.maxConsecutiveLosses <= 15 ? '✅ Ok' : '⚠️ High'}
                 color={data.stats.maxConsecutiveLosses <= 15 ? COLORS.teal : COLORS.amber}
               />
             </div>
@@ -291,7 +291,7 @@ export default function AnalyticsPage(): React.ReactElement {
 
           {/* Equity Curve */}
           {data.equityCurve && data.equityCurve.length > 1 && (
-            <Section title="Courbe d'équité">
+            <Section title="Equity Curve">
               <div className="space-y-1">
                 {(() => {
                   const maxAbs = Math.max(...data.equityCurve.map((d) => Math.abs(d.dailyPnl)), 1)

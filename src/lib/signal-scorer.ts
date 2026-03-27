@@ -86,7 +86,7 @@ export function scoreSignal(params: {
       return {
         score: 0, domainMatch: false, expertCalibration: 0,
         expertWinRate: 0, expertTrades: 0, betSizeSignal: 0,
-        domain, reasons: ['Noise market filtered'],
+        expertImplicitEdge: 0, domain, reasons: ['Noise market filtered'],
       }
     }
   }
@@ -97,7 +97,7 @@ export function scoreSignal(params: {
     return {
       score: 0, domainMatch: false, expertCalibration: 0,
       expertWinRate: 0, expertTrades: 0, betSizeSignal: 0,
-      domain, reasons: ['Unknown domain — skipped'],
+      expertImplicitEdge: 0, domain, reasons: ['Unknown domain — skipped'],
     }
   }
 
@@ -108,7 +108,7 @@ export function scoreSignal(params: {
     return {
       score: 0, domainMatch: false, expertCalibration: 0,
       expertWinRate: 0, expertTrades: 0, betSizeSignal: 0,
-      domain, reasons: ['No historical data for this expert'],
+      expertImplicitEdge: 0, domain, reasons: ['No historical data for this expert'],
     }
   }
 
@@ -178,7 +178,7 @@ export function scoreSignal(params: {
     return {
       score: 0, domainMatch: false, expertCalibration: 0,
       expertWinRate: 0, expertTrades: 0, betSizeSignal: 0,
-      domain, reasons: [`Entry ${(entryPrice * 100).toFixed(0)}¢ blocked — favorites destroy bankroll`],
+      expertImplicitEdge: 0, domain, reasons: [`Entry ${(entryPrice * 100).toFixed(0)}¢ blocked — favorites destroy bankroll`],
     }
   } else if (entryPrice >= 0.15 && entryPrice <= 0.30) {
     entryScore = 15  // longshot sweet spot — best historical P&L
