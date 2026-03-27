@@ -100,6 +100,7 @@ export default function SettingsPage(): React.ReactElement {
             <SideLink href="/">Dashboard</SideLink>
             <SideLink href="/analytics">Analytics</SideLink>
             <SideLink href="/paper-trading">Trades</SideLink>
+            <SideLink href="/activity">Activity</SideLink>
             <SideLink href="/leaderboard">Leaderboard</SideLink>
             <SideLink href="/settings" active>Settings</SideLink>
           </nav>

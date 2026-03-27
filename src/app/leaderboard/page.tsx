@@ -143,6 +143,7 @@ export default function LeaderboardPage(): React.ReactElement {
             <SideLink href="/">Dashboard</SideLink>
             <SideLink href="/analytics">Analytics</SideLink>
             <SideLink href="/paper-trading">Trades</SideLink>
+            <SideLink href="/activity">Activity</SideLink>
             <SideLink href="/leaderboard" active>Leaderboard</SideLink>
             <SideLink href="/settings">Settings</SideLink>
           </nav>
