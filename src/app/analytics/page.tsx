@@ -128,7 +128,7 @@ export default function AnalyticsPage(): React.ReactElement {
 
   async function loadData(): Promise<void> {
     try {
-      const res = await fetch('/api/analytics')
+      const res = await fetch('/api/snapshot')
       if (!res.ok) throw new Error(`Error ${res.status}`)
       const result = (await res.json()) as AnalyticsData
       setData(result)

@@ -117,7 +117,7 @@ export default function PaperTradingPage(): React.ReactElement {
     setLoading(true)
     setError(null)
     try {
-      const res = await fetch('/api/paper-trading')
+      const res = await fetch('/api/snapshot')
       if (!res.ok) throw new Error(`Error ${res.status}`)
       const result = (await res.json()) as PaperTradingData
       setData(result)

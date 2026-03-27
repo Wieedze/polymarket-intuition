@@ -82,8 +82,32 @@ export default function Dashboard(): React.ReactElement {
 
   useEffect(() => {
     function loadData(): void {
-      fetch('/api/dashboard')
-        .then(async (res) => res.ok ? (await res.json()) as DashboardData : null)
+      fetch('/api/snapshot')
+        .then(async (res) => {
+          if (!res.ok) return null
+          const snap = await res.json()
+          const p = snap.portfolio
+          return {
+            balance: p.currentBalance,
+            startingBalance: p.startingBalance,
+            realizedPnl: p.realizedPnl,
+            partialExitsPnl: p.partialExitsPnl,
+            unrealizedPnl: p.unrealizedPnl,
+            tradingDays: p.tradingDays,
+            avgHoldDays: p.avgHoldDays,
+            totalInvested: p.totalInvested,
+            totalEquity: p.totalEquity,
+            winRate: p.winRate,
+            wins: p.wins,
+            losses: p.losses,
+            openTrades: p.openTrades,
+            totalTrades: p.totalTrades,
+            roi: p.roi,
+            chartData: snap.chartData,
+            events: snap.events,
+            domains: snap.byDomain,
+          } as DashboardData
+        })
         .then((d) => { if (d) setData(d) })
         .catch(() => null)
         .finally(() => setLoading(false))
