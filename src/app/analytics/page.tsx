@@ -36,6 +36,7 @@ type Portfolio = {
   wins: number
   losses: number
   winRate: number
+  closedTrades: number
 }
 
 type DomainStat = { domain: string; trades: number; won: number; lost: number; winRate: number; pnl: number; avgPnl: number }
@@ -243,22 +244,23 @@ export default function AnalyticsPage(): React.ReactElement {
                   {pnlStr(p.realizedPnl)} realized
                 </div>
                 <div className="text-sm mt-0.5" style={{ color: COLORS.textMuted }}>
-                  {pnlStr(p.unrealizedPnl)} unrealized (after fees if sold now)
+                  {pnlStr(p.unrealizedPnl)} unrealized (after 2% exit fee)
                 </div>
                 <div className="text-sm mt-0.5" style={{ color: COLORS.textMuted }}>
                   <span style={{ color: pnlColor(p.roi) }}>{(p.roi * 100).toFixed(1)}% ROI</span>
                   {' '}over {p.tradingDays.toFixed(0)} days
-                  {p.tradingDays > 0 && (
-                    <span> · {pnlStr(p.realizedPnl / p.tradingDays)}/day avg</span>
-                  )}
+                  {' · '}{pnlStr(p.closedTrades > 0 ? p.realizedPnl / p.closedTrades : 0)}/trade avg
                 </div>
                 {p.partialExitsPnl !== 0 && (
                   <div className="text-xs mt-1" style={{ color: COLORS.teal }}>
-                    incl. {pnlStr(p.partialExitsPnl)} from partial exits still open
+                    incl. {pnlStr(p.partialExitsPnl)} from partial exits (positions still open)
                   </div>
                 )}
-                <div className="text-xs mt-0.5" style={{ color: COLORS.textMuted }}>
-                  avg hold: {p.avgHoldDays.toFixed(1)} days/trade
+                <div className="text-xs mt-0.5" style={{ color: p.avgHoldDays < 0.5 ? COLORS.amber : COLORS.textMuted }}>
+                  avg hold: {p.avgHoldDays < 1
+                    ? `${(p.avgHoldDays * 24).toFixed(0)}h`
+                    : `${p.avgHoldDays.toFixed(1)}d`}/trade
+                  {p.avgHoldDays < 0.5 && ' ⚠️ very short — check near-resolution exits'}
                 </div>
               </div>
             </div>

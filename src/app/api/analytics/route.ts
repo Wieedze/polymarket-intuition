@@ -287,9 +287,13 @@ export async function GET(): Promise<NextResponse> {
     const totalCost = totalFees + totalSlippage
     const totalDeployed = all.reduce((s, t) => s + t.simulatedUsdc, 0)
 
-    // Pre-cost alpha: closed-trades only (consistent scope with realizedPnl)
-    const closedPnlBeforePartials = pnlOf(closed)
-    const preCostPnl = closedPnlBeforePartials + closedEntryFees + closedExitFees + closedSlippage
+    // Pre-cost alpha: same scope as Net — closed trades + partial exits from open trades
+    // Partial exit fees: estimate from the partial exits themselves (2% on proceeds)
+    const partialFees = open.reduce((s, t) =>
+      s + t.partialExits.reduce((ps, e) => ps + Math.abs(e.pnl) * POLYMARKET_FEE_RATE, 0), 0)
+    const partialSlippage = open.reduce((s, t) =>
+      s + t.partialExits.reduce((ps, e) => ps + estimateSlippage(t.entryPrice, t.simulatedUsdc) * t.simulatedUsdc * e.pct, 0), 0)
+    const preCostPnl = realizedPnl + closedEntryFees + closedExitFees + closedSlippage + partialFees + partialSlippage
 
     const costs = {
       totalEntryFees,

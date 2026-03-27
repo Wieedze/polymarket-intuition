@@ -158,7 +158,9 @@ export default function Dashboard(): React.ReactElement {
             <BigStat
               label="Realized P&L"
               value={pnlStr(data.realizedPnl)}
-              sub={data.partialExitsPnl !== 0 ? `incl. ${pnlStr(data.partialExitsPnl)} partials` : `avg hold ${data.avgHoldDays.toFixed(1)}d`}
+              sub={data.partialExitsPnl !== 0
+                ? `incl. ${pnlStr(data.partialExitsPnl)} partials`
+                : `avg hold ${data.avgHoldDays < 1 ? `${(data.avgHoldDays * 24).toFixed(0)}h` : `${data.avgHoldDays.toFixed(1)}d`}${data.avgHoldDays < 0.5 ? ' ⚠️' : ''}`}
               color={data.realizedPnl >= 0 ? COLORS.green : COLORS.red}
             />
             <BigStat
