@@ -181,14 +181,23 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     results.push(...batchResults)
   }
 
-  results.sort((a, b) => b.topCopyability - a.topCopyability)
+  // Filter out wallets not worth copying: no score, too low WR, or garbage PF
+  const filtered = results.filter((w) => {
+    if (w.topCopyability <= 0) return false
+    if (!w.bestDomain) return false
+    if (w.bestDomain.winRate < 0.25) return false
+    if (w.bestDomain.profitFactor < 0.3 && w.bestDomain.trades >= 10) return false
+    return true
+  })
+
+  filtered.sort((a, b) => b.topCopyability - a.topCopyability)
 
   // Save to cache
-  setLeaderboardResultsCache(`${timePeriod}-${limit}`, results)
+  setLeaderboardResultsCache(`${timePeriod}-${limit}`, filtered)
 
   return NextResponse.json({
     period: timePeriod,
-    wallets: results,
+    wallets: filtered,
     source: 'live',
     computedAt: new Date().toISOString(),
   })
