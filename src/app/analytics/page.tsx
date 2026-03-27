@@ -229,37 +229,44 @@ export default function AnalyticsPage(): React.ReactElement {
 
           {/* ── BLOCK 1: Bottom line ─────────────────────────────────── */}
           <div className="rounded-xl p-6 mb-5" style={{ background: COLORS.card }}>
-            {/* Main numbers */}
-            <div className="flex flex-wrap items-end gap-6 mb-5">
-              <div>
-                <div className="text-xs uppercase tracking-wider mb-1" style={{ color: COLORS.textMuted }}>Total Equity</div>
-                <div className="text-4xl font-bold" style={{ color: (p.availableCash + p.totalRedeemable) >= p.startingBalance ? COLORS.teal : COLORS.red }}>
+            {/* Main numbers — 4 clean columns */}
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-0 mb-6" style={{ borderBottom: `1px solid ${COLORS.surface}`, paddingBottom: '1.25rem' }}>
+              {/* Total Equity */}
+              <div className="pr-6" style={{ borderRight: `1px solid ${COLORS.surface}` }}>
+                <div className="text-xs uppercase tracking-wider mb-2" style={{ color: COLORS.textMuted }}>Total Equity</div>
+                <div className="text-3xl font-bold" style={{ color: (p.availableCash + p.totalRedeemable) >= p.startingBalance ? COLORS.teal : COLORS.red }}>
                   ${(p.availableCash + p.totalRedeemable).toFixed(0)}
                 </div>
-                <div className="text-sm mt-1" style={{ color: COLORS.textMuted }}>started at ${p.startingBalance.toFixed(0)}</div>
+                <div className="text-xs mt-1" style={{ color: COLORS.textMuted }}>started ${p.startingBalance.toFixed(0)}</div>
               </div>
-              <div className="pb-1">
-                <div className="text-2xl font-bold" style={{ color: pnlColor(p.realizedPnl) }}>
-                  {pnlStr(p.realizedPnl)} realized
+              {/* Realized P&L */}
+              <div className="px-6" style={{ borderRight: `1px solid ${COLORS.surface}` }}>
+                <div className="text-xs uppercase tracking-wider mb-2" style={{ color: COLORS.textMuted }}>Realized P&L</div>
+                <div className="text-3xl font-bold" style={{ color: pnlColor(p.realizedPnl) }}>
+                  {pnlStr(p.realizedPnl)}
                 </div>
-                <div className="text-sm mt-0.5" style={{ color: COLORS.textMuted }}>
-                  {pnlStr(p.unrealizedPnl)} unrealized (after 2% exit fee)
+                <div className="text-xs mt-1" style={{ color: COLORS.textMuted }}>
+                  {p.closedTrades} closed
+                  {p.partialExitsPnl !== 0 && <span style={{ color: COLORS.teal }}> · incl. {pnlStr(p.partialExitsPnl)} partials</span>}
                 </div>
-                <div className="text-sm mt-0.5" style={{ color: COLORS.textMuted }}>
-                  <span style={{ color: pnlColor(p.roi) }}>{(p.roi * 100).toFixed(1)}% ROI</span>
-                  {' '}over {p.tradingDays.toFixed(0)} days
-                  {' · '}{pnlStr(p.closedTrades > 0 ? p.realizedPnl / p.closedTrades : 0)}/trade avg
+              </div>
+              {/* Unrealized */}
+              <div className="px-6" style={{ borderRight: `1px solid ${COLORS.surface}` }}>
+                <div className="text-xs uppercase tracking-wider mb-2" style={{ color: COLORS.textMuted }}>Unrealized</div>
+                <div className="text-3xl font-bold" style={{ color: pnlColor(p.unrealizedPnl) }}>
+                  {pnlStr(p.unrealizedPnl)}
                 </div>
-                {p.partialExitsPnl !== 0 && (
-                  <div className="text-xs mt-1" style={{ color: COLORS.teal }}>
-                    incl. {pnlStr(p.partialExitsPnl)} from partial exits (positions still open)
-                  </div>
-                )}
-                <div className="text-xs mt-0.5" style={{ color: p.avgHoldDays < 0.5 ? COLORS.amber : COLORS.textMuted }}>
-                  avg hold: {p.avgHoldDays < 1
-                    ? `${(p.avgHoldDays * 24).toFixed(0)}h`
-                    : `${p.avgHoldDays.toFixed(1)}d`}/trade
-                  {p.avgHoldDays < 0.5 && ' ⚠️ very short — check near-resolution exits'}
+                <div className="text-xs mt-1" style={{ color: COLORS.textMuted }}>{p.openTrades} open · after 2% fee</div>
+              </div>
+              {/* ROI */}
+              <div className="pl-6">
+                <div className="text-xs uppercase tracking-wider mb-2" style={{ color: COLORS.textMuted }}>ROI</div>
+                <div className="text-3xl font-bold" style={{ color: pnlColor(p.roi) }}>
+                  {(p.roi * 100).toFixed(1)}%
+                </div>
+                <div className="text-xs mt-1" style={{ color: p.avgHoldDays < 0.5 ? COLORS.amber : COLORS.textMuted }}>
+                  {p.tradingDays.toFixed(0)}d · avg hold {p.avgHoldDays < 1 ? `${(p.avgHoldDays * 24).toFixed(0)}h` : `${p.avgHoldDays.toFixed(1)}d`}
+                  {p.avgHoldDays < 0.5 && ' ⚠️'}
                 </div>
               </div>
             </div>
