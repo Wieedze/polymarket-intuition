@@ -320,15 +320,22 @@ export async function GET(): Promise<NextResponse> {
 
     // Open positions
     const topOpen = [...open]
-      .map((t) => ({
-        title: t.title,
-        side: t.side,
-        entryPrice: t.entryPrice,
-        curPrice: t.curPrice ?? t.entryPrice,
-        unrealized: t.curPrice != null ? t.shares * (t.curPrice - t.entryPrice) : 0,
-        expert: t.copiedLabel ?? t.copiedFrom.slice(0, 10),
-        domain: t.domain?.replace('pm-domain/', '') ?? '?',
-      }))
+      .map((t) => {
+        const sharesNow = t.sharesRemaining ?? t.shares
+        const fraction = t.shares > 0 ? sharesNow / t.shares : 1
+        const unrealized = t.curPrice != null
+          ? sharesNow * t.curPrice * (1 - POLYMARKET_FEE_RATE) - t.simulatedUsdc * fraction
+          : 0
+        return {
+          title: t.title,
+          side: t.side,
+          entryPrice: t.entryPrice,
+          curPrice: t.curPrice ?? t.entryPrice,
+          unrealized,
+          expert: t.copiedLabel ?? t.copiedFrom.slice(0, 10),
+          domain: t.domain?.replace('pm-domain/', '') ?? '?',
+        }
+      })
       .sort((a, b) => b.unrealized - a.unrealized)
       .slice(0, 10)
 

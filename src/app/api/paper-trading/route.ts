@@ -27,13 +27,14 @@ type PositionRecord = {
 }
 
 // ── Slippage simulation ───────────────────────────────────────────
-// In reality you enter after the sharp — the price has already moved.
-// 15-30¢ markets are less liquid → wider spread → bigger slippage.
-// 30-55¢ markets have better liquidity → tighter spread.
+// Percentage-based markup on entry price — consistent with analytics estimation and migration.
+// Less liquid longshots (15-30¢) get higher slippage than mid-range markets.
 function applySlippage(entryPrice: number): number {
-  if (entryPrice < 0.30) return Math.min(entryPrice + 0.05, 0.95)  // +5¢ on illiquid longshots
-  if (entryPrice < 0.55) return Math.min(entryPrice + 0.03, 0.95)  // +3¢ on value zone
-  return entryPrice  // >55¢ already blocked by signal scorer
+  const base = entryPrice < 0.20 ? 0.06
+             : entryPrice < 0.30 ? 0.05
+             : entryPrice < 0.50 ? 0.03
+             : 0.02
+  return Math.min(entryPrice * (1 + base), 0.95)
 }
 
 // ── Correlation guard ─────────────────────────────────────────────
