@@ -245,42 +245,80 @@ export default function AnalyticsPage(): React.ReactElement {
               </div>
             </div>
 
-            {/* P&L waterfall */}
+            {/* P&L waterfall — costs flow left-to-right REDUCING the pre-cost alpha */}
             {data.stats && data.costs && (
-              <div className="flex flex-wrap items-center gap-2 text-sm mb-5">
-                <div className="flex flex-col items-center px-4 py-2 rounded-lg" style={{ background: COLORS.surface }}>
-                  <span className="text-xs mb-0.5" style={{ color: COLORS.textMuted }}>Gross wins</span>
-                  <span className="font-bold" style={{ color: COLORS.teal }}>+${data.stats.grossWins.toFixed(0)}</span>
+              <div className="mb-5">
+                <div className="flex flex-wrap items-center gap-2 text-sm">
+                  {/* Pre-cost alpha */}
+                  <div className="flex flex-col items-center px-4 py-2 rounded-lg" style={{ background: COLORS.surface }}>
+                    <span className="text-xs mb-0.5" style={{ color: COLORS.textMuted }}>Alpha before costs</span>
+                    <span className="font-bold" style={{ color: COLORS.teal }}>+${data.costs.preCostPnl.toFixed(0)}</span>
+                  </div>
+
+                  <div className="flex flex-col items-center gap-1">
+                    <span className="text-lg" style={{ color: COLORS.textMuted }}>−</span>
+                  </div>
+
+                  {/* Fees */}
+                  <div className="flex flex-col items-center px-4 py-2 rounded-lg border" style={{ background: COLORS.surface, borderColor: `${COLORS.amber}55` }}>
+                    <span className="text-xs mb-0.5" style={{ color: COLORS.amber }}>Fees (2% taker)</span>
+                    <span className="font-bold" style={{ color: COLORS.amber }}>−${data.costs.totalFees.toFixed(0)}</span>
+                    <span className="text-[10px]" style={{ color: COLORS.textMuted }}>{(data.costs.feePct * 100).toFixed(1)}% of deployed</span>
+                  </div>
+
+                  <div className="flex flex-col items-center gap-1">
+                    <span className="text-lg" style={{ color: COLORS.textMuted }}>−</span>
+                  </div>
+
+                  {/* Slippage */}
+                  <div className="flex flex-col items-center px-4 py-2 rounded-lg border" style={{ background: COLORS.surface, borderColor: `${COLORS.amber}55` }}>
+                    <span className="text-xs mb-0.5" style={{ color: COLORS.amber }}>Slippage (est.)</span>
+                    <span className="font-bold" style={{ color: COLORS.amber }}>−${data.costs.totalSlippage.toFixed(0)}</span>
+                    <span className="text-[10px]" style={{ color: COLORS.textMuted }}>{(data.costs.slippagePct * 100).toFixed(1)}% of deployed</span>
+                  </div>
+
+                  <div className="flex flex-col items-center gap-1">
+                    <span className="text-lg font-bold" style={{ color: COLORS.textMuted }}>=</span>
+                  </div>
+
+                  {/* Net realized */}
+                  <div className="flex flex-col items-center px-4 py-2 rounded-lg border-2" style={{
+                    background: COLORS.surface,
+                    borderColor: p.realizedPnl >= 0 ? COLORS.teal : COLORS.red,
+                  }}>
+                    <span className="text-xs mb-0.5 font-medium" style={{ color: COLORS.textMuted }}>Net realized P&L</span>
+                    <span className="text-lg font-bold" style={{ color: pnlColor(p.realizedPnl) }}>{pnlStr(p.realizedPnl)}</span>
+                    <span className="text-[10px]" style={{ color: COLORS.textMuted }}>costs already deducted</span>
+                  </div>
                 </div>
-                <span style={{ color: COLORS.textMuted }}>−</span>
-                <div className="flex flex-col items-center px-4 py-2 rounded-lg" style={{ background: COLORS.surface }}>
-                  <span className="text-xs mb-0.5" style={{ color: COLORS.textMuted }}>Gross losses</span>
-                  <span className="font-bold" style={{ color: COLORS.red }}>−${data.stats.grossLosses.toFixed(0)}</span>
-                </div>
-                <span style={{ color: COLORS.textMuted }}>=</span>
-                <div className="flex flex-col items-center px-4 py-2 rounded-lg" style={{ background: COLORS.surface }}>
-                  <span className="text-xs mb-0.5" style={{ color: COLORS.textMuted }}>Net P&L</span>
-                  <span className="font-bold" style={{ color: pnlColor(p.realizedPnl) }}>{pnlStr(p.realizedPnl)}</span>
-                </div>
-                <div className="hidden sm:flex items-center gap-1 px-3" style={{ color: COLORS.textMuted }}>
-                  <span>·</span>
-                  <span className="text-xs">costs included ↓</span>
-                </div>
-                <div className="flex flex-col items-center px-4 py-2 rounded-lg border" style={{ background: COLORS.surface, borderColor: `${COLORS.amber}44` }}>
-                  <span className="text-xs mb-0.5" style={{ color: COLORS.textMuted }}>Fees paid</span>
-                  <span className="font-bold" style={{ color: COLORS.amber }}>−${data.costs.totalFees.toFixed(0)}</span>
-                </div>
-                <span style={{ color: COLORS.textMuted }}>+</span>
-                <div className="flex flex-col items-center px-4 py-2 rounded-lg border" style={{ background: COLORS.surface, borderColor: `${COLORS.amber}44` }}>
-                  <span className="text-xs mb-0.5" style={{ color: COLORS.textMuted }}>Slippage ~est.</span>
-                  <span className="font-bold" style={{ color: COLORS.amber }}>−${data.costs.totalSlippage.toFixed(0)}</span>
-                </div>
-                <span style={{ color: COLORS.textMuted }}>=</span>
-                <div className="flex flex-col items-center px-4 py-2 rounded-lg" style={{ background: COLORS.surface }}>
-                  <span className="text-xs mb-0.5" style={{ color: COLORS.textMuted }}>Total cost</span>
-                  <span className="font-bold" style={{ color: COLORS.red }}>−${data.costs.totalCost.toFixed(0)}</span>
-                  <span className="text-[10px]" style={{ color: COLORS.textMuted }}>{(data.costs.costPct * 100).toFixed(1)}% of deployed</span>
-                </div>
+
+                {/* Visual proportion bar */}
+                {data.costs.preCostPnl > 0 && (
+                  <div className="mt-3">
+                    <div className="h-2 rounded-full overflow-hidden flex gap-0.5" style={{ background: COLORS.surface }}>
+                      <div style={{
+                        width: `${Math.max((p.realizedPnl / data.costs.preCostPnl) * 100, 0)}%`,
+                        background: COLORS.teal,
+                        borderRadius: '4px',
+                      }} />
+                      <div style={{
+                        width: `${(data.costs.totalFees / data.costs.preCostPnl) * 100}%`,
+                        background: COLORS.amber,
+                        opacity: 0.8,
+                      }} />
+                      <div style={{
+                        width: `${(data.costs.totalSlippage / data.costs.preCostPnl) * 100}%`,
+                        background: COLORS.amber,
+                        opacity: 0.5,
+                      }} />
+                    </div>
+                    <div className="flex gap-4 mt-1 text-[10px]" style={{ color: COLORS.textMuted }}>
+                      <span><span className="inline-block w-2 h-1.5 rounded-sm mr-1 align-middle" style={{ background: COLORS.teal }} />Net P&L {((p.realizedPnl / data.costs.preCostPnl) * 100).toFixed(0)}%</span>
+                      <span><span className="inline-block w-2 h-1.5 rounded-sm mr-1 align-middle" style={{ background: COLORS.amber, opacity: 0.8 }} />Fees {((data.costs.totalFees / data.costs.preCostPnl) * 100).toFixed(0)}%</span>
+                      <span><span className="inline-block w-2 h-1.5 rounded-sm mr-1 align-middle" style={{ background: COLORS.amber, opacity: 0.5 }} />Slippage {((data.costs.totalSlippage / data.costs.preCostPnl) * 100).toFixed(0)}%</span>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
