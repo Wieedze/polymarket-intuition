@@ -260,14 +260,14 @@ export async function GET(): Promise<NextResponse> {
       profitFactor: { value: pf, threshold: 1.3, ok: pf >= 1.3 },
       maxConsecutiveLosses: { value: mcl, threshold: 15, ok: mcl <= 15 },
       avgPnlPerTrade: { value: avgPnl, threshold: 5, ok: avgPnl >= 5 },
-      minResolvedTrades: { value: closed.length, threshold: 200, ok: closed.length >= 200 },
-      allOk: pf >= 1.3 && mcl <= 15 && avgPnl >= 5 && closed.length >= 200,
+      minResolvedTrades: { value: closed.length, threshold: 4000, ok: closed.length >= 4000 },
+      allOk: pf >= 1.3 && mcl <= 15 && avgPnl >= 5 && closed.length >= 4000,
     }
 
     const significance =
-      closed.length < 30 ? 'not_significant' :
-      closed.length < 100 ? 'low' :
-      closed.length < 200 ? 'medium' : 'high'
+      closed.length < 100 ? 'not_significant' :
+      closed.length < 1000 ? 'low' :
+      closed.length < 4000 ? 'medium' : 'high'
 
     return NextResponse.json({
       portfolio: {
