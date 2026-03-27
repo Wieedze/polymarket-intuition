@@ -244,12 +244,17 @@ export async function GET(): Promise<NextResponse> {
     const totalCost = totalFees + totalSlippage
     const totalDeployed = all.reduce((s, t) => s + t.simulatedUsdc, 0)
 
+    // Pre-cost alpha = what we would have made without fees or slippage
+    // Since fees and slippage are already baked into pnl, we add them back to get the gross
+    const preCostPnl = realizedPnl + totalFees + totalSlippage
+
     const costs = {
       totalEntryFees,
       totalExitFees,
       totalFees,
       totalSlippage,
       totalCost,
+      preCostPnl,
       costPct: totalDeployed > 0 ? totalCost / totalDeployed : 0,
       feePct: totalDeployed > 0 ? totalFees / totalDeployed : 0,
       slippagePct: totalDeployed > 0 ? totalSlippage / totalDeployed : 0,

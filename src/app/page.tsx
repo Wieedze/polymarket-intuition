@@ -118,6 +118,7 @@ export default function Dashboard(): React.ReactElement {
             <SideLink href="/" active>Dashboard</SideLink>
             <SideLink href="/analytics">Analytics</SideLink>
             <SideLink href="/paper-trading">Trades</SideLink>
+            <SideLink href="/activity">Activity</SideLink>
             <SideLink href="/leaderboard">Leaderboard</SideLink>
             <SideLink href="/settings">Settings</SideLink>
           </nav>
@@ -258,11 +259,16 @@ export default function Dashboard(): React.ReactElement {
             </div>
           )}
 
-          {/* Activity feed */}
+          {/* Activity feed — preview, links to full page */}
           <div className="rounded-xl p-5" style={{ background: COLORS.card }}>
-            <h2 className="text-sm font-medium mb-4" style={{ color: COLORS.textMuted }}>Recent Activity</h2>
-            <div className="space-y-3 max-h-[300px] overflow-y-auto">
-              {data.events.length > 0 ? data.events.map((e) => (
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-sm font-medium" style={{ color: COLORS.textMuted }}>Recent Activity</h2>
+              <Link href="/activity" className="text-xs px-3 py-1 rounded-lg transition-colors" style={{ background: COLORS.surface, color: COLORS.teal }}>
+                View all →
+              </Link>
+            </div>
+            <div className="space-y-3">
+              {data.events.length > 0 ? data.events.slice(0, 10).map((e) => (
                 <div key={e.id} className="flex gap-3 text-xs py-2 border-b" style={{ borderColor: COLORS.surface }}>
                   <span className="text-base">{EVENT_ICONS[e.type] ?? '•'}</span>
                   <div className="flex-1 min-w-0">
@@ -277,6 +283,13 @@ export default function Dashboard(): React.ReactElement {
                 </div>
               )}
             </div>
+            {data.events.length > 0 && (
+              <div className="mt-4 pt-3 border-t text-center" style={{ borderColor: COLORS.surface }}>
+                <Link href="/activity" className="text-xs" style={{ color: COLORS.teal }}>
+                  See full activity log →
+                </Link>
+              </div>
+            )}
           </div>
         </main>
       </div>

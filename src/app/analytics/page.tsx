@@ -79,6 +79,7 @@ type Costs = {
   totalFees: number
   totalSlippage: number
   totalCost: number
+  preCostPnl: number
   costPct: number
   feePct: number
   slippagePct: number
@@ -223,114 +224,210 @@ export default function AnalyticsPage(): React.ReactElement {
             </button>
           </div>
 
-          {/* Portfolio overview */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-4">
-            <StatCard label="Balance" value={`$${p.currentBalance.toFixed(0)}`} sub={`Started: $${p.startingBalance.toFixed(0)}`} color={p.currentBalance >= p.startingBalance ? COLORS.teal : COLORS.red} />
-            <StatCard label="Realized P&L" value={pnlStr(p.realizedPnl)} sub={`Unrealized: ${pnlStr(p.unrealizedPnl)}`} color={pnlColor(p.realizedPnl)} />
-            <StatCard label="Win Rate" value={p.closedTrades > 0 ? wrStr(p.winRate) : '—'} sub={`${p.wins}W / ${p.losses}L`} color={COLORS.amber} />
-            <StatCard label="ROI" value={p.closedTrades > 0 ? `${(p.roi * 100).toFixed(1)}%` : '—'} sub={`${p.openTrades} open / ${p.totalTrades} total`} color={pnlColor(p.roi)} />
-          </div>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-10">
-            <StatCard label="Invested (at risk)" value={`$${p.totalInvested.toFixed(0)}`} sub={`${p.openTrades} positions`} color={COLORS.amber} />
-            <StatCard label="Available Cash" value={`$${p.availableCash.toFixed(0)}`} sub={`${((p.availableCash / p.startingBalance) * 100).toFixed(0)}% of start`} color={p.availableCash > 0 ? COLORS.textLight : COLORS.red} />
-            <StatCard label="Redeemable Value" value={`$${p.totalRedeemable.toFixed(0)}`} sub="If sold all now" color={COLORS.blue} />
-            <StatCard label="Total Equity" value={`$${(p.availableCash + p.totalRedeemable).toFixed(0)}`} sub="Cash + positions" color={(p.availableCash + p.totalRedeemable) >= p.startingBalance ? COLORS.teal : COLORS.red} />
-          </div>
-
-          {/* Validation Gates */}
-          {data.gates && (
-            <div className="mb-8 rounded-xl p-5 border" style={{ background: COLORS.card, borderColor: data.gates.allOk ? COLORS.teal : COLORS.amber }}>
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="font-semibold text-white">Validation Gates — Ready for live trading?</h3>
-                <span className="text-sm font-bold px-3 py-1 rounded-full" style={{
-                  background: data.gates.allOk ? COLORS.teal : COLORS.amber,
-                  color: COLORS.bg,
-                }}>
-                  {data.gates.allOk ? '✅ READY' : '🔴 NOT YET'}
-                </span>
+          {/* ── BLOCK 1: Bottom line ─────────────────────────────────── */}
+          <div className="rounded-xl p-6 mb-5" style={{ background: COLORS.card }}>
+            {/* Main numbers */}
+            <div className="flex flex-wrap items-end gap-6 mb-5">
+              <div>
+                <div className="text-xs uppercase tracking-wider mb-1" style={{ color: COLORS.textMuted }}>Total Equity</div>
+                <div className="text-4xl font-bold" style={{ color: (p.availableCash + p.totalRedeemable) >= p.startingBalance ? COLORS.teal : COLORS.red }}>
+                  ${(p.availableCash + p.totalRedeemable).toFixed(0)}
+                </div>
+                <div className="text-sm mt-1" style={{ color: COLORS.textMuted }}>started at ${p.startingBalance.toFixed(0)}</div>
               </div>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                {[
-                  { label: 'Profit Factor', value: data.gates.profitFactor.value === 999 ? '∞' : data.gates.profitFactor.value.toFixed(2), threshold: '≥ 1.30', ok: data.gates.profitFactor.ok },
-                  { label: 'Max consecutive losses', value: data.gates.maxConsecutiveLosses.value.toString(), threshold: '≤ 15', ok: data.gates.maxConsecutiveLosses.ok },
-                  { label: 'Avg PnL/trade', value: `${data.gates.avgPnlPerTrade.value >= 0 ? '+' : ''}$${data.gates.avgPnlPerTrade.value.toFixed(2)}`, threshold: '> +$5', ok: data.gates.avgPnlPerTrade.ok },
-                  { label: 'Resolved trades', value: data.gates.minResolvedTrades.value.toString(), threshold: '≥ 4000', ok: data.gates.minResolvedTrades.ok },
-                ].map((g) => (
-                  <div key={g.label} className="rounded-lg p-3" style={{ background: COLORS.surface }}>
-                    <div className="text-xs mb-1" style={{ color: COLORS.textMuted }}>{g.label}</div>
-                    <div className="text-lg font-bold" style={{ color: g.ok ? COLORS.teal : COLORS.amber }}>{g.value}</div>
-                    <div className="text-xs mt-1" style={{ color: COLORS.textMuted }}>threshold: {g.threshold}</div>
-                    <div className="text-xs font-medium mt-1" style={{ color: g.ok ? COLORS.teal : COLORS.amber }}>{g.ok ? '✅' : '⏳'}</div>
+              <div className="pb-1">
+                <div className="text-2xl font-bold" style={{ color: pnlColor(p.realizedPnl) }}>
+                  {pnlStr(p.realizedPnl)} realized
+                </div>
+                <div className="text-sm" style={{ color: COLORS.textMuted }}>
+                  {pnlStr(p.unrealizedPnl)} unrealized · {(p.roi * 100).toFixed(1)}% ROI
+                </div>
+              </div>
+            </div>
+
+            {/* P&L waterfall */}
+            {data.stats && data.costs && (
+              <div className="flex flex-wrap items-center gap-2 text-sm mb-5">
+                <div className="flex flex-col items-center px-4 py-2 rounded-lg" style={{ background: COLORS.surface }}>
+                  <span className="text-xs mb-0.5" style={{ color: COLORS.textMuted }}>Gross wins</span>
+                  <span className="font-bold" style={{ color: COLORS.teal }}>+${data.stats.grossWins.toFixed(0)}</span>
+                </div>
+                <span style={{ color: COLORS.textMuted }}>−</span>
+                <div className="flex flex-col items-center px-4 py-2 rounded-lg" style={{ background: COLORS.surface }}>
+                  <span className="text-xs mb-0.5" style={{ color: COLORS.textMuted }}>Gross losses</span>
+                  <span className="font-bold" style={{ color: COLORS.red }}>−${data.stats.grossLosses.toFixed(0)}</span>
+                </div>
+                <span style={{ color: COLORS.textMuted }}>=</span>
+                <div className="flex flex-col items-center px-4 py-2 rounded-lg" style={{ background: COLORS.surface }}>
+                  <span className="text-xs mb-0.5" style={{ color: COLORS.textMuted }}>Net P&L</span>
+                  <span className="font-bold" style={{ color: pnlColor(p.realizedPnl) }}>{pnlStr(p.realizedPnl)}</span>
+                </div>
+                <div className="hidden sm:flex items-center gap-1 px-3" style={{ color: COLORS.textMuted }}>
+                  <span>·</span>
+                  <span className="text-xs">costs included ↓</span>
+                </div>
+                <div className="flex flex-col items-center px-4 py-2 rounded-lg border" style={{ background: COLORS.surface, borderColor: `${COLORS.amber}44` }}>
+                  <span className="text-xs mb-0.5" style={{ color: COLORS.textMuted }}>Fees paid</span>
+                  <span className="font-bold" style={{ color: COLORS.amber }}>−${data.costs.totalFees.toFixed(0)}</span>
+                </div>
+                <span style={{ color: COLORS.textMuted }}>+</span>
+                <div className="flex flex-col items-center px-4 py-2 rounded-lg border" style={{ background: COLORS.surface, borderColor: `${COLORS.amber}44` }}>
+                  <span className="text-xs mb-0.5" style={{ color: COLORS.textMuted }}>Slippage ~est.</span>
+                  <span className="font-bold" style={{ color: COLORS.amber }}>−${data.costs.totalSlippage.toFixed(0)}</span>
+                </div>
+                <span style={{ color: COLORS.textMuted }}>=</span>
+                <div className="flex flex-col items-center px-4 py-2 rounded-lg" style={{ background: COLORS.surface }}>
+                  <span className="text-xs mb-0.5" style={{ color: COLORS.textMuted }}>Total cost</span>
+                  <span className="font-bold" style={{ color: COLORS.red }}>−${data.costs.totalCost.toFixed(0)}</span>
+                  <span className="text-[10px]" style={{ color: COLORS.textMuted }}>{(data.costs.costPct * 100).toFixed(1)}% of deployed</span>
+                </div>
+              </div>
+            )}
+
+            {/* Capital state bar */}
+            {(() => {
+              const total = p.startingBalance
+              const cashPct = Math.min((p.availableCash / total) * 100, 100)
+              const redeemPct = Math.min((p.totalRedeemable / total) * 100, 100)
+              return (
+                <div>
+                  <div className="flex items-center justify-between text-xs mb-1" style={{ color: COLORS.textMuted }}>
+                    <span>Capital allocation</span>
+                    <span>${p.startingBalance.toFixed(0)} total</span>
                   </div>
-                ))}
-              </div>
-            </div>
-          )}
+                  <div className="h-6 rounded-lg overflow-hidden flex" style={{ background: COLORS.surface }}>
+                    <div style={{ width: `${cashPct}%`, background: COLORS.blue, opacity: 0.8 }} title={`Cash: $${p.availableCash.toFixed(0)}`} />
+                    <div style={{ width: `${redeemPct}%`, background: COLORS.teal, opacity: 0.7 }} title={`In positions: $${p.totalRedeemable.toFixed(0)}`} />
+                  </div>
+                  <div className="flex gap-4 mt-1.5 text-xs" style={{ color: COLORS.textMuted }}>
+                    <span><span className="inline-block w-2 h-2 rounded-sm mr-1" style={{ background: COLORS.blue }} />${p.availableCash.toFixed(0)} cash ({((p.availableCash / p.startingBalance) * 100).toFixed(0)}%)</span>
+                    <span><span className="inline-block w-2 h-2 rounded-sm mr-1" style={{ background: COLORS.teal }} />${p.totalRedeemable.toFixed(0)} in {p.openTrades} positions</span>
+                    <span style={{ color: COLORS.textMuted }}>${p.totalInvested.toFixed(0)} invested at cost</span>
+                  </div>
+                </div>
+              )
+            })()}
+          </div>
 
-          {/* Advanced Stats */}
+          {/* ── BLOCK 2: Edge + Risk (side by side) ──────────────────── */}
           {data.stats && (
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
-              <StatCard
-                label="Profit Factor"
-                value={data.stats.profitFactor === 999 ? '∞' : data.stats.profitFactor.toFixed(2)}
-                sub={data.stats.profitFactor >= 1.3 ? '✅ Good edge' : '⏳ Need > 1.3'}
-                color={data.stats.profitFactor >= 1.3 ? COLORS.teal : COLORS.amber}
-              />
-              <StatCard
-                label="Win Rate 95% CI"
-                value={`[${(data.stats.winRateCI.low * 100).toFixed(0)}%–${(data.stats.winRateCI.high * 100).toFixed(0)}%]`}
-                sub={{
-                  not_significant: '⚠️ < 100 trades',
-                  low: '🟡 100-1000 trades',
-                  medium: '🟠 1000-4000 trades',
-                  high: '🟢 4000+ trades',
-                }[data.stats.significance]}
-                color={COLORS.blue}
-              />
-              <StatCard
-                label="Max Drawdown"
-                value={`-${(data.stats.maxDrawdown * 100).toFixed(1)}%`}
-                sub="From peak"
-                color={data.stats.maxDrawdown < 0.2 ? COLORS.teal : COLORS.red}
-              />
-              <StatCard
-                label="Max consecutive losses"
-                value={data.stats.maxConsecutiveLosses.toString()}
-                sub={data.stats.maxConsecutiveLosses <= 15 ? '✅ Ok' : '⚠️ High'}
-                color={data.stats.maxConsecutiveLosses <= 15 ? COLORS.teal : COLORS.amber}
-              />
-            </div>
-          )}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-5 mb-5">
+              {/* Edge quality */}
+              <div className="rounded-xl p-5" style={{ background: COLORS.card }}>
+                <div className="text-xs uppercase tracking-wider mb-4" style={{ color: COLORS.textMuted }}>Edge Quality</div>
+                <div className="space-y-4">
+                  {/* Win rate row */}
+                  <div>
+                    <div className="flex items-end justify-between mb-1">
+                      <span className="text-sm" style={{ color: COLORS.textLight }}>Win Rate</span>
+                      <span className="text-lg font-bold" style={{ color: COLORS.amber }}>{wrStr(p.winRate)}</span>
+                    </div>
+                    <div className="h-2 rounded-full overflow-hidden" style={{ background: COLORS.surface }}>
+                      <div className="h-full rounded-full" style={{ width: `${p.winRate * 100}%`, background: COLORS.amber }} />
+                    </div>
+                    <div className="flex justify-between text-xs mt-1" style={{ color: COLORS.textMuted }}>
+                      <span>{p.wins}W · {p.losses}L · {p.closedTrades} resolved</span>
+                      <span>95% CI [{(data.stats.winRateCI.low * 100).toFixed(0)}%–{(data.stats.winRateCI.high * 100).toFixed(0)}%] {
+                        { not_significant: '⚠️ not sig.', low: '🟡 low sig.', medium: '🟠 medium', high: '🟢 high' }[data.stats.significance]
+                      }</span>
+                    </div>
+                  </div>
+                  {/* Profit factor */}
+                  <div className="flex items-center justify-between py-3 border-t border-b" style={{ borderColor: COLORS.surface }}>
+                    <div>
+                      <div className="text-xs" style={{ color: COLORS.textMuted }}>Profit Factor</div>
+                      <div className="text-xs mt-0.5" style={{ color: COLORS.textMuted }}>gross wins ÷ gross losses</div>
+                    </div>
+                    <div className="text-right">
+                      <div className="text-2xl font-bold" style={{ color: data.stats.profitFactor >= 1.3 ? COLORS.teal : COLORS.amber }}>
+                        {data.stats.profitFactor === 999 ? '∞' : data.stats.profitFactor.toFixed(2)}
+                      </div>
+                      <div className="text-xs" style={{ color: data.stats.profitFactor >= 1.3 ? COLORS.teal : COLORS.amber }}>
+                        {data.stats.profitFactor >= 1.3 ? '✅ edge confirmed' : '⏳ need ≥ 1.30'}
+                      </div>
+                    </div>
+                  </div>
+                  {/* Avg P&L / trade */}
+                  <div className="flex items-center justify-between">
+                    <div className="text-sm" style={{ color: COLORS.textLight }}>Avg P&L / trade</div>
+                    <div className="text-right">
+                      <div className="text-lg font-bold" style={{ color: pnlColor(data.stats.avgPnlPerTrade) }}>
+                        {data.stats.avgPnlPerTrade >= 0 ? '+' : ''}${data.stats.avgPnlPerTrade.toFixed(2)}
+                      </div>
+                      <div className="text-xs" style={{ color: COLORS.textMuted }}>threshold: &gt; +$5</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
 
-          {/* Trading Costs */}
-          {data.costs && (
-            <Section title="Trading Costs (Fees + Slippage)">
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-4">
-                <div className="rounded-lg p-3" style={{ background: COLORS.surface }}>
-                  <div className="text-xs mb-1" style={{ color: COLORS.textMuted }}>Entry Fees (2%)</div>
-                  <div className="text-lg font-bold" style={{ color: COLORS.amber }}>${data.costs.totalEntryFees.toFixed(2)}</div>
-                  <div className="text-xs mt-1" style={{ color: COLORS.textMuted }}>{(data.costs.feePct * 100).toFixed(1)}% of deployed</div>
-                </div>
-                <div className="rounded-lg p-3" style={{ background: COLORS.surface }}>
-                  <div className="text-xs mb-1" style={{ color: COLORS.textMuted }}>Exit Fees (2%)</div>
-                  <div className="text-lg font-bold" style={{ color: COLORS.amber }}>${data.costs.totalExitFees.toFixed(2)}</div>
-                  <div className="text-xs mt-1" style={{ color: COLORS.textMuted }}>Early exits only</div>
-                </div>
-                <div className="rounded-lg p-3" style={{ background: COLORS.surface }}>
-                  <div className="text-xs mb-1" style={{ color: COLORS.textMuted }}>Estimated Slippage</div>
-                  <div className="text-lg font-bold" style={{ color: COLORS.amber }}>${data.costs.totalSlippage.toFixed(2)}</div>
-                  <div className="text-xs mt-1" style={{ color: COLORS.textMuted }}>{(data.costs.slippagePct * 100).toFixed(1)}% of deployed</div>
-                </div>
-                <div className="rounded-lg p-3" style={{ background: COLORS.surface }}>
-                  <div className="text-xs mb-1" style={{ color: COLORS.textMuted }}>Total Cost</div>
-                  <div className="text-lg font-bold" style={{ color: COLORS.red }}>${data.costs.totalCost.toFixed(2)}</div>
-                  <div className="text-xs mt-1" style={{ color: COLORS.textMuted }}>{(data.costs.costPct * 100).toFixed(1)}% of ${data.costs.totalDeployed.toFixed(0)} deployed</div>
+              {/* Risk + live gate */}
+              <div className="rounded-xl p-5" style={{ background: COLORS.card }}>
+                <div className="text-xs uppercase tracking-wider mb-4" style={{ color: COLORS.textMuted }}>Risk & Live Readiness</div>
+                <div className="space-y-3">
+                  {/* Drawdown */}
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="text-sm" style={{ color: COLORS.textLight }}>Max Drawdown</div>
+                      <div className="text-xs" style={{ color: COLORS.textMuted }}>from peak equity</div>
+                    </div>
+                    <div className="text-xl font-bold" style={{ color: data.stats.maxDrawdown < 0.2 ? COLORS.teal : COLORS.red }}>
+                      -{(data.stats.maxDrawdown * 100).toFixed(1)}%
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between py-3 border-t border-b" style={{ borderColor: COLORS.surface }}>
+                    <div>
+                      <div className="text-sm" style={{ color: COLORS.textLight }}>Max consecutive losses</div>
+                      <div className="text-xs" style={{ color: COLORS.textMuted }}>worst losing streak</div>
+                    </div>
+                    <div className="text-xl font-bold" style={{ color: data.stats.maxConsecutiveLosses <= 15 ? COLORS.teal : COLORS.amber }}>
+                      {data.stats.maxConsecutiveLosses}
+                      <span className="text-xs font-normal ml-1" style={{ color: COLORS.textMuted }}>/ 15 max</span>
+                    </div>
+                  </div>
+                  {/* Gate progress */}
+                  {data.gates && (
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-sm" style={{ color: COLORS.textLight }}>Live trading gates</span>
+                        <span className="text-sm font-bold px-2 py-0.5 rounded" style={{
+                          background: data.gates.allOk ? `${COLORS.teal}22` : `${COLORS.amber}22`,
+                          color: data.gates.allOk ? COLORS.teal : COLORS.amber,
+                        }}>
+                          {[data.gates.profitFactor.ok, data.gates.maxConsecutiveLosses.ok, data.gates.avgPnlPerTrade.ok, data.gates.minResolvedTrades.ok].filter(Boolean).length}/4 passed
+                        </span>
+                      </div>
+                      <div className="space-y-1.5">
+                        {[
+                          { label: `Profit Factor ${data.gates.profitFactor.value.toFixed(2)} ≥ 1.30`, ok: data.gates.profitFactor.ok },
+                          { label: `Consecutive losses ${data.gates.maxConsecutiveLosses.value} ≤ 15`, ok: data.gates.maxConsecutiveLosses.ok },
+                          { label: `Avg P&L ${data.gates.avgPnlPerTrade.value >= 0 ? '+' : ''}$${data.gates.avgPnlPerTrade.value.toFixed(2)} > $5`, ok: data.gates.avgPnlPerTrade.ok },
+                          { label: `${data.gates.minResolvedTrades.value} / 4000 resolved trades`, ok: data.gates.minResolvedTrades.ok },
+                        ].map((g) => (
+                          <div key={g.label} className="flex items-center gap-2 text-xs" style={{ color: g.ok ? COLORS.teal : COLORS.textMuted }}>
+                            <span>{g.ok ? '✅' : '⏳'}</span>
+                            <span>{g.label}</span>
+                          </div>
+                        ))}
+                      </div>
+                      {!data.gates.minResolvedTrades.ok && (
+                        <div className="mt-3">
+                          <div className="flex justify-between text-xs mb-1" style={{ color: COLORS.textMuted }}>
+                            <span>Resolved trades progress</span>
+                            <span>{data.gates.minResolvedTrades.value} / 4000</span>
+                          </div>
+                          <div className="h-1.5 rounded-full overflow-hidden" style={{ background: COLORS.surface }}>
+                            <div className="h-full rounded-full" style={{
+                              width: `${Math.min((data.gates.minResolvedTrades.value / 4000) * 100, 100)}%`,
+                              background: COLORS.amber,
+                            }} />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
-              <div className="text-xs px-1 pt-1" style={{ color: COLORS.textMuted }}>
-                Slippage estimated: 6% &lt;20¢, 5% 20-30¢, 3% 30-50¢, 2% &gt;50¢ + 0.5%/100$ size impact · Fees: 2% Polymarket taker fee at entry + early exit
-              </div>
-            </Section>
+            </div>
           )}
 
           {/* Equity Curve */}
