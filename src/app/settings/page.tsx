@@ -102,6 +102,7 @@ export default function SettingsPage(): React.ReactElement {
             <SideLink href="/paper-trading">Trades</SideLink>
             <SideLink href="/activity">Activity</SideLink>
             <SideLink href="/leaderboard">Leaderboard</SideLink>
+            <SideLink href="/rules">Rules</SideLink>
             <SideLink href="/settings" active>Settings</SideLink>
           </nav>
           <div className="mt-auto pt-8">

@@ -184,6 +184,7 @@ export default function PaperTradingPage(): React.ReactElement {
             <SideLink href="/paper-trading" active>Trades</SideLink>
             <SideLink href="/activity">Activity</SideLink>
             <SideLink href="/leaderboard">Leaderboard</SideLink>
+            <SideLink href="/rules">Rules</SideLink>
             <SideLink href="/settings">Settings</SideLink>
           </nav>
           <div className="mt-auto pt-8">
