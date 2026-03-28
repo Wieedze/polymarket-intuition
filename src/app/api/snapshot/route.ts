@@ -1,4 +1,6 @@
 import { NextResponse } from 'next/server'
+
+export const dynamic = 'force-dynamic'
 import { getAllPaperTrades, getPortfolioSetting, getRecentBotEvents, type PaperTrade } from '@/lib/db'
 import { getAllExpertTrustFromTrades } from '@/lib/expert-trust'
 

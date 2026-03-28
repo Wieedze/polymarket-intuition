@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server'
 import { getAllPaperTrades, getPortfolioSetting, type PaperTrade } from '@/lib/db'
+
+export const dynamic = 'force-dynamic'
 import { getAllExpertTrust } from '@/lib/expert-trust'
 
 function pnlOf(trades: PaperTrade[]): number {

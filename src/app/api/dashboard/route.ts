@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server'
 import { getAllPaperTrades, getPortfolioSetting, getRecentBotEvents } from '@/lib/db'
 
+export const dynamic = 'force-dynamic'
+
 export async function GET(): Promise<NextResponse> {
   try {
     const all = getAllPaperTrades()
