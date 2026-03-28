@@ -61,6 +61,15 @@ export function evaluateExpertTrust(
 
   // ── Phase 1: Observation ──
   if (resolved.length < OBSERVATION_TRADES) {
+    // Early warning: cut trust if losing money fast even with few trades
+    if (resolved.length >= 5 && pnl < -300) {
+      return { ...base, phase: 'observation', trustLevel: 0, status: 'paused',
+        reason: `Paused early: ${resolved.length} trades, PnL ${pnl.toFixed(0)}` }
+    }
+    if (resolved.length >= 3 && pnl < -100) {
+      return { ...base, phase: 'observation', trustLevel: 0.3, status: 'reduced',
+        reason: `Reduced early: ${resolved.length} trades, PnL ${pnl.toFixed(0)}` }
+    }
     return {
       ...base,
       phase: 'observation',
@@ -77,7 +86,7 @@ export function evaluateExpertTrust(
     const recentWR = recent.filter((t) => t.status === 'won').length / recent.length
     const recentPnl = recent.reduce((s, t) => s + (t.pnl ?? 0), 0)
 
-    // Losing badly → pause
+    // Losing badly → pause (both WR and PnL must be bad)
     if (resolved.length >= EVALUATION_TRADES && recentPnl < -200 && recentWR < 0.30) {
       return {
         ...base,
@@ -89,7 +98,8 @@ export function evaluateExpertTrust(
     }
 
     // Losing moderately → reduce
-    if (recentPnl < -100 || recentWR < 0.35) {
+    // BUT: if overall PnL is positive, WR alone doesn't matter (longshot traders)
+    if (recentPnl < -100 || (recentWR < 0.35 && pnl < 0)) {
       return {
         ...base,
         phase: 'evaluation',
@@ -127,7 +137,8 @@ export function evaluateExpertTrust(
     }
   }
 
-  if (recentPnl < -100 || recentWR < 0.35) {
+  // Reduce if losing money recently, BUT profitable longshot traders stay active
+  if (recentPnl < -100 || (recentWR < 0.35 && pnl < 0)) {
     return {
       ...base,
       phase: 'proven',
@@ -201,6 +212,14 @@ export function evaluateExpertTrustFromTrades(
   }
 
   if (resolved.length < OBSERVATION_TRADES) {
+    if (resolved.length >= 5 && pnl < -300) {
+      return { ...base, phase: 'observation', trustLevel: 0, status: 'paused',
+        reason: `Paused early: ${resolved.length} trades, PnL ${pnl.toFixed(0)}` }
+    }
+    if (resolved.length >= 3 && pnl < -100) {
+      return { ...base, phase: 'observation', trustLevel: 0.3, status: 'reduced',
+        reason: `Reduced early: ${resolved.length} trades, PnL ${pnl.toFixed(0)}` }
+    }
     return { ...base, phase: 'observation', trustLevel: 0.7, status: 'active',
       reason: `Observing (${resolved.length}/${OBSERVATION_TRADES} trades)` }
   }
@@ -213,7 +232,7 @@ export function evaluateExpertTrustFromTrades(
       return { ...base, phase: 'evaluation', trustLevel: 0, status: 'paused',
         reason: `Paused: last 15 trades WR ${(recentWR * 100).toFixed(0)}%, PnL ${recentPnl.toFixed(0)}` }
     }
-    if (recentPnl < -100 || recentWR < 0.35) {
+    if (recentPnl < -100 || (recentWR < 0.35 && pnl < 0)) {
       return { ...base, phase: 'evaluation', trustLevel: 0.3, status: 'reduced',
         reason: `Reduced: WR ${(recentWR * 100).toFixed(0)}%, PnL ${recentPnl.toFixed(0)} (last 15)` }
     }
@@ -229,7 +248,7 @@ export function evaluateExpertTrustFromTrades(
     return { ...base, phase: 'proven', trustLevel: 0, status: 'paused',
       reason: `Paused: slump detected, WR ${(recentWR * 100).toFixed(0)}% (last 20)` }
   }
-  if (recentPnl < -100 || recentWR < 0.35) {
+  if (recentPnl < -100 || (recentWR < 0.35 && pnl < 0)) {
     return { ...base, phase: 'proven', trustLevel: 0.4, status: 'reduced',
       reason: `Reduced: recent slump WR ${(recentWR * 100).toFixed(0)}% (last 20)` }
   }
