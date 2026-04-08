@@ -23,6 +23,59 @@ const OBSERVATION_TRADES = 20   // first 20 trades → observe, no judgment (10 
 const EVALUATION_TRADES = 30    // after 30 → evaluate aggressively
 const PROVEN_TRADES = 60        // after 60 → proven track record (40 was statistically weak)
 
+// ── Risk-adjusted scoring (used by proven phase) ────────────────
+
+type RiskMetrics = {
+  profitFactor: number       // gross wins / gross losses (>1 = profitable)
+  maxDrawdown: number        // worst cumulative loss streak in $
+  avgWin: number
+  avgLoss: number
+  recentMomentum: number     // PnL of last 20 trades
+  compositeScore: number     // 0-100 final score
+}
+
+function computeRiskMetrics(resolved: PaperTrade[]): RiskMetrics {
+  const wins = resolved.filter((t) => (t.pnl ?? 0) > 0)
+  const losses = resolved.filter((t) => (t.pnl ?? 0) <= 0)
+
+  const grossWins = wins.reduce((s, t) => s + (t.pnl ?? 0), 0)
+  const grossLosses = Math.abs(losses.reduce((s, t) => s + (t.pnl ?? 0), 0))
+  const profitFactor = grossLosses > 0 ? grossWins / grossLosses : grossWins > 0 ? 10 : 0
+
+  const avgWin = wins.length > 0 ? grossWins / wins.length : 0
+  const avgLoss = losses.length > 0 ? grossLosses / losses.length : 0
+
+  // Max drawdown: worst peak-to-trough in cumulative PnL
+  let peak = 0
+  let cumPnl = 0
+  let maxDd = 0
+  for (const t of resolved) {
+    cumPnl += t.pnl ?? 0
+    if (cumPnl > peak) peak = cumPnl
+    const dd = peak - cumPnl
+    if (dd > maxDd) maxDd = dd
+  }
+
+  // Recent momentum (last 20)
+  const recent = resolved.slice(-20)
+  const recentMomentum = recent.reduce((s, t) => s + (t.pnl ?? 0), 0)
+
+  // Composite score 0-100:
+  // 40% profit factor, 25% drawdown ratio, 20% recent momentum, 15% win/loss ratio
+  const pfScore = Math.min(profitFactor / 2.0, 1) * 40         // PF 2.0+ = max 40pts
+  const totalPnl = grossWins - grossLosses
+  const ddRatio = totalPnl > 0 ? Math.max(1 - maxDd / (totalPnl + maxDd), 0) : 0
+  const ddScore = ddRatio * 25                                   // low DD relative to gains = max 25pts
+  const momentumScore = recentMomentum > 0 ? Math.min(recentMomentum / 500, 1) * 20 : // positive = up to 20pts
+    Math.max(recentMomentum / 500, -1) * 10                      // negative = down to -10pts penalty
+  const wlRatio = avgLoss > 0 ? avgWin / avgLoss : avgWin > 0 ? 5 : 0
+  const wlScore = Math.min(wlRatio / 3.0, 1) * 15              // ratio 3:1+ = max 15pts
+
+  const compositeScore = Math.max(Math.min(pfScore + ddScore + momentumScore + wlScore, 100), 0)
+
+  return { profitFactor, maxDrawdown: maxDd, avgWin, avgLoss, recentMomentum, compositeScore }
+}
+
 // ── Core logic ───────────────────────────────────────────────────
 
 /**
@@ -126,40 +179,59 @@ export function evaluateExpertTrust(
   const recentWR = recent.filter((t) => t.status === 'won').length / recent.length
   const recentPnl = recent.reduce((s, t) => s + (t.pnl ?? 0), 0)
 
-  // Even proven experts get paused if recent performance is terrible
-  if (recentPnl < -300 && recentWR < 0.25) {
+  // ── Proven experts: risk-adjusted composite score ──
+  // Like real trading firms: Profit Factor + Max Drawdown + Momentum + Win/Loss ratio
+  const risk = computeRiskMetrics(resolved)
+
+  // Score 0-100 → trust mapping:
+  //   0-10 + negative momentum → paused (truly hopeless + still sinking)
+  //   0-20  → reduced at 0.15  (bad, minimal exposure — chance to recover)
+  //   20-40 → reduced at 0.3   (mediocre, limited exposure)
+  //   40-60 → active           (decent, normal trust)
+  //   60+   → active           (strong, high trust)
+
+  // PAUSE only if score is rock-bottom AND still losing recently (no recovery signal)
+  if (risk.compositeScore < 10 && risk.recentMomentum < -200) {
     return {
       ...base,
       phase: 'proven',
       trustLevel: 0,
       status: 'paused',
-      reason: `Paused: slump detected, WR ${(recentWR * 100).toFixed(0)}% (last 20)`,
+      reason: `Paused: score ${risk.compositeScore.toFixed(0)}/100, still sinking (PF ${risk.profitFactor.toFixed(2)}, DD -$${risk.maxDrawdown.toFixed(0)}, momentum ${risk.recentMomentum.toFixed(0)})`,
     }
   }
 
-  // Reduce if losing money recently, BUT profitable longshot traders stay active
-  if (recentPnl < -100 || (recentWR < 0.35 && pnl < 0)) {
+  // REDUCE (severe) — bad score but might recover
+  if (risk.compositeScore < 20) {
     return {
       ...base,
       phase: 'proven',
-      trustLevel: 0.4,
+      trustLevel: 0.15,
       status: 'reduced',
-      reason: `Reduced: recent slump WR ${(recentWR * 100).toFixed(0)}% (last 20)`,
+      reason: `Reduced: score ${risk.compositeScore.toFixed(0)}/100 (PF ${risk.profitFactor.toFixed(2)}, DD -$${risk.maxDrawdown.toFixed(0)}, momentum ${risk.recentMomentum >= 0 ? '+' : ''}${risk.recentMomentum.toFixed(0)})`,
     }
   }
 
-  // Performing well → high trust, scaled by consistency
-  // Combine overall + recent for stability
-  const overallFactor = Math.min(winRate / 0.5, 1)
-  const recentFactor = Math.min(recentWR / 0.5, 1)
-  const trust = Math.min(0.6 + (overallFactor * 0.3 + recentFactor * 0.7) * 0.6, 1.5)
+  // REDUCE (moderate) — below average, limit exposure
+  if (risk.compositeScore < 40) {
+    return {
+      ...base,
+      phase: 'proven',
+      trustLevel: 0.3,
+      status: 'reduced',
+      reason: `Reduced: score ${risk.compositeScore.toFixed(0)}/100 (PF ${risk.profitFactor.toFixed(2)}, DD -$${risk.maxDrawdown.toFixed(0)})`,
+    }
+  }
+
+  // Active — trust scales linearly with score: 35→0.6, 60→1.0, 80+→1.3-1.5
+  const trustFromScore = 0.6 + (risk.compositeScore - 35) * (0.9 / 65)
 
   return {
     ...base,
     phase: 'proven',
-    trustLevel: trust,
+    trustLevel: Math.min(trustFromScore, 1.5),
     status: 'active',
-    reason: `Proven: WR ${(winRate * 100).toFixed(0)}% overall, ${(recentWR * 100).toFixed(0)}% recent`,
+    reason: `Proven: score ${risk.compositeScore.toFixed(0)}/100 (PF ${risk.profitFactor.toFixed(2)}, DD -$${risk.maxDrawdown.toFixed(0)}, momentum ${risk.recentMomentum >= 0 ? '+' : ''}${risk.recentMomentum.toFixed(0)})`,
   }
 }
 
@@ -244,17 +316,23 @@ export function evaluateExpertTrustFromTrades(
   const recent = resolved.slice(-20)
   const recentWR = recent.filter((t) => t.status === 'won').length / recent.length
   const recentPnl = recent.reduce((s, t) => s + (t.pnl ?? 0), 0)
-  if (recentPnl < -300 && recentWR < 0.25) {
+
+  // Risk-adjusted composite score (same logic as main function)
+  const risk = computeRiskMetrics(resolved)
+
+  if (risk.compositeScore < 10 && risk.recentMomentum < -200) {
     return { ...base, phase: 'proven', trustLevel: 0, status: 'paused',
-      reason: `Paused: slump detected, WR ${(recentWR * 100).toFixed(0)}% (last 20)` }
+      reason: `Paused: score ${risk.compositeScore.toFixed(0)}/100, still sinking (PF ${risk.profitFactor.toFixed(2)}, DD -$${risk.maxDrawdown.toFixed(0)}, momentum ${risk.recentMomentum.toFixed(0)})` }
   }
-  if (recentPnl < -100 || (recentWR < 0.35 && pnl < 0)) {
-    return { ...base, phase: 'proven', trustLevel: 0.4, status: 'reduced',
-      reason: `Reduced: recent slump WR ${(recentWR * 100).toFixed(0)}% (last 20)` }
+  if (risk.compositeScore < 20) {
+    return { ...base, phase: 'proven', trustLevel: 0.15, status: 'reduced',
+      reason: `Reduced: score ${risk.compositeScore.toFixed(0)}/100 (PF ${risk.profitFactor.toFixed(2)}, DD -$${risk.maxDrawdown.toFixed(0)}, momentum ${risk.recentMomentum >= 0 ? '+' : ''}${risk.recentMomentum.toFixed(0)})` }
   }
-  const overallFactor = Math.min(winRate / 0.5, 1)
-  const recentFactor = Math.min(recentWR / 0.5, 1)
-  const trust = Math.min(0.6 + (overallFactor * 0.3 + recentFactor * 0.7) * 0.6, 1.5)
-  return { ...base, phase: 'proven', trustLevel: trust, status: 'active',
-    reason: `Proven: WR ${(winRate * 100).toFixed(0)}% overall, ${(recentWR * 100).toFixed(0)}% recent` }
+  if (risk.compositeScore < 40) {
+    return { ...base, phase: 'proven', trustLevel: 0.3, status: 'reduced',
+      reason: `Reduced: score ${risk.compositeScore.toFixed(0)}/100 (PF ${risk.profitFactor.toFixed(2)}, DD -$${risk.maxDrawdown.toFixed(0)})` }
+  }
+  const trustFromScore2 = 0.6 + (risk.compositeScore - 35) * (0.9 / 65)
+  return { ...base, phase: 'proven', trustLevel: Math.min(trustFromScore2, 1.5), status: 'active',
+    reason: `Proven: score ${risk.compositeScore.toFixed(0)}/100 (PF ${risk.profitFactor.toFixed(2)}, DD -$${risk.maxDrawdown.toFixed(0)}, momentum ${risk.recentMomentum >= 0 ? '+' : ''}${risk.recentMomentum.toFixed(0)})` }
 }

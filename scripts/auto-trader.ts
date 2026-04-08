@@ -31,29 +31,61 @@ const POLYMARKET_DATA_URL = process.env.POLYMARKET_DATA_URL ?? 'https://data-api
 
 const POLL_INTERVAL_MS = parseInt(process.env.POLL_INTERVAL_MS ?? '30000', 10)
 const BET_PCT = parseFloat(process.env.BET_PCT ?? '0.02')  // 2% of available cash per trade
-const MIN_BET = 20    // never bet less than $20
-const MAX_BET = 500   // never bet more than $500
 const MIN_ENTRY = parseFloat(process.env.MIN_ENTRY_PRICE ?? '0.15')
-const MAX_ENTRY = parseFloat(process.env.MAX_ENTRY_PRICE ?? '0.60')  // data shows 70-90¢ loses $3K
-const MAX_OPEN = parseInt(process.env.MAX_OPEN_TRADES ?? '50', 10)
-const MAX_CAPITAL_PCT = parseFloat(process.env.MAX_CAPITAL_PCT ?? '0.60')
+const MAX_ENTRY = parseFloat(process.env.MAX_ENTRY_PRICE ?? '0.50')  // 50-65¢ bucket: -12pts edge, -$3.2K over 12d
+const BASE_MAX_OPEN = parseInt(process.env.MAX_OPEN_TRADES ?? '50', 10)
 
-function getAvailableCash(): number {
+// ── Scaling horizontal ──────────────────────────────────────────
+// Scale by opening MORE positions, not bigger bets.
+// Keeps bets small → no market impact, no slippage spike.
+// Law of large numbers: more independent small bets = more stable edge.
+
+function getCurrentEquity(): number {
   const startBal = parseFloat(getPortfolioSetting('starting_balance', '10000'))
   const allTrades = getAllPaperTrades()
   const realizedPnl = allTrades
     .filter((t) => t.status !== 'open')
     .reduce((s, t) => s + (t.pnl ?? 0), 0)
-  const totalInvested = allTrades
+  return startBal + realizedPnl
+}
+
+function getAvailableCash(): number {
+  const equity = getCurrentEquity()
+  const totalInvested = getAllPaperTrades()
     .filter((t) => t.status === 'open')
     .reduce((s, t) => s + t.simulatedUsdc, 0)
-  return startBal + realizedPnl - totalInvested
+  return equity - totalInvested
+}
+
+// Max open scales with equity: 1 slot per $200 of equity
+// $10k → 50, $55k → 275, $100k → 500
+function getMaxOpen(): number {
+  const equity = getCurrentEquity()
+  return Math.max(Math.floor(equity / 200), BASE_MAX_OPEN)
+}
+
+// Bet size scales very slowly — cap at $200 to stay invisible on markets
+// $10k → $100, $55k → $165, $100k → $200 (cap)
+function getMaxBet(equity: number): number {
+  return Math.min(Math.max(equity * 0.003, 100), 200)
+}
+
+function getMinBet(equity: number): number {
+  return Math.max(equity * 0.002, 20)
+}
+
+// Capital deployment: allow more when edge is proven (equity > 3x start)
+function getMaxCapitalPct(): number {
+  const startBal = parseFloat(getPortfolioSetting('starting_balance', '10000'))
+  const equity = getCurrentEquity()
+  return equity > startBal * 3 ? 0.70 : 0.60
 }
 
 function getDynamicBetSize(): number {
+  const equity = getCurrentEquity()
   const cash = getAvailableCash()
   const bet = cash * BET_PCT
-  return Math.min(Math.max(bet, MIN_BET), MAX_BET)
+  return Math.min(Math.max(bet, getMinBet(equity)), getMaxBet(equity))
 }
 
 // Exit strategy config (override via env vars)
@@ -140,17 +172,14 @@ function canCopy(alert: PositionAlert): boolean {
   if (paperTradeExistsForCondition(alert.position.conditionId)) return false
 
   const openTrades = getOpenPaperTrades()
-  if (openTrades.length >= MAX_OPEN) return false
+  if (openTrades.length >= getMaxOpen()) return false
 
   // Capital guard
-  const startBal = parseFloat(getPortfolioSetting('starting_balance', '10000'))
-  const closedTrades = getAllPaperTrades().filter((t) => t.status !== 'open')
-  const realizedPnl = closedTrades.reduce((s, t) => s + (t.pnl ?? 0), 0)
-  const currentBalance = startBal + realizedPnl
+  const equity = getCurrentEquity()
   const totalInvested = openTrades.reduce((s, t) => s + t.simulatedUsdc, 0)
 
   const betSize = getDynamicBetSize()
-  if (totalInvested + betSize > currentBalance * MAX_CAPITAL_PCT) return false
+  if (totalInvested + betSize > equity * getMaxCapitalPct()) return false
 
   return true
 }
@@ -208,14 +237,16 @@ function tryCopyWithSignal(alert: PositionAlert): boolean {
 
   // Dynamic sizing: Kelly × bankroll × signal × consensus(inverted) × trust
   // If Kelly is 0 (no edge), fall back to minimum bet
+  const minBet = getMinBet(currentBankroll)
+  const maxBet = getMaxBet(currentBankroll)
   const baseBet = kellyFraction > 0
-    ? Math.min(Math.max(currentBankroll * kellyFraction, MIN_BET), MAX_BET)
-    : MIN_BET
+    ? Math.min(Math.max(currentBankroll * kellyFraction, minBet), maxBet)
+    : minBet
 
   const signalMulti = signalBetMultiplier(signal)
   const consensusMulti = getConsensusMultiplier(alert.position.conditionId)
   const trustMulti = trust.trustLevel
-  const betAmount = Math.min(baseBet * signalMulti * consensusMulti * trustMulti, MAX_BET)
+  const betAmount = Math.min(baseBet * signalMulti * consensusMulti * trustMulti, maxBet)
 
   // Final entry price with size-adjusted slippage
   const sizeImpact = (betAmount / 100) * 0.005
@@ -574,15 +605,17 @@ async function main(): Promise<void> {
   console.log('  AUTO PAPER TRADER')
   console.log('═══════════════════════════════════════════════')
   console.log(`  Wallets:    ${wallets.length}`)
-  console.log(`  Bet sizing: ${(BET_PCT * 100).toFixed(0)}% of cash ($${MIN_BET}-$${MAX_BET})`)
+  const eq = getCurrentEquity()
+  console.log(`  Equity:     $${eq.toFixed(0)}`)
+  console.log(`  Bet sizing: ${(BET_PCT * 100).toFixed(0)}% of cash ($${getMinBet(eq).toFixed(0)}-$${getMaxBet(eq).toFixed(0)})`)
   console.log(`  Entry range: ${(MIN_ENTRY * 100).toFixed(0)}¢ - ${(MAX_ENTRY * 100).toFixed(0)}¢`)
-  console.log(`  Max open:   ${MAX_OPEN}`)
+  console.log(`  Max open:   ${getMaxOpen()} (scales with equity)`)
   console.log(`  Take profit: +${(EXIT_CONFIG.takeProfitPct * 100).toFixed(0)}%`)
   console.log(`  Stop-loss:   -${(EXIT_CONFIG.stopLossPct * 100).toFixed(0)}%`)
   console.log(`  Trailing:    +${(EXIT_CONFIG.trailingActivatePct * 100).toFixed(0)}% → +${(EXIT_CONFIG.trailingStopPct * 100).toFixed(0)}%`)
   console.log(`  Stale exit:  ${EXIT_CONFIG.staleDays}d < ${(EXIT_CONFIG.staleThreshold * 100).toFixed(0)}¢ move`)
   console.log(`  Expert exit: ${EXIT_CONFIG.followExpertExit ? 'ON' : 'OFF'}`)
-  console.log(`  Max capital: ${(MAX_CAPITAL_PCT * 100).toFixed(0)}%`)
+  console.log(`  Max capital: ${(getMaxCapitalPct() * 100).toFixed(0)}%`)
   console.log(`  Near-res:    >${(EXIT_CONFIG.nearResolutionThreshold * 100).toFixed(0)}¢ YES / <${((1 - EXIT_CONFIG.nearResolutionThreshold) * 100).toFixed(0)}¢ NO`)
   console.log(`  Consensus:   1x=1.0 | 2x=0.7 | 3x=0.5 | 5x=0.3 (inverted)`)
   console.log(`  Poll every: ${POLL_INTERVAL_MS / 1000}s`)

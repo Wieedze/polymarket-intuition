@@ -129,6 +129,15 @@ export function evaluateExit(
       message: `Near-resolution exit: YES at ${(trade.curPrice * 100).toFixed(0)}¢ (threshold: ${(threshold * 100).toFixed(0)}¢)`,
     }
   }
+  if (trade.side === 'YES' && trade.curPrice <= (1 - threshold)) {
+    return {
+      shouldExit: true,
+      reason: 'near-resolution',
+      pnlPct,
+      peakPnlPct,
+      message: `Near-resolution cut: YES at ${(trade.curPrice * 100).toFixed(0)}¢ — NO near certain`,
+    }
+  }
   if (trade.side === 'NO' && trade.curPrice >= threshold) {
     return {
       shouldExit: true,

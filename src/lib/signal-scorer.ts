@@ -50,7 +50,9 @@ function getDomainPerformanceMultiplier(domain: string | null, expertWallet: str
 }
 
 // Domains with negative edge — skip entirely based on paper trading data
-const BLOCKED_DOMAINS = new Set(['pm-domain/crypto'])
+// Crypto: blocked since start (5-min noise markets, no edge)
+// Weather: 190 trades, WR 28%, -$6,431, avg -$33.85/trade over 12 days
+const BLOCKED_DOMAINS = new Set(['pm-domain/crypto', 'pm-domain/weather'])
 
 // Markets that are pure noise — skip entirely
 const NOISE_PATTERNS = [
@@ -184,24 +186,21 @@ export function scoreSignal(params: {
   else if (wr >= 0.40) { winRateScore = 4 }
 
   // 4. Entry price quality (15 points max)
-  // Data shows: 15-30¢ = +$2370, 30-55¢ = +$2844, >65¢ = -$3752
-  // Hard block above 65¢ — no edge, pure favorite territory
+  // 12d data: 15-30¢ = +$54.6K (+11pts edge), 30-50¢ = -$6.3K (+2pts edge), 50-65¢ = -$3.3K (-12pts edge)
+  // Hard block above 50¢ — negative edge territory
   let entryScore = 0
-  if (entryPrice > 0.65) {
+  if (entryPrice > 0.50) {
     return {
       score: 0, domainMatch: false, expertCalibration: 0,
       expertWinRate: 0, expertTrades: 0, betSizeSignal: 0,
-      expertImplicitEdge: 0, domain, reasons: [`Entry ${(entryPrice * 100).toFixed(0)}¢ blocked — favorites destroy bankroll`],
+      expertImplicitEdge: 0, domain, reasons: [`Entry ${(entryPrice * 100).toFixed(0)}¢ blocked — negative edge above 50¢`],
     }
   } else if (entryPrice >= 0.15 && entryPrice <= 0.30) {
-    entryScore = 15  // longshot sweet spot — best historical P&L
+    entryScore = 15  // longshot sweet spot — best historical P&L (+$54.6K, +11pts edge)
     reasons.push(`Longshot entry: ${(entryPrice * 100).toFixed(0)}¢`)
-  } else if (entryPrice > 0.30 && entryPrice <= 0.55) {
-    entryScore = 12  // value zone
+  } else if (entryPrice > 0.30 && entryPrice <= 0.50) {
+    entryScore = 10  // value zone (+2pts edge, but lower than longshots)
     reasons.push(`Value entry: ${(entryPrice * 100).toFixed(0)}¢`)
-  } else if (entryPrice > 0.55 && entryPrice <= 0.65) {
-    entryScore = 3   // marginal — penalized
-    reasons.push(`Marginal entry: ${(entryPrice * 100).toFixed(0)}¢`)
   } else {
     reasons.push(`Extreme longshot: ${(entryPrice * 100).toFixed(0)}¢`)
   }
