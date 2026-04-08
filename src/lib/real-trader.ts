@@ -190,6 +190,7 @@ export async function getRealPositions(): Promise<RealPosition[]> {
 
     const positions = await res.json() as Array<{
       conditionId: string
+      asset: string
       outcomeIndex: number
       title: string
       size: number
@@ -202,7 +203,7 @@ export async function getRealPositions(): Promise<RealPosition[]> {
       .filter((p) => p.size > 0 && p.curPrice >= 0.05 && p.curPrice <= 0.95)
       .map((p) => ({
         conditionId: p.conditionId,
-        tokenId: p.conditionId,  // simplified — real tokenId differs
+        tokenId: p.asset ?? p.conditionId,  // asset field = real CLOB token ID
         title: p.title,
         side: p.outcomeIndex === 0 ? 'YES' : 'NO',
         size: p.size,

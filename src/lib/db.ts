@@ -172,6 +172,17 @@ function initTables(db: Database.Database): void {
       results_json TEXT NOT NULL,
       computed_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS market_metadata (
+      condition_id TEXT PRIMARY KEY,
+      yes_token_id TEXT NOT NULL,
+      no_token_id TEXT NOT NULL,
+      end_date TEXT,
+      title TEXT,
+      liquidity REAL,
+      active INTEGER DEFAULT 1,
+      fetched_at TEXT NOT NULL
+    );
   `)
 
   // Migration: add peak_price column if missing
@@ -913,4 +924,61 @@ function mapPaperRows(rows: unknown[]): PaperTrade[] {
     openedAt: r.opened_at as string,
     resolvedAt: r.resolved_at as string | null,
   }))
+}
+
+// ── Market metadata cache ────────────────────────────────────────
+
+export type MarketMetadata = {
+  conditionId: string
+  yesTokenId: string
+  noTokenId: string
+  endDate: string | null
+  title: string | null
+  liquidity: number | null
+  active: boolean
+  fetchedAt: string
+}
+
+const METADATA_TTL_MS = 24 * 60 * 60 * 1000  // 24h cache
+
+export function getMarketMetadata(conditionId: string): MarketMetadata | null {
+  const db = getDb()
+  const row = db.prepare(
+    'SELECT * FROM market_metadata WHERE condition_id = ?'
+  ).get(conditionId) as Record<string, unknown> | undefined
+
+  if (!row) return null
+
+  // Check TTL
+  const fetchedAt = row.fetched_at as string
+  if (Date.now() - new Date(fetchedAt).getTime() > METADATA_TTL_MS) return null
+
+  return {
+    conditionId: row.condition_id as string,
+    yesTokenId: row.yes_token_id as string,
+    noTokenId: row.no_token_id as string,
+    endDate: row.end_date as string | null,
+    title: row.title as string | null,
+    liquidity: row.liquidity as number | null,
+    active: (row.active as number) === 1,
+    fetchedAt,
+  }
+}
+
+export function saveMarketMetadata(meta: MarketMetadata): void {
+  const db = getDb()
+  db.prepare(`
+    INSERT OR REPLACE INTO market_metadata
+    (condition_id, yes_token_id, no_token_id, end_date, title, liquidity, active, fetched_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    meta.conditionId,
+    meta.yesTokenId,
+    meta.noTokenId,
+    meta.endDate,
+    meta.title,
+    meta.liquidity,
+    meta.active ? 1 : 0,
+    meta.fetchedAt,
+  )
 }

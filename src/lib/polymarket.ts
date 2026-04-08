@@ -1,7 +1,10 @@
 import type { ResolvedTrade, WalletTrades } from '../types/polymarket'
+import { getMarketMetadata, saveMarketMetadata, type MarketMetadata } from './db'
 
 const POLYMARKET_DATA_URL =
   process.env.POLYMARKET_DATA_URL ?? 'https://data-api.polymarket.com'
+const POLYMARKET_GAMMA_URL =
+  process.env.POLYMARKET_API_URL ?? 'https://gamma-api.polymarket.com'
 
 // ── Raw API response types ────────────────────────────────────────
 
@@ -176,5 +179,58 @@ export async function fetchResolvedTrades(
     totalTrades: trades.length,
     totalPositions: allPositions.length,
     totalPnl,
+  }
+}
+
+// ── Market metadata (Gamma API) ─────────────────────────────────
+
+type GammaMarket = {
+  conditionId: string
+  question: string
+  clobTokenIds: [string, string]
+  endDate: string | null
+  active: boolean
+  closed: boolean
+  liquidity: string
+}
+
+/**
+ * Fetch market metadata (token IDs, end date, liquidity) for a conditionId.
+ * Uses SQLite cache with 24h TTL to avoid hammering Gamma API.
+ *
+ * Returns null if the market is not found or API fails.
+ */
+export async function fetchMarketMetadata(conditionId: string): Promise<MarketMetadata | null> {
+  // Check cache first
+  const cached = getMarketMetadata(conditionId)
+  if (cached) return cached
+
+  try {
+    const res = await fetch(
+      `${POLYMARKET_GAMMA_URL}/markets?condition_id=${conditionId}`
+    )
+    if (!res.ok) return null
+
+    const markets = await res.json() as GammaMarket[]
+    if (!markets || markets.length === 0) return null
+
+    const m = markets[0] as GammaMarket | undefined
+    if (!m || !m.clobTokenIds || m.clobTokenIds.length < 2) return null
+
+    const meta: MarketMetadata = {
+      conditionId: m.conditionId,
+      yesTokenId: m.clobTokenIds[0],
+      noTokenId: m.clobTokenIds[1],
+      endDate: m.endDate ?? null,
+      title: m.question ?? null,
+      liquidity: parseFloat(m.liquidity) || null,
+      active: m.active && !m.closed,
+      fetchedAt: new Date().toISOString(),
+    }
+
+    saveMarketMetadata(meta)
+    return meta
+  } catch {
+    return null
   }
 }

@@ -37,6 +37,7 @@ import { evaluateExit, exitEmoji, DEFAULT_CONFIG } from '../src/lib/exit-strateg
 import { scoreSignal, shouldCopySignal, isContradictory, kellyBetFraction } from '../src/lib/signal-scorer'
 import { evaluateExpertTrust } from '../src/lib/expert-trust'
 import { placeOrder, getRealBalance, type RealOrder } from '../src/lib/real-trader'
+import { fetchMarketMetadata } from '../src/lib/polymarket'
 
 const POLYMARKET_DATA_URL = 'https://data-api.polymarket.com'
 
@@ -121,10 +122,22 @@ async function tryLiveCopy(alert: PositionAlert): Promise<boolean> {
 
   console.log(`  💰 LIVE ORDER | ${side} @ ${(entryPrice * 100).toFixed(0)}¢ | $${betUsdc.toFixed(2)} | score:${signal.score} | ${alert.position.title.slice(0, 45)}`)
 
+  // Fetch real token IDs from Gamma API (cached 24h)
+  const metadata = await fetchMarketMetadata(alert.position.conditionId)
+  if (!metadata) {
+    console.log(`  ⚠️  NO METADATA | Can't resolve token ID | ${alert.position.title.slice(0, 45)}`)
+    return false
+  }
+  if (!metadata.active) {
+    console.log(`  ⚠️  MARKET CLOSED | ${alert.position.title.slice(0, 45)}`)
+    return false
+  }
+  const tokenId = side === 'YES' ? metadata.yesTokenId : metadata.noTokenId
+
   // Place real order
   const order: RealOrder = {
     conditionId: alert.position.conditionId,
-    tokenId: alert.position.conditionId,  // simplified — real impl needs tokenId from market data
+    tokenId,
     title: alert.position.title,
     side,
     price: entryPrice,
