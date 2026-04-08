@@ -64,10 +64,10 @@ function getMaxOpen(): number {
   return Math.max(Math.floor(equity / 200), BASE_MAX_OPEN)
 }
 
-// Bet size scales very slowly — cap at $200 to stay invisible on markets
-// $10k → $100, $55k → $165, $100k → $200 (cap)
+// Bet size scales slowly — cap at $500 to stay reasonable on markets
+// $10k → $100, $55k → $165, $100k → $300, $170k → $500 (cap)
 function getMaxBet(equity: number): number {
-  return Math.min(Math.max(equity * 0.003, 100), 200)
+  return Math.min(Math.max(equity * 0.003, 100), 500)
 }
 
 function getMinBet(equity: number): number {
