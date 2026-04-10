@@ -60,7 +60,8 @@ const COLORS = {
   blue: '#28AEF3',
   textMuted: '#87888C',
   textLight: '#D2D2D2',
-  liveRed: '#FF4444',
+  live: '#3B82F6',        // electric blue — live trading identity
+  liveGlow: '#60A5FA',    // lighter blue for accents
 }
 
 const DOMAIN_PIE_COLORS: Record<string, string> = {
@@ -117,7 +118,7 @@ export default function LiveTrading(): React.ReactElement {
 
   if (loading) return (
     <div className="min-h-screen flex items-center justify-center" style={{ background: COLORS.bg }}>
-      <div className="w-8 h-8 border-2 border-t-transparent rounded-full animate-spin" style={{ borderColor: COLORS.liveRed, borderTopColor: 'transparent' }} />
+      <div className="w-8 h-8 border-2 border-t-transparent rounded-full animate-spin" style={{ borderColor: COLORS.live, borderTopColor: 'transparent' }} />
     </div>
   )
 
@@ -133,7 +134,7 @@ export default function LiveTrading(): React.ReactElement {
           <div># Dry run (no real orders):</div>
           <div style={{ color: COLORS.teal }}>DRY_RUN=true STARTING_BALANCE=100 npx tsx scripts/live-trader.ts</div>
           <div className="mt-2"># Real money:</div>
-          <div style={{ color: COLORS.liveRed }}>STARTING_BALANCE=100 npx tsx scripts/live-trader.ts</div>
+          <div style={{ color: COLORS.live }}>STARTING_BALANCE=100 npx tsx scripts/live-trader.ts</div>
         </div>
       </div>
     </div>
@@ -150,8 +151,8 @@ export default function LiveTrading(): React.ReactElement {
         <aside className="hidden lg:flex flex-col w-56 min-h-screen p-5 border-r" style={{ background: COLORS.card, borderColor: COLORS.surface }}>
           <div className="mb-10">
             <h1 className="text-lg font-bold text-white">Copy Trader</h1>
-            <p className="text-xs mt-1" style={{ color: COLORS.liveRed }}>
-              <span className="inline-block w-2 h-2 rounded-full mr-1 animate-pulse" style={{ background: COLORS.liveRed }} />
+            <p className="text-xs mt-1" style={{ color: COLORS.live }}>
+              <span className="inline-block w-2 h-2 rounded-full mr-1 animate-pulse" style={{ background: COLORS.live }} />
               Live Trading
             </p>
           </div>
@@ -172,7 +173,7 @@ export default function LiveTrading(): React.ReactElement {
           {/* Mobile nav */}
           <div className="lg:hidden flex items-center justify-between mb-6">
             <div className="flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full animate-pulse" style={{ background: COLORS.liveRed }} />
+              <span className="w-2 h-2 rounded-full animate-pulse" style={{ background: COLORS.live }} />
               <h1 className="text-lg font-bold text-white">Live Trading</h1>
             </div>
             <div className="flex gap-2">
@@ -182,10 +183,10 @@ export default function LiveTrading(): React.ReactElement {
           </div>
 
           {/* Live banner */}
-          <div className="rounded-xl p-4 mb-6 flex items-center gap-3" style={{ background: `${COLORS.liveRed}15`, border: `1px solid ${COLORS.liveRed}40` }}>
-            <span className="w-3 h-3 rounded-full animate-pulse" style={{ background: COLORS.liveRed }} />
+          <div className="rounded-xl p-4 mb-6 flex items-center gap-3" style={{ background: `${COLORS.live}15`, border: `1px solid ${COLORS.live}40` }}>
+            <span className="w-3 h-3 rounded-full animate-pulse" style={{ background: COLORS.live }} />
             <div>
-              <span className="text-sm font-medium" style={{ color: COLORS.liveRed }}>Real Money Mode</span>
+              <span className="text-sm font-medium" style={{ color: COLORS.live }}>Real Money Mode</span>
               <span className="text-xs ml-3" style={{ color: COLORS.textMuted }}>
                 Started at ${data.startingBalance.toFixed(0)} | {data.tradingDays.toFixed(1)} days | {data.totalTrades} total trades
               </span>
@@ -244,8 +245,8 @@ export default function LiveTrading(): React.ReactElement {
                   <AreaChart data={data.chartData} margin={{ top: 5, right: 10, bottom: 5, left: 10 }}>
                     <defs>
                       <linearGradient id="liveEqFill" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor={COLORS.liveRed} stopOpacity={0.3} />
-                        <stop offset="100%" stopColor={COLORS.liveRed} stopOpacity={0} />
+                        <stop offset="0%" stopColor={COLORS.live} stopOpacity={0.3} />
+                        <stop offset="100%" stopColor={COLORS.live} stopOpacity={0} />
                       </linearGradient>
                     </defs>
                     <CartesianGrid strokeDasharray="3 3" stroke={COLORS.surface} />
@@ -253,7 +254,7 @@ export default function LiveTrading(): React.ReactElement {
                     <YAxis tickFormatter={(v: number) => `$${v.toFixed(0)}`} tick={{ fill: COLORS.textMuted, fontSize: 10 }} axisLine={false} tickLine={false} width={45} />
                     <Tooltip contentStyle={{ background: COLORS.surface, border: 'none', borderRadius: 8, fontSize: 12 }} formatter={(value) => [`$${(typeof value === 'number' ? value : Number(value ?? 0)).toFixed(2)}`, 'Equity']} />
                     <ReferenceLine y={data.startingBalance} stroke={COLORS.textMuted} strokeDasharray="3 3" />
-                    <Area type="monotone" dataKey="equity" stroke={COLORS.liveRed} fill="url(#liveEqFill)" strokeWidth={2} dot={false} />
+                    <Area type="monotone" dataKey="equity" stroke={COLORS.live} fill="url(#liveEqFill)" strokeWidth={2} dot={false} />
                   </AreaChart>
                 </ResponsiveContainer>
               ) : (
