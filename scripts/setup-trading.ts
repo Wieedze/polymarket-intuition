@@ -50,13 +50,13 @@ async function main(): Promise<void> {
 
   const publicClient = createPublicClient({
     chain: polygon,
-    transport: http('https://polygon-rpc.com'),
+    transport: http('https://polygon.llamarpc.com'),
   })
 
   const walletClient = createWalletClient({
     account,
     chain: polygon,
-    transport: http('https://polygon-rpc.com'),
+    transport: http('https://polygon.llamarpc.com'),
   })
 
   // Check USDC.e balance
