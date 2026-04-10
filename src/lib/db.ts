@@ -28,15 +28,23 @@ export type WalletDomainStats = {
 }
 
 // ── Database init ─────────────────────────────────────────────────
+//
+// Dual-DB architecture for live trading:
+//   DB_PATH       = instance DB (paper: polymarket.db, live: live.db) — owns trades, portfolio, events
+//   SHARED_DB_PATH = shared DB (always polymarket.db) — owns experts, stats, snapshots, metadata
+//
+// For paper trading: both point to the same file (polymarket.db) — no change.
+// For live trading:  DB_PATH=live.db, SHARED_DB_PATH=polymarket.db
 
 const DB_PATH = process.env.DB_PATH ?? path.join(process.cwd(), 'data', 'polymarket.db')
+const SHARED_DB_PATH = process.env.SHARED_DB_PATH ?? path.join(process.cwd(), 'data', 'polymarket.db')
 
 let _db: Database.Database | null = null
+let _sharedDb: Database.Database | null = null
 
 export function getDb(): Database.Database {
   if (_db) return _db
 
-  // Ensure data directory exists
   const dir = path.dirname(DB_PATH)
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true })
@@ -49,6 +57,23 @@ export function getDb(): Database.Database {
   return _db
 }
 
+/**
+ * Get the shared DB (expert intelligence).
+ * For paper trading, this is the same as getDb().
+ * For live trading, this reads from polymarket.db while getDb() writes to live.db.
+ */
+export function getSharedDb(): Database.Database {
+  if (SHARED_DB_PATH === DB_PATH) return getDb()
+  if (_sharedDb) return _sharedDb
+
+  if (!fs.existsSync(SHARED_DB_PATH)) {
+    throw new Error(`Shared DB not found: ${SHARED_DB_PATH}`)
+  }
+
+  _sharedDb = new Database(SHARED_DB_PATH, { readonly: true })
+  return _sharedDb
+}
+
 /** Allow injecting a custom db instance (for tests) */
 export function setDb(db: Database.Database): void {
   _db = db
@@ -58,6 +83,10 @@ export function closeDb(): void {
   if (_db) {
     _db.close()
     _db = null
+  }
+  if (_sharedDb) {
+    _sharedDb.close()
+    _sharedDb = null
   }
 }
 
@@ -410,7 +439,7 @@ export function saveWalletStats(
 }
 
 export function getWalletStats(wallet: string): WalletDomainStats[] {
-  const db = getDb()
+  const db = getSharedDb()  // expert stats are shared intelligence
   const rows = db
     .prepare(
       `SELECT wallet, domain, win_rate, calibration, trades_count,
@@ -568,13 +597,18 @@ export function addWatchedWallet(wallet: string, label?: string): void {
 }
 
 export function getActiveWatchedWallets(): Array<{ wallet: string; label: string | null }> {
-  const db = getDb()
+  const db = getSharedDb()  // experts are shared intelligence
   return db
     .prepare('SELECT wallet, label FROM watched_wallets WHERE active = 1')
     .all() as Array<{ wallet: string; label: string | null }>
 }
 
 export function updateWalletPolledAt(wallet: string): void {
+  // Write to shared DB (paper DB tracks polling state)
+  if (SHARED_DB_PATH !== DB_PATH) {
+    // Live mode: don't write to readonly shared DB, skip
+    return
+  }
   const db = getDb()
   db.prepare(
     'UPDATE watched_wallets SET last_polled_at = ? WHERE wallet = ?'
@@ -593,7 +627,7 @@ export type PositionSnapshotRow = {
 }
 
 export function getPositionSnapshot(wallet: string): Map<string, PositionSnapshotRow> {
-  const db = getDb()
+  const db = getSharedDb()  // position snapshots are shared (written by paper auto-trader)
   const rows = db
     .prepare(
       `SELECT condition_id, outcome_index, title, size, avg_price, cur_price
@@ -626,6 +660,8 @@ export function savePositionSnapshot(
   wallet: string,
   positions: Array<{ conditionId: string; outcomeIndex: number; title: string; size: number; avgPrice: number; curPrice: number }>
 ): void {
+  // In live mode, paper auto-trader handles snapshots — skip writes from live-trader
+  if (SHARED_DB_PATH !== DB_PATH) return
   const db = getDb()
   // Clear old snapshot
   db.prepare('DELETE FROM position_snapshots WHERE wallet = ?').run(wallet)

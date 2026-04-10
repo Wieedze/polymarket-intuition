@@ -33,7 +33,8 @@ module.exports = {
       cwd: '/opt/polymarket-intuition',
       env: {
         DB_PATH: '/opt/polymarket-intuition/data/live.db',
-        STARTING_BALANCE: '10',
+        SHARED_DB_PATH: '/opt/polymarket-intuition/data/polymarket.db',
+        STARTING_BALANCE: '9',
         POLL_INTERVAL_MS: '60000',     // 1 min — faster than paper for live
         MIN_SIGNAL_SCORE_LIVE: '65',   // stricter than paper
         DRY_RUN: 'false',             // REAL orders
