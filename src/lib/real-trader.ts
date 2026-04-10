@@ -125,13 +125,16 @@ export async function placeOrder(order: RealOrder): Promise<RealOrderResult> {
     // sizeUsdc = shares × price → shares = sizeUsdc / price
     const size = order.sizeUsdc / order.price
 
-    // Get tick size for this market
+    // Get tick size for this market (minimum 0.01 for most markets)
     const marketInfo = await client.getMarket(order.conditionId) as Record<string, unknown>
-    const tickSize = (marketInfo?.minimum_tick_size as string) ?? '0.01'
+    const rawTickSize = parseFloat((marketInfo?.minimum_tick_size as string) ?? '0.01')
+    const tick = Math.max(rawTickSize, 0.01)
+    const tickSize = tick.toString()
 
     // Round price to tick size
-    const tick = parseFloat(tickSize)
     const roundedPrice = Math.round(order.price / tick) * tick
+    // Avoid floating point issues: ensure clean decimal
+    const cleanPrice = parseFloat(roundedPrice.toFixed(2))
 
     const orderType = order.orderType === 'FOK'
       ? OrderType.FOK
@@ -147,7 +150,7 @@ export async function placeOrder(order: RealOrder): Promise<RealOrderResult> {
     const result = await client.createAndPostOrder(
       {
         tokenID: order.tokenId,
-        price: roundedPrice,
+        price: cleanPrice,
         size,
         side,
       },
@@ -241,7 +244,9 @@ export async function getRealBalance(): Promise<number> {
     const balance = await client.getBalanceAllowance({
       asset_type: 'COLLATERAL',
     }) as { balance: string }
-    return parseFloat(balance.balance ?? '0')
+    // USDC.e has 6 decimals — the CLOB returns raw units
+    const raw = parseFloat(balance.balance ?? '0')
+    return raw > 1_000_000 ? raw / 1e6 : raw
   } catch {
     return 0
   }
