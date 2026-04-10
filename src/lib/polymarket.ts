@@ -215,12 +215,19 @@ export async function fetchMarketMetadata(conditionId: string): Promise<MarketMe
     if (!markets || markets.length === 0) return null
 
     const m = markets[0] as GammaMarket | undefined
-    if (!m || !m.clobTokenIds || m.clobTokenIds.length < 2) return null
+    if (!m || !m.clobTokenIds) return null
+
+    // Gamma API sometimes returns clobTokenIds as JSON string, sometimes as array
+    const rawIds = m.clobTokenIds
+    const ids: [string, string] = typeof rawIds === 'string'
+      ? JSON.parse(rawIds) as [string, string]
+      : rawIds
+    if (!ids || ids.length < 2) return null
 
     const meta: MarketMetadata = {
       conditionId: m.conditionId,
-      yesTokenId: m.clobTokenIds[0],
-      noTokenId: m.clobTokenIds[1],
+      yesTokenId: ids[0],
+      noTokenId: ids[1],
       endDate: m.endDate ?? null,
       title: m.question ?? null,
       liquidity: parseFloat(m.liquidity) || null,

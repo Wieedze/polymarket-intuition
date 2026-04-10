@@ -76,11 +76,23 @@ async function main(): Promise<void> {
   }
 
   const testMarket = gammaMarkets[0]
+
+  // Gamma API returns clobTokenIds as JSON string sometimes — parse it
+  const rawTokenIds = testMarket.clobTokenIds
+  const tokenIds: [string, string] = typeof rawTokenIds === 'string'
+    ? JSON.parse(rawTokenIds) as [string, string]
+    : rawTokenIds
+
+  const rawPrices = testMarket.outcomePrices
+  const prices: [string, string] = typeof rawPrices === 'string'
+    ? JSON.parse(rawPrices) as [string, string]
+    : rawPrices
+
   console.log(`   Market: "${testMarket.question}"`)
   console.log(`   Condition: ${testMarket.conditionId.slice(0, 20)}...`)
-  console.log(`   YES token: ${testMarket.clobTokenIds[0].slice(0, 20)}...`)
-  console.log(`   NO token: ${testMarket.clobTokenIds[1].slice(0, 20)}...`)
-  console.log(`   Current prices: YES=${testMarket.outcomePrices[0]} NO=${testMarket.outcomePrices[1]}`)
+  console.log(`   YES token: ${tokenIds[0].slice(0, 30)}...`)
+  console.log(`   NO token: ${tokenIds[1].slice(0, 30)}...`)
+  console.log(`   Current prices: YES=${prices[0]} NO=${prices[1]}`)
   console.log(`   Liquidity: $${parseFloat(testMarket.liquidity).toFixed(0)}\n`)
 
   // ── 3. Also test our fetchMarketMetadata (cache layer) ──
@@ -95,7 +107,7 @@ async function main(): Promise<void> {
   // ── 4. Place a GTC limit order at 1¢ (won't fill, just tests the pipeline) ──
   console.log('📝 Placing test GTC order: BUY YES @ 1¢ for $1...')
 
-  const yesTokenId = testMarket.clobTokenIds[0]
+  const yesTokenId = tokenIds[0]
 
   try {
     // Get tick size from CLOB
