@@ -9,7 +9,6 @@ module.exports = {
         NODE_ENV: 'production',
         PORT: 3000,
       },
-      // Build first: npx next build
     },
     {
       name: 'auto-trader',
@@ -24,6 +23,21 @@ module.exports = {
         STALE_DAYS: '7',
       },
       restart_delay: 10000,
+      max_restarts: 50,
+      autorestart: true,
+    },
+    {
+      name: 'live-trader',
+      interpreter: '/bin/bash',
+      script: 'scripts/run-live-bot.sh',
+      cwd: '/opt/polymarket-intuition',
+      env: {
+        STARTING_BALANCE: '10',
+        POLL_INTERVAL_MS: '60000',     // 1 min — faster than paper for live
+        MIN_SIGNAL_SCORE_LIVE: '65',   // stricter than paper
+        DRY_RUN: 'false',             // REAL orders
+      },
+      restart_delay: 15000,
       max_restarts: 50,
       autorestart: true,
     },

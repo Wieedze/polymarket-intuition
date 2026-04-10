@@ -262,26 +262,40 @@ export async function closePosition(
   curPrice: number
 ): Promise<RealOrderResult> {
   try {
-    const client = await getClient() as Record<string, Function>
+    const client = await getClient()
     const { OrderType, Side } = await import('@polymarket/clob-client')
 
+    // Round price down to tick size 0.01
+    const roundedPrice = parseFloat((Math.floor(curPrice * 100) / 100).toFixed(2))
+
+    // GTC for sells — FOK is too strict, often rejected
     const result = await client.createAndPostOrder(
       {
         tokenID: tokenId,
-        price: curPrice,
+        price: roundedPrice,
         size,
         side: Side.SELL,
       },
       { tickSize: '0.01', negRisk: false },
-      OrderType.FOK
+      OrderType.GTC
     ) as Record<string, unknown>
 
-    const orderInfo = result as { successOrdering?: boolean; errorMsg?: string; orderID?: string }
+    const orderInfo = result as {
+      success?: boolean
+      successOrdering?: boolean
+      errorMsg?: string
+      error?: string
+      orderID?: string
+      status?: string
+    }
+
+    const success = !!(orderInfo.success || orderInfo.successOrdering || orderInfo.orderID)
+    const error = orderInfo.errorMsg || orderInfo.error || (!success ? JSON.stringify(result) : undefined)
 
     return {
-      success: !!orderInfo.successOrdering,
+      success,
       orderId: orderInfo.orderID,
-      error: orderInfo.errorMsg,
+      error,
     }
   } catch (err) {
     return {
