@@ -708,12 +708,11 @@ async function main(): Promise<void> {
     process.exit(1)
   }
 
-  // Init portfolio settings from on-chain balance at first start
+  // Init portfolio settings — use STARTING_BALANCE env var or default to $9
   if (getPortfolioSetting('starting_balance', '') === '') {
-    const realBalance = await getRealBalance()
-    const startBal = realBalance > 0 ? realBalance.toFixed(2) : (process.env.STARTING_BALANCE ?? '9')
+    const startBal = process.env.STARTING_BALANCE ?? '9'
     setPortfolioSetting('starting_balance', startBal)
-    console.log(`  💰 Starting balance set from wallet: $${startBal}`)
+    console.log(`  💰 Starting balance: $${startBal}`)
   }
 
   const startBal = parseFloat(getPortfolioSetting('starting_balance', '9'))
@@ -722,8 +721,8 @@ async function main(): Promise<void> {
   // Startup balance check
   if (!DRY_RUN) {
     const realBalance = await getRealBalance()
-    if (realBalance < 1) {
-      console.error(`❌ Balance too low ($${realBalance.toFixed(2)}) — need at least $1 USDC on Polygon`)
+    if (realBalance < 0.10) {
+      console.error(`❌ Balance too low ($${realBalance.toFixed(2)}) — need USDC.e on Polygon`)
       process.exit(1)
     }
     if (realBalance < startBal * 0.5) {
@@ -754,6 +753,48 @@ async function main(): Promise<void> {
   console.log(`  Daily limit: -${(DAILY_LOSS_LIMIT_PCT * 100).toFixed(0)}% ($${(startBal * DAILY_LOSS_LIMIT_PCT).toFixed(0)})`)
   console.log(`  Poll every:  ${POLL_INTERVAL_MS / 1000}s`)
   console.log('═══════════════════════════════════════════════')
+
+  // ── Sync existing on-chain positions into live.db ──────────────
+  // If the bot restarts or live.db was recreated, import real positions
+  // from the Data API so the dashboard and exit logic can track them.
+  if (!DRY_RUN) {
+    try {
+      const res = await fetch(
+        `https://data-api.polymarket.com/positions?user=${(await import('../src/lib/real-trader')).getWalletAddress().toLowerCase()}&sizeThreshold=0`
+      )
+      if (res.ok) {
+        const positions = await res.json() as Array<{
+          conditionId: string; title: string; outcome: string; outcomeIndex: number
+          size: number; avgPrice: number; curPrice: number; initialValue: number
+          asset: string; endDate: string
+        }>
+        const openPositions = positions.filter(p => p.size > 0 && p.curPrice >= 0.05 && p.curPrice <= 0.95)
+        const existingTrades = getOpenPaperTrades()
+        let synced = 0
+        for (const p of openPositions) {
+          const alreadyTracked = existingTrades.some(t => t.conditionId === p.conditionId)
+          if (!alreadyTracked) {
+            const side = p.outcomeIndex === 0 ? 'YES' : 'NO'
+            openPaperTrade({
+              conditionId: p.conditionId,
+              title: p.title,
+              domain: keywordClassify(p.title)?.domain ?? null,
+              side,
+              entryPrice: p.avgPrice,
+              simulatedUsdc: p.initialValue,
+              copiedFrom: 'on-chain-sync',
+              copiedLabel: '[LIVE] synced from on-chain',
+            })
+            synced++
+            console.log(`  📥 SYNCED | ${side} @ ${(p.avgPrice * 100).toFixed(0)}¢ | $${p.initialValue.toFixed(2)} | ${p.title.slice(0, 50)}`)
+          }
+        }
+        if (synced > 0) console.log(`  📥 Synced ${synced} existing on-chain positions into live.db`)
+      }
+    } catch (err) {
+      console.log(`  ⚠️  Position sync failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
 
   printStats()
 
