@@ -1,4 +1,4 @@
-import { getAllPaperTrades, getPortfolioSetting, type PaperTrade } from './db'
+import { getSharedPaperTrades, getPortfolioSetting, type PaperTrade } from './db'
 
 // ── Types ─────────────────────────────────────────────────────────
 
@@ -108,7 +108,7 @@ export function evaluateExpertTrust(
   wallet: string,
   label: string | null
 ): ExpertTrust {
-  const allTrades = getAllPaperTrades()
+  const allTrades = getSharedPaperTrades()
   const expertTrades = allTrades.filter((t) => t.copiedFrom === wallet)
   const resolved = expertTrades.filter((t) => t.status !== 'open')
   const wins = resolved.filter((t) => t.status === 'won')
@@ -255,7 +255,7 @@ export function evaluateExpertTrust(
  * Sorted by trustLevel descending.
  */
 export function getAllExpertTrust(): ExpertTrust[] {
-  return getAllExpertTrustFromTrades(getAllPaperTrades())
+  return getAllExpertTrustFromTrades(getSharedPaperTrades())
 }
 
 /**

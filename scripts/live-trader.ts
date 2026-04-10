@@ -64,7 +64,7 @@ const DAILY_LOSS_LIMIT_PCT = 0.50  // 50% of bankroll — catastrophe safety net
 // ── Scaling (mirrors auto-trader with BANKROLL_SCALE) ────────────
 
 function getCurrentEquity(): number {
-  const startBal = parseFloat(getPortfolioSetting('starting_balance', '100'))
+  const startBal = parseFloat(getPortfolioSetting('starting_balance', '9'))
   const allTrades = getLivePaperTrades()
   const realizedPnl = allTrades
     .filter((t) => t.status !== 'open')
@@ -97,7 +97,7 @@ function getMinBet(equity: number): number {
 }
 
 function getMaxCapitalPct(): number {
-  const startBal = parseFloat(getPortfolioSetting('starting_balance', '100'))
+  const startBal = parseFloat(getPortfolioSetting('starting_balance', '9'))
   const equity = getCurrentEquity()
   return equity > startBal * 3 ? 0.70 : 0.60
 }
@@ -182,7 +182,7 @@ let dailyPnlDate = ''
 
 function checkDailyLossLimit(): boolean {
   const today = new Date().toISOString().slice(0, 10)
-  const startBal = parseFloat(getPortfolioSetting('starting_balance', '100'))
+  const startBal = parseFloat(getPortfolioSetting('starting_balance', '9'))
 
   if (dailyPnlDate !== today) {
     // New day — reset baseline
@@ -537,7 +537,7 @@ function printStats(): void {
     const fraction = sharesNow / t.shares
     return s + sharesNow * t.curPrice * (1 - 0.02) - t.simulatedUsdc * fraction
   }, 0)
-  const startBal = parseFloat(getPortfolioSetting('starting_balance', '100'))
+  const startBal = parseFloat(getPortfolioSetting('starting_balance', '9'))
   const balance = startBal + realizedPnl
   const winRate = (won.length + lost.length) > 0
     ? won.length / (won.length + lost.length)
@@ -708,12 +708,15 @@ async function main(): Promise<void> {
     process.exit(1)
   }
 
-  // Init portfolio settings if not set
+  // Init portfolio settings from on-chain balance at first start
   if (getPortfolioSetting('starting_balance', '') === '') {
-    setPortfolioSetting('starting_balance', '100')
+    const realBalance = await getRealBalance()
+    const startBal = realBalance > 0 ? realBalance.toFixed(2) : (process.env.STARTING_BALANCE ?? '9')
+    setPortfolioSetting('starting_balance', startBal)
+    console.log(`  💰 Starting balance set from wallet: $${startBal}`)
   }
 
-  const startBal = parseFloat(getPortfolioSetting('starting_balance', '100'))
+  const startBal = parseFloat(getPortfolioSetting('starting_balance', '9'))
   const scale = getBankrollScale()
 
   // Startup balance check

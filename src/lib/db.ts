@@ -797,6 +797,18 @@ export function getAllPaperTrades(): PaperTrade[] {
   )
 }
 
+/**
+ * Get all paper trades from the shared DB (for expert trust evaluation).
+ * In paper mode: same as getAllPaperTrades().
+ * In live mode: reads from polymarket.db so trust has full paper trading history.
+ */
+export function getSharedPaperTrades(): PaperTrade[] {
+  const db = getSharedDb()
+  return mapPaperRows(
+    db.prepare('SELECT * FROM paper_trades ORDER BY opened_at DESC').all()
+  )
+}
+
 export function updatePaperTradePrice(conditionId: string, curPrice: number): void {
   const db = getDb()
   // Update cur_price and peak_price (track highest favorable price)
