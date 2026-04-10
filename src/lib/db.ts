@@ -61,6 +61,88 @@ export function closeDb(): void {
   }
 }
 
+/**
+ * Open a specific DB file (read-only). Used by dashboard to read live.db.
+ * Returns null if the file doesn't exist.
+ */
+export function openReadonlyDb(dbPath: string): Database.Database | null {
+  try {
+    if (!fs.existsSync(dbPath)) return null
+    const db = new Database(dbPath, { readonly: true })
+    return db
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Get all paper trades from a specific DB file.
+ * Used by dashboard to read live trades from live.db.
+ */
+export function getAllPaperTradesFromDb(dbPath: string): PaperTrade[] {
+  const db = openReadonlyDb(dbPath)
+  if (!db) return []
+  try {
+    const rows = db.prepare('SELECT * FROM paper_trades ORDER BY opened_at DESC').all() as Array<Record<string, unknown>>
+    return rows.map((r) => ({
+      id: r.id as string,
+      conditionId: r.condition_id as string,
+      title: r.title as string,
+      domain: r.domain as string | null,
+      side: r.side as string,
+      entryPrice: r.entry_price as number,
+      simulatedUsdc: r.simulated_usdc as number,
+      shares: r.shares as number,
+      sharesRemaining: r.shares_remaining as number | null,
+      copiedFrom: r.copied_from as string,
+      copiedLabel: r.copied_label as string | null,
+      status: r.status as 'open' | 'won' | 'lost',
+      curPrice: r.cur_price as number | null,
+      peakPrice: r.peak_price as number | null,
+      exitPrice: r.exit_price as number | null,
+      pnl: r.pnl as number | null,
+      partialExits: JSON.parse((r.partial_exits as string | null) ?? '[]') as PartialExit[],
+      openedAt: r.opened_at as string,
+      resolvedAt: r.resolved_at as string | null,
+    }))
+  } catch {
+    return []
+  } finally {
+    db.close()
+  }
+}
+
+/**
+ * Get a portfolio setting from a specific DB file.
+ */
+export function getPortfolioSettingFromDb(dbPath: string, key: string, fallback: string): string {
+  const db = openReadonlyDb(dbPath)
+  if (!db) return fallback
+  try {
+    const row = db.prepare('SELECT value FROM paper_portfolio WHERE key = ?').get(key) as { value: string } | undefined
+    return row?.value ?? fallback
+  } catch {
+    return fallback
+  } finally {
+    db.close()
+  }
+}
+
+/**
+ * Get recent bot events from a specific DB file.
+ */
+export function getRecentBotEventsFromDb(dbPath: string, limit: number = 20): Array<{ id: number; type: string; message: string; detail: string | null; createdAt: string }> {
+  const db = openReadonlyDb(dbPath)
+  if (!db) return []
+  try {
+    return db.prepare('SELECT id, type, message, detail, created_at as createdAt FROM bot_events ORDER BY id DESC LIMIT ?').all(limit) as Array<{ id: number; type: string; message: string; detail: string | null; createdAt: string }>
+  } catch {
+    return []
+  } finally {
+    db.close()
+  }
+}
+
 function initTables(db: Database.Database): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS trades (

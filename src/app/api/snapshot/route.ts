@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server'
 
 export const dynamic = 'force-dynamic'
-import { getAllPaperTrades, getPortfolioSetting, getRecentBotEvents, type PaperTrade } from '@/lib/db'
+import { getAllPaperTrades, getPortfolioSetting, getRecentBotEvents, getAllPaperTradesFromDb, getPortfolioSettingFromDb, getRecentBotEventsFromDb, type PaperTrade } from '@/lib/db'
+import path from 'path'
 import { getAllExpertTrustFromTrades } from '@/lib/expert-trust'
 
 // ── Helpers (pure functions, no DB) ─────────────────────────────────
@@ -62,20 +63,26 @@ function estimateSlippage(entryPrice: number, betAmount: number): number {
 export async function GET(request: Request): Promise<NextResponse> {
   try {
     const url = new URL(request.url)
-    const mode = url.searchParams.get('mode')  // 'live' = only [LIVE] trades, null = all trades
+    const mode = url.searchParams.get('mode')  // 'live' = read from live.db, null = paper (polymarket.db)
 
-    // ONE DB call for all trades
-    const rawAll = getAllPaperTrades()
-    const all = mode === 'live'
-      ? rawAll.filter((t) => t.copiedLabel?.startsWith('[LIVE]'))
-      : rawAll
+    // Live mode reads from separate live.db, paper mode from default polymarket.db
+    const isLive = mode === 'live'
+    const liveDbPath = path.join(process.cwd(), 'data', 'live.db')
+
+    const all = isLive
+      ? getAllPaperTradesFromDb(liveDbPath)
+      : getAllPaperTrades()
     const open = all.filter((t) => t.status === 'open')
     const closed = all.filter((t) => t.status !== 'open')
     const won = closed.filter((t) => t.status === 'won')
     const lost = closed.filter((t) => t.status === 'lost')
 
-    const startBal = parseFloat(getPortfolioSetting('starting_balance', '10000'))
-    const betSizeUsdc = parseFloat(getPortfolioSetting('bet_size_usdc', '100'))
+    const startBal = isLive
+      ? parseFloat(getPortfolioSettingFromDb(liveDbPath, 'starting_balance', '10'))
+      : parseFloat(getPortfolioSetting('starting_balance', '10000'))
+    const betSizeUsdc = isLive
+      ? parseFloat(getPortfolioSettingFromDb(liveDbPath, 'bet_size_usdc', '3'))
+      : parseFloat(getPortfolioSetting('bet_size_usdc', '100'))
     const FEE = 0.02
 
     // ── Shared portfolio metrics ────────────────────────────────────
@@ -170,7 +177,9 @@ export async function GET(request: Request): Promise<NextResponse> {
     })
 
     // Events
-    const events = getRecentBotEvents(20)
+    const events = isLive
+      ? getRecentBotEventsFromDb(liveDbPath, 20)
+      : getRecentBotEvents(20)
 
     // ── By domain ───────────────────────────────────────────────────
 

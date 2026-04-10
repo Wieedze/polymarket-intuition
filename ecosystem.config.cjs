@@ -32,6 +32,7 @@ module.exports = {
       script: 'scripts/run-live-bot.sh',
       cwd: '/opt/polymarket-intuition',
       env: {
+        DB_PATH: '/opt/polymarket-intuition/data/live.db',
         STARTING_BALANCE: '10',
         POLL_INTERVAL_MS: '60000',     // 1 min — faster than paper for live
         MIN_SIGNAL_SCORE_LIVE: '65',   // stricter than paper
