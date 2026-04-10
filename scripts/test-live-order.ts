@@ -41,11 +41,16 @@ async function main(): Promise<void> {
     transport: http('https://polygon-bor-rpc.publicnode.com'),
   })
 
+  // ClobClient expects { key, secret, passphrase } (lowercase)
   const creds = {
     key: apiKey,
     secret: apiSecret,
-    passPhrase: apiPassphrase ?? '',
+    passphrase: apiPassphrase ?? '',
   }
+
+  console.log(`   API Key: ${apiKey?.slice(0, 8)}...`)
+  console.log(`   Secret: ${apiSecret?.slice(0, 8)}...`)
+  console.log(`   Passphrase: ${apiPassphrase ? apiPassphrase.slice(0, 8) + '...' : 'EMPTY'}`)
 
   const client = new ClobClient(
     'https://clob.polymarket.com',
