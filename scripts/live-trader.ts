@@ -332,7 +332,7 @@ async function tryCopyWithSignal(alert: PositionAlert): Promise<boolean> {
       side: side as 'YES' | 'NO',
       price: entryPrice,
       sizeUsdc: betAmount,
-      orderType: 'FOK',
+      orderType: 'GTC',  // GTC instead of FOK — stays in orderbook if not immediately filled
     }
 
     const result = await placeOrder(order)
@@ -460,7 +460,7 @@ async function runExitStrategy(): Promise<Record<string, number>> {
 
   for (const trade of openTrades) {
     let expertStillHolding: boolean | null = null
-    if (EXIT_CONFIG.followExpertExit) {
+    if (EXIT_CONFIG.followExpertExit && trade.copiedFrom !== 'on-chain-sync') {
       const expertKeys = expertPositions.get(trade.copiedFrom)
       if (expertKeys) {
         const key0 = `${trade.conditionId}-0`
@@ -775,6 +775,8 @@ async function main(): Promise<void> {
           const alreadyTracked = existingTrades.some(t => t.conditionId === p.conditionId)
           if (!alreadyTracked) {
             const side = p.outcomeIndex === 0 ? 'YES' : 'NO'
+            // Cache the token ID for exit orders
+            cacheTokenId(p.conditionId, side, p.asset)
             openPaperTrade({
               conditionId: p.conditionId,
               title: p.title,
@@ -785,8 +787,10 @@ async function main(): Promise<void> {
               copiedFrom: 'on-chain-sync',
               copiedLabel: '[LIVE] synced from on-chain',
             })
+            // Update price immediately
+            updatePaperTradePrice(p.conditionId, p.curPrice)
             synced++
-            console.log(`  📥 SYNCED | ${side} @ ${(p.avgPrice * 100).toFixed(0)}¢ | $${p.initialValue.toFixed(2)} | ${p.title.slice(0, 50)}`)
+            console.log(`  📥 SYNCED | ${side} @ ${(p.avgPrice * 100).toFixed(0)}¢ → ${(p.curPrice * 100).toFixed(0)}¢ | $${p.initialValue.toFixed(2)} | token:${p.asset.slice(0, 15)}... | ${p.title.slice(0, 50)}`)
           }
         }
         if (synced > 0) console.log(`  📥 Synced ${synced} existing on-chain positions into live.db`)
