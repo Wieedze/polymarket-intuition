@@ -186,21 +186,24 @@ export function scoreSignal(params: {
   else if (wr >= 0.40) { winRateScore = 4 }
 
   // 4. Entry price quality (15 points max)
-  // 12d data: 15-30¢ = +$54.6K (+11pts edge), 30-50¢ = -$6.3K (+2pts edge), 50-65¢ = -$3.3K (-12pts edge)
-  // Hard block above 50¢ — negative edge territory
+  // Entry price tiers — higher prices need stronger signals to compensate thinner edge
+  // 15-30¢: +11pts edge (longshot sweet spot), 30-50¢: standard, 50-65¢: high conviction only
   let entryScore = 0
-  if (entryPrice > 0.50) {
+  if (entryPrice > 0.65) {
     return {
       score: 0, domainMatch: false, expertCalibration: 0,
       expertWinRate: 0, expertTrades: 0, betSizeSignal: 0,
-      expertImplicitEdge: 0, domain, reasons: [`Entry ${(entryPrice * 100).toFixed(0)}¢ blocked — negative edge above 50¢`],
+      expertImplicitEdge: 0, domain, reasons: [`Entry ${(entryPrice * 100).toFixed(0)}¢ blocked — no edge above 65¢`],
     }
   } else if (entryPrice >= 0.15 && entryPrice <= 0.30) {
-    entryScore = 15  // longshot sweet spot — best historical P&L (+$54.6K, +11pts edge)
+    entryScore = 15  // longshot sweet spot — best historical edge
     reasons.push(`Longshot entry: ${(entryPrice * 100).toFixed(0)}¢`)
   } else if (entryPrice > 0.30 && entryPrice <= 0.50) {
-    entryScore = 10  // value zone (+2pts edge, but lower than longshots)
+    entryScore = 10  // value zone — standard signals
     reasons.push(`Value entry: ${(entryPrice * 100).toFixed(0)}¢`)
+  } else if (entryPrice > 0.50 && entryPrice <= 0.65) {
+    entryScore = 3   // thin edge — only passes if rest of signal is strong (80+ total needed)
+    reasons.push(`High entry: ${(entryPrice * 100).toFixed(0)}¢ — needs strong signal`)
   } else {
     reasons.push(`Extreme longshot: ${(entryPrice * 100).toFixed(0)}¢`)
   }
