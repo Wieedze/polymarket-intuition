@@ -239,14 +239,27 @@ export async function getRealPositions(): Promise<RealPosition[]> {
  * Get real wallet balance (USDC on Polygon).
  */
 export async function getRealBalance(): Promise<number> {
+  if (!_walletAddress) await getClient()
+  if (!_walletAddress) return 0
+
   try {
-    const client = await getClient()
-    const balance = await client.getBalanceAllowance({
-      asset_type: 'COLLATERAL',
-    }) as { balance: string }
-    // USDC.e has 6 decimals — the CLOB returns raw units
-    const raw = parseFloat(balance.balance ?? '0')
-    return raw > 1_000_000 ? raw / 1e6 : raw
+    // Read USDC.e balance directly on-chain (not CLOB allowance)
+    const { createPublicClient, http, parseAbi } = await import('viem')
+    const { polygon } = await import('viem/chains')
+
+    const publicClient = createPublicClient({
+      chain: polygon,
+      transport: http(POLYGON_RPC),
+    })
+
+    const balance = await publicClient.readContract({
+      address: '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174' as `0x${string}`,
+      abi: parseAbi(['function balanceOf(address) view returns (uint256)']),
+      functionName: 'balanceOf',
+      args: [_walletAddress as `0x${string}`],
+    })
+
+    return Number(balance) / 1e6  // USDC.e has 6 decimals
   } catch {
     return 0
   }
