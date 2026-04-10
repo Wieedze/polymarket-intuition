@@ -58,9 +58,12 @@ const CHAIN_ID = 137  // Polygon mainnet
  * Requires @polymarket/clob-client installed.
  */
 let _client: unknown = null
+let _walletAddress: string = ''
 
-async function getClient() {
-  if (_client) return _client
+const POLYGON_RPC = process.env.POLYGON_RPC_URL ?? 'https://polygon-bor-rpc.publicnode.com'
+
+async function getClient(): Promise<Record<string, Function>> {
+  if (_client) return _client as Record<string, Function>
 
   const privateKey = process.env.POLYMARKET_PRIVATE_KEY
   if (!privateKey) throw new Error('POLYMARKET_PRIVATE_KEY not set in .env')
@@ -69,27 +72,39 @@ async function getClient() {
   const apiSecret = process.env.POLYMARKET_API_SECRET
   const apiPassphrase = process.env.POLYMARKET_API_PASSPHRASE
 
-  // Dynamic import — only loaded when live trading is active
-  const { ClobClient } = await import('@polymarket/clob-client')
-  const { ethers } = await import('ethers')
-
-  const wallet = new ethers.Wallet(privateKey)
-
-  if (!apiKey || !apiSecret || !apiPassphrase) {
+  if (!apiKey || !apiSecret) {
     throw new Error(
-      'Missing POLYMARKET_API_KEY/SECRET/PASSPHRASE.\n' +
-      'Run: npx tsx scripts/init-polymarket-creds.ts to generate them.'
+      'Missing POLYMARKET_API_KEY/SECRET.\n' +
+      'Run: export $(cat secrets/bot-1.env | xargs) && npx tsx scripts/init-polymarket-creds.ts'
     )
   }
+
+  const { ClobClient } = await import('@polymarket/clob-client')
+  const { createWalletClient, http } = await import('viem')
+  const { privateKeyToAccount } = await import('viem/accounts')
+  const { polygon } = await import('viem/chains')
+
+  const account = privateKeyToAccount(privateKey as `0x${string}`)
+  _walletAddress = account.address
+
+  const walletClient = createWalletClient({
+    account,
+    chain: polygon,
+    transport: http(POLYGON_RPC),
+  })
 
   _client = new ClobClient(
     CLOB_HOST,
     CHAIN_ID,
-    wallet,
-    { key: apiKey, secret: apiSecret, passPhrase: apiPassphrase }
+    walletClient as never,
+    { key: apiKey, secret: apiSecret, passphrase: apiPassphrase ?? '' }
   )
 
-  return _client
+  return _client as Record<string, Function>
+}
+
+export function getWalletAddress(): string {
+  return _walletAddress
 }
 
 // ── Core trading functions ────────────────────────────────────────
@@ -102,7 +117,7 @@ async function getClient() {
  */
 export async function placeOrder(order: RealOrder): Promise<RealOrderResult> {
   try {
-    const client = await getClient() as Record<string, Function>
+    const client = await getClient()
 
     const { OrderType, Side } = await import('@polymarket/clob-client')
 
@@ -110,9 +125,9 @@ export async function placeOrder(order: RealOrder): Promise<RealOrderResult> {
     // sizeUsdc = shares × price → shares = sizeUsdc / price
     const size = order.sizeUsdc / order.price
 
-    // Get tick size for this market (needed to round price correctly)
+    // Get tick size for this market
     const marketInfo = await client.getMarket(order.conditionId) as Record<string, unknown>
-    const tickSize = (marketInfo?.minimumTickSize as string) ?? '0.01'
+    const tickSize = (marketInfo?.minimum_tick_size as string) ?? '0.01'
 
     // Round price to tick size
     const tick = parseFloat(tickSize)
@@ -175,13 +190,14 @@ export async function placeOrder(order: RealOrder): Promise<RealOrderResult> {
  * Get real open positions for our trading wallet.
  */
 export async function getRealPositions(): Promise<RealPosition[]> {
-  const privateKey = process.env.POLYMARKET_PRIVATE_KEY
-  if (!privateKey) return []
+  if (!_walletAddress) {
+    // Initialize client to get wallet address
+    await getClient()
+  }
+  if (!_walletAddress) return []
 
   try {
-    const { ethers } = await import('ethers')
-    const wallet = new ethers.Wallet(privateKey)
-    const address = wallet.address.toLowerCase()
+    const address = _walletAddress.toLowerCase()
 
     const res = await fetch(
       `https://data-api.polymarket.com/positions?user=${address}&sizeThreshold=0`
@@ -220,11 +236,8 @@ export async function getRealPositions(): Promise<RealPosition[]> {
  * Get real wallet balance (USDC on Polygon).
  */
 export async function getRealBalance(): Promise<number> {
-  const privateKey = process.env.POLYMARKET_PRIVATE_KEY
-  if (!privateKey) return 0
-
   try {
-    const client = await getClient() as Record<string, Function>
+    const client = await getClient()
     const balance = await client.getBalanceAllowance({
       asset_type: 'COLLATERAL',
     }) as { balance: string }
