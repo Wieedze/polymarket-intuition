@@ -17,7 +17,7 @@ export type SignalScore = {
 
 // ── Config ────────────────────────────────────────────────────────
 
-const MIN_SIGNAL_SCORE = 40  // minimum score to copy
+const MIN_SIGNAL_SCORE = 60  // minimum score to copy — only standard+ quality signals
 
 /**
  * Get a domain signal multiplier based on the expert's own track record in that domain.
@@ -260,14 +260,12 @@ export function isContradictory(
 
 /**
  * How much to bet based on signal quality (multiplier on base bet)
- * Score 40-59 → 0.5x (half bet, cautious)
  * Score 60-79 → 1.0x (standard)
  * Score 80+   → 1.5x (high conviction)
  */
 export function signalBetMultiplier(signal: SignalScore): number {
   if (signal.score >= 80) return 1.5
-  if (signal.score >= 60) return 1.0
-  return 0.5
+  return 1.0
 }
 
 /**
