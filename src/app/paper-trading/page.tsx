@@ -182,6 +182,7 @@ export default function PaperTradingPage(): React.ReactElement {
             <SideLink href="/">Dashboard</SideLink>
             <SideLink href="/analytics">Analytics</SideLink>
             <SideLink href="/paper-trading" active>Trades</SideLink>
+            <SideLink href="/live-trading">Live Trading</SideLink>
             <SideLink href="/activity">Activity</SideLink>
             <SideLink href="/leaderboard">Leaderboard</SideLink>
             <SideLink href="/rules">Rules</SideLink>

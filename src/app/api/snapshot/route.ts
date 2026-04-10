@@ -59,10 +59,16 @@ function estimateSlippage(entryPrice: number, betAmount: number): number {
 
 // ── GET: unified snapshot ──────────────────────────────────────────
 
-export async function GET(): Promise<NextResponse> {
+export async function GET(request: Request): Promise<NextResponse> {
   try {
+    const url = new URL(request.url)
+    const mode = url.searchParams.get('mode')  // 'live' = only [LIVE] trades, null = all trades
+
     // ONE DB call for all trades
-    const all = getAllPaperTrades()
+    const rawAll = getAllPaperTrades()
+    const all = mode === 'live'
+      ? rawAll.filter((t) => t.copiedLabel?.startsWith('[LIVE]'))
+      : rawAll
     const open = all.filter((t) => t.status === 'open')
     const closed = all.filter((t) => t.status !== 'open')
     const won = closed.filter((t) => t.status === 'won')

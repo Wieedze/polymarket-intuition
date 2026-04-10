@@ -23,7 +23,7 @@ import { fetchAllPages } from '../src/lib/polymarket'
 import { resolvePaperTrade, updatePaperTradePrice, logBotEvent, partialExitPaperTrade } from '../src/lib/db'
 import { evaluateExit, exitEmoji, type ExitConfig } from '../src/lib/exit-strategy'
 import { scoreSignal, shouldCopySignal, signalBetMultiplier, isContradictory, kellyBetFraction } from '../src/lib/signal-scorer'
-import { evaluateExpertTrust, getAllExpertTrust } from '../src/lib/expert-trust'
+import { evaluateExpertTrust, getAllExpertTrust, getBankrollScale } from '../src/lib/expert-trust'
 
 const POLYMARKET_DATA_URL = process.env.POLYMARKET_DATA_URL ?? 'https://data-api.polymarket.com'
 
@@ -57,21 +57,24 @@ function getAvailableCash(): number {
   return equity - totalInvested
 }
 
-// Max open scales with equity: 1 slot per $200 of equity
-// $10k → 50, $55k → 275, $100k → 500
+// Max open scales with equity: 1 slot per $200×scale of equity
+// $10k(scale=1) → 50, $100(scale=0.01) → 50
 function getMaxOpen(): number {
   const equity = getCurrentEquity()
-  return Math.max(Math.floor(equity / 200), BASE_MAX_OPEN)
+  const scale = getBankrollScale()
+  return Math.max(Math.floor(equity / (200 * scale)), BASE_MAX_OPEN)
 }
 
-// Bet size scales slowly — cap at $500 to stay reasonable on markets
-// $10k → $100, $55k → $165, $100k → $300, $170k → $500 (cap)
+// Bet size scales with bankroll — uses BANKROLL_SCALE for proportional sizing
+// $10k(scale=1): $20-$500 | $100(scale=0.01): $1-$5
 function getMaxBet(equity: number): number {
-  return Math.min(Math.max(equity * 0.003, 100), 500)
+  const scale = getBankrollScale()
+  return Math.min(Math.max(equity * 0.003, Math.max(100 * scale, 1)), Math.max(500 * scale, 1))
 }
 
 function getMinBet(equity: number): number {
-  return Math.max(equity * 0.002, 20)
+  const scale = getBankrollScale()
+  return Math.max(equity * 0.002, Math.max(20 * scale, 1))
 }
 
 // Capital deployment: allow more when edge is proven (equity > 3x start)

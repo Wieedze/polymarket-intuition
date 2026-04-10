@@ -1,4 +1,4 @@
-import { getAllPaperTrades, type PaperTrade } from './db'
+import { getAllPaperTrades, getPortfolioSetting, type PaperTrade } from './db'
 
 // ── Types ─────────────────────────────────────────────────────────
 
@@ -22,6 +22,20 @@ export type ExpertTrust = {
 const OBSERVATION_TRADES = 20   // first 20 trades → observe, no judgment (10 was too low — pure luck range)
 const EVALUATION_TRADES = 30    // after 30 → evaluate aggressively
 const PROVEN_TRADES = 60        // after 60 → proven track record (40 was statistically weak)
+
+// ── Bankroll scale ──────────────────────────────────────────────
+// All dollar thresholds scale proportionally to bankroll.
+// $10k base → scale=1.0 | $100 → scale=0.01 | $1k → scale=0.1
+// This lets the same trust logic work for €100 live tests and $10k paper.
+
+export function getBankrollScale(): number {
+  const startBal = parseFloat(getPortfolioSetting('starting_balance', '10000'))
+  return startBal / 10000
+}
+
+function scaledDollar(baseAmount: number): number {
+  return baseAmount * getBankrollScale()
+}
 
 // ── Risk-adjusted scoring (used by proven phase) ────────────────
 
@@ -66,8 +80,9 @@ function computeRiskMetrics(resolved: PaperTrade[]): RiskMetrics {
   const totalPnl = grossWins - grossLosses
   const ddRatio = totalPnl > 0 ? Math.max(1 - maxDd / (totalPnl + maxDd), 0) : 0
   const ddScore = ddRatio * 25                                   // low DD relative to gains = max 25pts
-  const momentumScore = recentMomentum > 0 ? Math.min(recentMomentum / 500, 1) * 20 : // positive = up to 20pts
-    Math.max(recentMomentum / 500, -1) * 10                      // negative = down to -10pts penalty
+  const momentumDivisor = scaledDollar(500)
+  const momentumScore = recentMomentum > 0 ? Math.min(recentMomentum / momentumDivisor, 1) * 20 : // positive = up to 20pts
+    Math.max(recentMomentum / momentumDivisor, -1) * 10                      // negative = down to -10pts penalty
   const wlRatio = avgLoss > 0 ? avgWin / avgLoss : avgWin > 0 ? 5 : 0
   const wlScore = Math.min(wlRatio / 3.0, 1) * 15              // ratio 3:1+ = max 15pts
 
@@ -115,11 +130,11 @@ export function evaluateExpertTrust(
   // ── Phase 1: Observation ──
   if (resolved.length < OBSERVATION_TRADES) {
     // Early warning: cut trust if losing money fast even with few trades
-    if (resolved.length >= 5 && pnl < -300) {
+    if (resolved.length >= 5 && pnl < -scaledDollar(300)) {
       return { ...base, phase: 'observation', trustLevel: 0, status: 'paused',
         reason: `Paused early: ${resolved.length} trades, PnL ${pnl.toFixed(0)}` }
     }
-    if (resolved.length >= 3 && pnl < -100) {
+    if (resolved.length >= 3 && pnl < -scaledDollar(100)) {
       return { ...base, phase: 'observation', trustLevel: 0.3, status: 'reduced',
         reason: `Reduced early: ${resolved.length} trades, PnL ${pnl.toFixed(0)}` }
     }
@@ -140,7 +155,7 @@ export function evaluateExpertTrust(
     const recentPnl = recent.reduce((s, t) => s + (t.pnl ?? 0), 0)
 
     // Losing badly → pause (both WR and PnL must be bad)
-    if (resolved.length >= EVALUATION_TRADES && recentPnl < -200 && recentWR < 0.30) {
+    if (resolved.length >= EVALUATION_TRADES && recentPnl < -scaledDollar(200) && recentWR < 0.30) {
       return {
         ...base,
         phase: 'evaluation',
@@ -152,7 +167,7 @@ export function evaluateExpertTrust(
 
     // Losing moderately → reduce
     // BUT: if overall PnL is positive, WR alone doesn't matter (longshot traders)
-    if (recentPnl < -100 || (recentWR < 0.35 && pnl < 0)) {
+    if (recentPnl < -scaledDollar(100) || (recentWR < 0.35 && pnl < 0)) {
       return {
         ...base,
         phase: 'evaluation',
@@ -191,7 +206,7 @@ export function evaluateExpertTrust(
   //   60+   → active           (strong, high trust)
 
   // PAUSE only if score is rock-bottom AND still losing recently (no recovery signal)
-  if (risk.compositeScore < 10 && risk.recentMomentum < -200) {
+  if (risk.compositeScore < 10 && risk.recentMomentum < -scaledDollar(200)) {
     return {
       ...base,
       phase: 'proven',
@@ -284,11 +299,11 @@ export function evaluateExpertTrustFromTrades(
   }
 
   if (resolved.length < OBSERVATION_TRADES) {
-    if (resolved.length >= 5 && pnl < -300) {
+    if (resolved.length >= 5 && pnl < -scaledDollar(300)) {
       return { ...base, phase: 'observation', trustLevel: 0, status: 'paused',
         reason: `Paused early: ${resolved.length} trades, PnL ${pnl.toFixed(0)}` }
     }
-    if (resolved.length >= 3 && pnl < -100) {
+    if (resolved.length >= 3 && pnl < -scaledDollar(100)) {
       return { ...base, phase: 'observation', trustLevel: 0.3, status: 'reduced',
         reason: `Reduced early: ${resolved.length} trades, PnL ${pnl.toFixed(0)}` }
     }
@@ -300,11 +315,11 @@ export function evaluateExpertTrustFromTrades(
     const recent = resolved.slice(-15)
     const recentWR = recent.filter((t) => t.status === 'won').length / recent.length
     const recentPnl = recent.reduce((s, t) => s + (t.pnl ?? 0), 0)
-    if (resolved.length >= EVALUATION_TRADES && recentPnl < -200 && recentWR < 0.30) {
+    if (resolved.length >= EVALUATION_TRADES && recentPnl < -scaledDollar(200) && recentWR < 0.30) {
       return { ...base, phase: 'evaluation', trustLevel: 0, status: 'paused',
         reason: `Paused: last 15 trades WR ${(recentWR * 100).toFixed(0)}%, PnL ${recentPnl.toFixed(0)}` }
     }
-    if (recentPnl < -100 || (recentWR < 0.35 && pnl < 0)) {
+    if (recentPnl < -scaledDollar(100) || (recentWR < 0.35 && pnl < 0)) {
       return { ...base, phase: 'evaluation', trustLevel: 0.3, status: 'reduced',
         reason: `Reduced: WR ${(recentWR * 100).toFixed(0)}%, PnL ${recentPnl.toFixed(0)} (last 15)` }
     }
@@ -320,7 +335,7 @@ export function evaluateExpertTrustFromTrades(
   // Risk-adjusted composite score (same logic as main function)
   const risk = computeRiskMetrics(resolved)
 
-  if (risk.compositeScore < 10 && risk.recentMomentum < -200) {
+  if (risk.compositeScore < 10 && risk.recentMomentum < -scaledDollar(200)) {
     return { ...base, phase: 'proven', trustLevel: 0, status: 'paused',
       reason: `Paused: score ${risk.compositeScore.toFixed(0)}/100, still sinking (PF ${risk.profitFactor.toFixed(2)}, DD -$${risk.maxDrawdown.toFixed(0)}, momentum ${risk.recentMomentum.toFixed(0)})` }
   }

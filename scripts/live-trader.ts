@@ -1,8 +1,11 @@
 /**
  * Live Trader — Real money execution on Polymarket
  *
- * Mirrors auto-trader.ts logic but places REAL orders via CLOB API.
- * Paper trading runs in parallel for comparison.
+ * Full mirror of auto-trader.ts with real order execution.
+ * Every signal, sizing, exit, and risk decision is identical to paper trading,
+ * but orders are placed on the real Polymarket CLOB.
+ *
+ * Paper trades are recorded in parallel (labeled [LIVE]) for comparison.
  *
  * Usage:
  *   npx tsx scripts/live-trader.ts
@@ -12,11 +15,13 @@
  *   POLYMARKET_API_KEY
  *   POLYMARKET_API_SECRET
  *   POLYMARKET_API_PASSPHRASE
+ *   STARTING_BALANCE=100          # your live bankroll in USDC
  *
- * Safety limits for $10 live test:
- *   MAX_LIVE_BET_USDC=3       max $3 per bet
- *   MAX_LIVE_POSITIONS=5      max 5 simultaneous
- *   MAX_LIVE_CAPITAL=10       max $10 total deployed
+ * Optional .env:
+ *   DRY_RUN=true                  # log everything but skip real orders
+ *   MAX_LIVE_CAPITAL=70           # max % of bankroll deployed (default: 70%)
+ *   MIN_SIGNAL_SCORE_LIVE=65      # signal threshold (default: 65)
+ *   POLL_INTERVAL_MS=30000        # poll interval (default: 30s)
  */
 
 import {
@@ -25,107 +30,278 @@ import {
   openPaperTrade,
   paperTradeExistsForCondition,
   getPortfolioSetting,
+  setPortfolioSetting,
   getAllPaperTrades,
   getPositionSnapshot,
+  resolvePaperTrade,
+  updatePaperTradePrice,
+  partialExitPaperTrade,
   logBotEvent,
+  type PaperTrade,
 } from '../src/lib/db'
+import { indexWallet } from '../src/lib/indexer'
 import { pollWallet, type PositionAlert } from '../src/lib/position-tracker'
 import { keywordClassify } from '../src/lib/classifier'
-import { fetchAllPages } from '../src/lib/polymarket'
-import { resolvePaperTrade, updatePaperTradePrice } from '../src/lib/db'
-import { evaluateExit, exitEmoji, DEFAULT_CONFIG } from '../src/lib/exit-strategy'
-import { scoreSignal, shouldCopySignal, isContradictory, kellyBetFraction } from '../src/lib/signal-scorer'
-import { evaluateExpertTrust } from '../src/lib/expert-trust'
-import { placeOrder, getRealBalance, type RealOrder } from '../src/lib/real-trader'
-import { fetchMarketMetadata } from '../src/lib/polymarket'
+import { fetchAllPages, fetchMarketMetadata } from '../src/lib/polymarket'
+import { evaluateExit, exitEmoji, type ExitConfig } from '../src/lib/exit-strategy'
+import { scoreSignal, shouldCopySignal, signalBetMultiplier, isContradictory, kellyBetFraction } from '../src/lib/signal-scorer'
+import { evaluateExpertTrust, getAllExpertTrust, getBankrollScale } from '../src/lib/expert-trust'
+import { placeOrder, getRealBalance, getRealPositions, closePosition, type RealOrder } from '../src/lib/real-trader'
 
-const POLYMARKET_DATA_URL = 'https://data-api.polymarket.com'
+const POLYMARKET_DATA_URL = process.env.POLYMARKET_DATA_URL ?? 'https://data-api.polymarket.com'
 
-// ── Safety limits ─────────────────────────────────────────────────
-// Hardcoded conservative limits for initial live test
+// ── Config ───────────────────────────────────────────────────────
 
-const MAX_LIVE_BET_USDC = parseFloat(process.env.MAX_LIVE_BET_USDC ?? '3')
-const MIN_LIVE_BET_USDC = 1
-const MAX_LIVE_POSITIONS = parseInt(process.env.MAX_LIVE_POSITIONS ?? '5', 10)
-const MAX_LIVE_CAPITAL = parseFloat(process.env.MAX_LIVE_CAPITAL ?? '10')
 const POLL_INTERVAL_MS = parseInt(process.env.POLL_INTERVAL_MS ?? '30000', 10)
-const MIN_ENTRY = 0.15
-const MAX_ENTRY = 0.60
-const MIN_SIGNAL_SCORE = 65  // higher threshold for real money
+const BET_PCT = parseFloat(process.env.BET_PCT ?? '0.02')
+const MIN_ENTRY = parseFloat(process.env.MIN_ENTRY_PRICE ?? '0.15')
+const MAX_ENTRY = parseFloat(process.env.MAX_ENTRY_PRICE ?? '0.65')
+const BASE_MAX_OPEN = parseInt(process.env.MAX_OPEN_TRADES ?? '50', 10)
+const MIN_SIGNAL_SCORE = parseInt(process.env.MIN_SIGNAL_SCORE_LIVE ?? '65', 10)
+const DRY_RUN = process.env.DRY_RUN === 'true'
+const DAILY_LOSS_LIMIT_PCT = 0.50  // 50% of bankroll — catastrophe safety net
 
-// ── State ─────────────────────────────────────────────────────────
+// ── Scaling (mirrors auto-trader with BANKROLL_SCALE) ────────────
 
-// Track live positions in memory (wallet address → conditionId → tokenId)
-const livePositions = new Map<string, { tokenId: string; size: number; entryPrice: number; sizeUsdc: number }>()
-let totalDeployed = 0
-
-// ── Helpers ───────────────────────────────────────────────────────
-
-function getSlippageAdjustedPrice(rawPrice: number): number {
-  // Simulate realistic entry after sharp — same as auto-trader
-  return rawPrice < 0.30
-    ? Math.min(rawPrice + 0.05, 0.95)
-    : Math.min(rawPrice + 0.03, 0.95)
+function getCurrentEquity(): number {
+  const startBal = parseFloat(getPortfolioSetting('starting_balance', '100'))
+  const allTrades = getLivePaperTrades()
+  const realizedPnl = allTrades
+    .filter((t) => t.status !== 'open')
+    .reduce((s, t) => s + (t.pnl ?? 0), 0)
+  return startBal + realizedPnl
 }
 
-function getDynamicStopLoss(entryPrice: number): number {
-  return entryPrice < 0.30 ? 0.20 : 0.25
+function getAvailableCash(): number {
+  const equity = getCurrentEquity()
+  const totalInvested = getLivePaperTrades()
+    .filter((t) => t.status === 'open')
+    .reduce((s, t) => s + t.simulatedUsdc, 0)
+  return equity - totalInvested
 }
 
-// ── Main copy logic ───────────────────────────────────────────────
+function getMaxOpen(): number {
+  const equity = getCurrentEquity()
+  const scale = getBankrollScale()
+  return Math.max(Math.floor(equity / (200 * scale)), BASE_MAX_OPEN)
+}
 
-async function tryLiveCopy(alert: PositionAlert): Promise<boolean> {
+function getMaxBet(equity: number): number {
+  const scale = getBankrollScale()
+  return Math.min(Math.max(equity * 0.003, Math.max(100 * scale, 1)), Math.max(500 * scale, 1))
+}
+
+function getMinBet(equity: number): number {
+  const scale = getBankrollScale()
+  return Math.max(equity * 0.002, Math.max(20 * scale, 1))
+}
+
+function getMaxCapitalPct(): number {
+  const startBal = parseFloat(getPortfolioSetting('starting_balance', '100'))
+  const equity = getCurrentEquity()
+  return equity > startBal * 3 ? 0.70 : 0.60
+}
+
+function getDynamicBetSize(): number {
+  const equity = getCurrentEquity()
+  const cash = getAvailableCash()
+  const bet = cash * BET_PCT
+  return Math.min(Math.max(bet, getMinBet(equity)), getMaxBet(equity))
+}
+
+// ── Live paper trades filter ─────────────────────────────────────
+// Live trades are stored as paper_trades with copiedLabel starting with "[LIVE]"
+// This keeps them separate from pure paper trades.
+
+function getLivePaperTrades(): PaperTrade[] {
+  return getAllPaperTrades().filter((t) => t.copiedLabel?.startsWith('[LIVE]'))
+}
+
+function getOpenLiveTrades(): PaperTrade[] {
+  return getOpenPaperTrades().filter((t) => t.copiedLabel?.startsWith('[LIVE]'))
+}
+
+// ── Exit strategy config (same as auto-trader) ───────────────────
+
+const EXIT_CONFIG: ExitConfig = {
+  takeProfitPct: parseFloat(process.env.TAKE_PROFIT ?? '999'),
+  stopLossPct: parseFloat(process.env.STOP_LOSS ?? '0.25'),
+  trailingActivatePct: parseFloat(process.env.TRAILING_ACTIVATE ?? '999'),
+  trailingStopPct: parseFloat(process.env.TRAILING_STOP ?? '0.10'),
+  nearResolutionThreshold: parseFloat(process.env.NEAR_RESOLUTION ?? '0.85'),
+  staleDays: parseInt(process.env.STALE_DAYS ?? '7', 10),
+  staleThreshold: parseFloat(process.env.STALE_THRESHOLD ?? '0.03'),
+  followExpertExit: process.env.FOLLOW_EXPERT_EXIT !== 'false',
+  partialExitAt100Pct: parseFloat(process.env.PARTIAL_EXIT_100 ?? '0.50'),
+  partialExitAt150Pct: parseFloat(process.env.PARTIAL_EXIT_150 ?? '0.30'),
+}
+
+// ── Consensus tracking (same as auto-trader) ─────────────────────
+
+type ConsensusEntry = {
+  conditionId: string
+  title: string
+  side: string
+  price: number
+  experts: Array<{ wallet: string; label: string | null; size: number }>
+}
+
+const consensusMap = new Map<string, ConsensusEntry>()
+
+function trackConsensus(alert: PositionAlert): void {
+  if (alert.type !== 'NEW_POSITION') return
+  const key = alert.position.conditionId
+  const side = alert.position.outcomeIndex === 0 ? 'YES' : 'NO'
+  const existing = consensusMap.get(key)
+  if (existing) {
+    if (existing.side === side) {
+      existing.experts.push({ wallet: alert.wallet, label: alert.walletLabel, size: alert.position.size })
+    }
+  } else {
+    consensusMap.set(key, {
+      conditionId: key, title: alert.position.title, side, price: alert.position.curPrice,
+      experts: [{ wallet: alert.wallet, label: alert.walletLabel, size: alert.position.size }],
+    })
+  }
+}
+
+function getConsensusMultiplier(conditionId: string): number {
+  const entry = consensusMap.get(conditionId)
+  if (!entry) return 1
+  const n = entry.experts.length
+  if (n >= 5) return 0.3
+  if (n >= 3) return 0.5
+  if (n >= 2) return 0.7
+  return 1
+}
+
+// ── Daily loss tracking ──────────────────────────────────────────
+
+let dailyPnlStart = 0
+let dailyPnlDate = ''
+
+function checkDailyLossLimit(): boolean {
+  const today = new Date().toISOString().slice(0, 10)
+  const startBal = parseFloat(getPortfolioSetting('starting_balance', '100'))
+
+  if (dailyPnlDate !== today) {
+    // New day — reset baseline
+    dailyPnlDate = today
+    dailyPnlStart = getCurrentEquity()
+  }
+
+  const currentEquity = getCurrentEquity()
+  const dailyLoss = dailyPnlStart - currentEquity
+  const limitAmount = startBal * DAILY_LOSS_LIMIT_PCT
+
+  if (dailyLoss >= limitAmount) {
+    console.log(`  🚨 DAILY LOSS LIMIT HIT | -$${dailyLoss.toFixed(2)} today (limit: -$${limitAmount.toFixed(2)}) | Bot paused until tomorrow`)
+    logBotEvent('safety', `DAILY LOSS LIMIT -$${dailyLoss.toFixed(2)}`, `Limit: -$${limitAmount.toFixed(2)}`)
+    return true  // limit hit
+  }
+  return false
+}
+
+// ── Live token ID cache ──────────────────────────────────────────
+// Maps conditionId+side → tokenId for exit orders
+
+const tokenIdCache = new Map<string, string>()
+
+function cacheTokenId(conditionId: string, side: string, tokenId: string): void {
+  tokenIdCache.set(`${conditionId}-${side}`, tokenId)
+}
+
+async function getTokenId(conditionId: string, side: string): Promise<string | null> {
+  const cached = tokenIdCache.get(`${conditionId}-${side}`)
+  if (cached) return cached
+
+  const metadata = await fetchMarketMetadata(conditionId)
+  if (!metadata) return null
+
+  const tokenId = side === 'YES' ? metadata.yesTokenId : metadata.noTokenId
+  cacheTokenId(conditionId, side, tokenId)
+  return tokenId
+}
+
+// ── Entry logic (mirrors auto-trader exactly) ────────────────────
+
+function canCopy(alert: PositionAlert): boolean {
   if (alert.type !== 'NEW_POSITION') return false
 
-  const rawPrice = alert.position.curPrice
-  if (rawPrice < MIN_ENTRY || rawPrice > MAX_ENTRY) return false
-  if (livePositions.has(alert.position.conditionId)) return false
-  if (livePositions.size >= MAX_LIVE_POSITIONS) return false
-  if (totalDeployed >= MAX_LIVE_CAPITAL) return false
+  const price = alert.position.curPrice
+  if (price < MIN_ENTRY || price > MAX_ENTRY) return false
+  if (paperTradeExistsForCondition(alert.position.conditionId)) return false
 
-  // Expert trust check
+  const openTrades = getOpenLiveTrades()
+  if (openTrades.length >= getMaxOpen()) return false
+
+  const equity = getCurrentEquity()
+  const totalInvested = openTrades.reduce((s, t) => s + t.simulatedUsdc, 0)
+  const betSize = getDynamicBetSize()
+  if (totalInvested + betSize > equity * getMaxCapitalPct()) return false
+
+  return true
+}
+
+async function tryCopyWithSignal(alert: PositionAlert): Promise<boolean> {
   const trust = evaluateExpertTrust(alert.wallet, alert.walletLabel)
-  if (trust.status === 'paused') return false
+  if (trust.status === 'paused') {
+    console.log(`  ⛔ PAUSED | ${alert.walletLabel ?? alert.wallet.slice(0, 10)} | ${trust.reason}`)
+    return false
+  }
 
-  // Signal scoring — stricter threshold for real money
   const signal = scoreSignal({
     expertWallet: alert.wallet,
     marketTitle: alert.position.title,
-    entryPrice: rawPrice,
+    entryPrice: alert.position.curPrice,
     positionSize: alert.position.size,
   })
 
-  if (signal.score < MIN_SIGNAL_SCORE) {
-    console.log(`  ⏭️  LIVE SKIP (${signal.score}/${MIN_SIGNAL_SCORE}) | ${alert.position.title.slice(0, 50)}`)
+  if (signal.score < MIN_SIGNAL_SCORE || !shouldCopySignal(signal)) {
+    if (signal.score > 20) {
+      console.log(`  ⏭️  SKIP (${signal.score}/${MIN_SIGNAL_SCORE}) | ${signal.reasons[0]} | ${alert.position.title}`)
+    }
     return false
   }
 
-  // Slippage-adjusted entry
-  const entryPrice = getSlippageAdjustedPrice(rawPrice)
-
-  // Kelly sizing — capped hard at MAX_LIVE_BET_USDC
-  const kellyFraction = kellyBetFraction(trust.winRate, entryPrice)
-  const realBalance = await getRealBalance()
-  const kellyBet = kellyFraction > 0
-    ? Math.min(realBalance * kellyFraction * trust.trustLevel, MAX_LIVE_BET_USDC)
-    : MIN_LIVE_BET_USDC
-
-  const betUsdc = Math.max(Math.min(kellyBet, MAX_LIVE_BET_USDC), MIN_LIVE_BET_USDC)
-
-  if (totalDeployed + betUsdc > MAX_LIVE_CAPITAL) {
-    console.log(`  🛑 CAPITAL LIMIT — deployed $${totalDeployed.toFixed(2)} / $${MAX_LIVE_CAPITAL}`)
-    return false
-  }
-
-  const side = alert.position.outcomeIndex === 0 ? 'YES' : 'NO'
   const domain = keywordClassify(alert.position.title)
+  const side = alert.position.outcomeIndex === 0 ? 'YES' : 'NO'
 
-  console.log(`  💰 LIVE ORDER | ${side} @ ${(entryPrice * 100).toFixed(0)}¢ | $${betUsdc.toFixed(2)} | score:${signal.score} | ${alert.position.title.slice(0, 45)}`)
+  // ── Slippage (same as auto-trader) ─────────────────────────────
+  const rawPrice = alert.position.curPrice
+  const baseSlippage = rawPrice < 0.20 ? 0.06
+    : rawPrice < 0.30 ? 0.05
+    : rawPrice < 0.50 ? 0.03
+    : 0.02
 
-  // Fetch real token IDs from Gamma API (cached 24h)
+  // ── Kelly-based sizing (same as auto-trader) ───────────────────
+  const entryPriceEst = Math.min(rawPrice * (1 + baseSlippage), 0.95)
+  const kellyFraction = kellyBetFraction(trust.winRate, entryPriceEst)
+  const currentBankroll = getCurrentEquity()
+
+  const minBet = getMinBet(currentBankroll)
+  const maxBet = getMaxBet(currentBankroll)
+  const baseBet = kellyFraction > 0
+    ? Math.min(Math.max(currentBankroll * kellyFraction, minBet), maxBet)
+    : minBet
+
+  const signalMulti = signalBetMultiplier(signal)
+  const consensusMulti = getConsensusMultiplier(alert.position.conditionId)
+  const trustMulti = trust.trustLevel
+  const betAmount = Math.min(baseBet * signalMulti * consensusMulti * trustMulti, maxBet)
+
+  // Final entry price with size-adjusted slippage
+  const sizeImpact = (betAmount / 100) * 0.005
+  const slippage = baseSlippage + sizeImpact
+  const entryPrice = Math.min(rawPrice * (1 + slippage), 0.95)
+
+  // Dynamic stop-loss
+  const dynamicStopLoss = entryPrice < 0.30 ? 0.20 : 0.25
+
+  // ── Fetch token ID for real order ──────────────────────────────
   const metadata = await fetchMarketMetadata(alert.position.conditionId)
   if (!metadata) {
-    console.log(`  ⚠️  NO METADATA | Can't resolve token ID | ${alert.position.title.slice(0, 45)}`)
+    console.log(`  ⚠️  NO METADATA | ${alert.position.title.slice(0, 45)}`)
     return false
   }
   if (!metadata.active) {
@@ -133,117 +309,397 @@ async function tryLiveCopy(alert: PositionAlert): Promise<boolean> {
     return false
   }
   const tokenId = side === 'YES' ? metadata.yesTokenId : metadata.noTokenId
+  cacheTokenId(alert.position.conditionId, side, tokenId)
 
-  // Place real order
-  const order: RealOrder = {
-    conditionId: alert.position.conditionId,
-    tokenId,
-    title: alert.position.title,
-    side,
-    price: entryPrice,
-    sizeUsdc: betUsdc,
-    orderType: 'FOK',
-  }
+  // ── Place real order (or dry-run log) ──────────────────────────
+  const consensusEntry = consensusMap.get(alert.position.conditionId)
+  const expertCount = consensusEntry?.experts.length ?? 1
+  const consensusTag = expertCount > 1 ? ` 🤝${expertCount}x(${consensusMulti}x)` : ''
+  const kellyTag = kellyFraction > 0 ? `kelly:${(kellyFraction * 100).toFixed(1)}%` : 'kelly:0→min'
+  const trustTag = trust.status === 'reduced' ? ' ⚡reduced' : ''
+  const scoreTag = signal.score >= 80 ? '🔥' : signal.score >= 60 ? '✅' : '⚠️'
+  const stopTag = `stop:-${(dynamicStopLoss * 100).toFixed(0)}%`
+  const domainTag = domain ? `[${domain.domain.replace('pm-domain/', '')}]` : ''
 
-  const result = await placeOrder(order)
-
-  if (result.success) {
-    // Track live position
-    livePositions.set(alert.position.conditionId, {
-      tokenId: order.tokenId,
-      size: betUsdc / entryPrice,
-      entryPrice,
-      sizeUsdc: betUsdc,
-    })
-    totalDeployed += betUsdc
-
-    console.log(`  ✅ LIVE FILLED | orderId:${result.orderId} | tx:${result.transactionHash?.slice(0, 10)}...`)
-    logBotEvent('live-copy', `REAL ${side} @ ${(entryPrice * 100).toFixed(0)}¢ $${betUsdc.toFixed(2)} | ${alert.position.title}`, `Score:${signal.score} | Kelly:${(kellyFraction * 100).toFixed(1)}%`)
-
-    // Also record as paper trade for comparison
-    openPaperTrade({
-      conditionId: alert.position.conditionId,
-      title: alert.position.title,
-      domain: domain?.domain ?? null,
-      side,
-      entryPrice,
-      simulatedUsdc: betUsdc,
-      copiedFrom: alert.wallet,
-      copiedLabel: `[LIVE] ${alert.walletLabel ?? alert.wallet.slice(0, 10)}`,
-    })
-
-    return true
+  if (DRY_RUN) {
+    console.log(`  🏜️  DRY-RUN | ${scoreTag} ${side} @ ${(rawPrice * 100).toFixed(0)}¢→${(entryPrice * 100).toFixed(0)}¢ | $${betAmount.toFixed(2)}${consensusTag}${trustTag} | ${kellyTag} | ${stopTag} | ${alert.position.title.slice(0, 45)} ${domainTag}`)
+    logBotEvent('live-dry-run', `${side} @ ${(entryPrice * 100).toFixed(0)}¢ $${betAmount.toFixed(2)} | ${alert.position.title}`, `Score: ${signal.score}/100`)
   } else {
-    console.log(`  ❌ LIVE ORDER FAILED | ${result.error} | ${alert.position.title.slice(0, 45)}`)
-    logBotEvent('live-error', `FAILED ${side} @ ${(entryPrice * 100).toFixed(0)}¢ | ${alert.position.title}`, result.error ?? '')
-    return false
+    const order: RealOrder = {
+      conditionId: alert.position.conditionId,
+      tokenId,
+      title: alert.position.title,
+      side: side as 'YES' | 'NO',
+      price: entryPrice,
+      sizeUsdc: betAmount,
+      orderType: 'FOK',
+    }
+
+    const result = await placeOrder(order)
+
+    if (!result.success) {
+      console.log(`  ❌ ORDER FAILED | ${result.error} | ${alert.position.title.slice(0, 45)}`)
+      logBotEvent('live-error', `FAILED ${side} @ ${(entryPrice * 100).toFixed(0)}¢ | ${alert.position.title}`, result.error ?? '')
+      return false
+    }
+
+    console.log(`  💰 LIVE ${scoreTag} | ${side} @ ${(rawPrice * 100).toFixed(0)}¢→${(entryPrice * 100).toFixed(0)}¢ | $${betAmount.toFixed(2)}${consensusTag}${trustTag} | ${kellyTag} | ${stopTag} | orderId:${result.orderId} | ${alert.position.title.slice(0, 40)} ${domainTag}`)
+    logBotEvent('live-copy', `REAL ${side} @ ${(entryPrice * 100).toFixed(0)}¢ $${betAmount.toFixed(2)} | ${alert.position.title}`, `Score: ${signal.score}/100 | ${kellyTag}`)
   }
+
+  // Record as paper trade for tracking (labeled [LIVE])
+  openPaperTrade({
+    conditionId: alert.position.conditionId,
+    title: alert.position.title,
+    domain: domain?.domain ?? null,
+    side,
+    entryPrice,
+    simulatedUsdc: betAmount,
+    copiedFrom: alert.wallet,
+    copiedLabel: `[LIVE] ${alert.walletLabel ?? alert.wallet.slice(0, 10)}`,
+  })
+
+  return true
 }
 
-// ── Poll loop ─────────────────────────────────────────────────────
+// ── Price refresh (using our real positions) ─────────────────────
+
+async function refreshOpenPrices(): Promise<number> {
+  const openTrades = getOpenLiveTrades()
+  if (openTrades.length === 0) return 0
+
+  // Use expert positions for price data (same as auto-trader)
+  const wallets = [...new Set(openTrades.map((t) => t.copiedFrom))]
+  let updated = 0
+
+  for (const wallet of wallets) {
+    try {
+      const positions = await fetchAllPages<{ conditionId: string; curPrice: number }>(
+        `${POLYMARKET_DATA_URL}/positions?user=${wallet}&sizeThreshold=0`,
+        2
+      )
+      for (const pos of positions) {
+        const matching = openTrades.filter((t) => t.conditionId === pos.conditionId)
+        for (const _t of matching) {
+          updatePaperTradePrice(pos.conditionId, pos.curPrice)
+          updated++
+        }
+      }
+    } catch {
+      // Skip
+    }
+    await new Promise((r) => setTimeout(r, 500))
+  }
+
+  return updated
+}
+
+// ── Resolve completed markets ────────────────────────────────────
+
+type PositionRecord = {
+  conditionId: string
+  curPrice: number
+  redeemable: boolean
+}
+
+async function resolveCompletedTrades(): Promise<number> {
+  const openTrades = getOpenLiveTrades()
+  if (openTrades.length === 0) return 0
+
+  const wallets = [...new Set(openTrades.map((t) => t.copiedFrom))]
+  let resolved = 0
+
+  for (const wallet of wallets) {
+    try {
+      const positions = await fetchAllPages<PositionRecord>(
+        `${POLYMARKET_DATA_URL}/positions?user=${wallet}&sizeThreshold=0&closed=true`,
+        2
+      )
+
+      for (const pos of positions) {
+        if (pos.curPrice < 0.05 || pos.curPrice > 0.95) {
+          const matching = openTrades.filter((t) => t.conditionId === pos.conditionId)
+          for (const trade of matching) {
+            resolvePaperTrade(pos.conditionId, pos.curPrice)
+            const result = pos.curPrice > 0.95
+              ? (trade.side === 'YES' ? 'WON' : 'LOST')
+              : (trade.side === 'NO' ? 'WON' : 'LOST')
+            const pnl = trade.shares * (pos.curPrice > 0.95
+              ? (trade.side === 'YES' ? 1 - trade.entryPrice : -trade.entryPrice)
+              : (trade.side === 'NO' ? 1 - trade.entryPrice : -trade.entryPrice))
+            console.log(`  ✅ RESOLVED | ${result} | PnL: ${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)} | ${trade.title}`)
+            logBotEvent('live-resolved', `${result} PnL ${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)} | ${trade.title}`, '')
+            resolved++
+          }
+        }
+      }
+    } catch {
+      // Skip
+    }
+    await new Promise((r) => setTimeout(r, 500))
+  }
+
+  return resolved
+}
+
+// ── Exit strategy (mirrors auto-trader + real closePosition) ─────
+
+async function runExitStrategy(): Promise<Record<string, number>> {
+  const openTrades = getOpenLiveTrades()
+  const counts: Record<string, number> = {}
+
+  // Check if experts still hold their positions
+  const expertPositions = new Map<string, Set<string>>()
+  if (EXIT_CONFIG.followExpertExit) {
+    const wallets = [...new Set(openTrades.map((t) => t.copiedFrom))]
+    for (const w of wallets) {
+      const snapshot = getPositionSnapshot(w)
+      expertPositions.set(w, new Set(snapshot.keys()))
+    }
+  }
+
+  for (const trade of openTrades) {
+    let expertStillHolding: boolean | null = null
+    if (EXIT_CONFIG.followExpertExit) {
+      const expertKeys = expertPositions.get(trade.copiedFrom)
+      if (expertKeys) {
+        const key0 = `${trade.conditionId}-0`
+        const key1 = `${trade.conditionId}-1`
+        expertStillHolding = expertKeys.has(key0) || expertKeys.has(key1)
+      }
+    }
+
+    const decision = evaluateExit(trade, EXIT_CONFIG, expertStillHolding)
+    if (!decision.shouldExit) continue
+
+    const exitPrice = trade.curPrice ?? trade.entryPrice
+
+    // Get token ID for the close order
+    const tokenId = await getTokenId(trade.conditionId, trade.side)
+
+    try {
+      if ((decision.reason === 'partial-exit-100' || decision.reason === 'partial-exit-150') && decision.partialFraction) {
+        // Partial exit — sell a fraction
+        const sharesRemaining = trade.sharesRemaining ?? trade.shares
+        const sharesToSell = sharesRemaining * decision.partialFraction
+
+        if (!DRY_RUN && tokenId) {
+          const result = await closePosition(tokenId, sharesToSell, exitPrice)
+          if (!result.success) {
+            console.log(`  ⚠️  PARTIAL EXIT FAILED | ${result.error} | ${trade.title.slice(0, 40)}`)
+            continue
+          }
+        }
+
+        partialExitPaperTrade(trade.conditionId, decision.partialFraction, exitPrice)
+        const pnl = sharesToSell * (exitPrice - trade.entryPrice)
+        const prefix = DRY_RUN ? '🏜️ DRY-RUN ' : '💰 LIVE '
+        console.log(`  ${prefix}${exitEmoji(decision.reason)} ${decision.reason.toUpperCase()} | ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)} | ${(decision.partialFraction * 100).toFixed(0)}% sold @ ${(exitPrice * 100).toFixed(0)}¢ | ${trade.title}`)
+        logBotEvent('live-exit', `${decision.reason} | ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)} | ${trade.title}`, decision.message)
+      } else {
+        // Full exit
+        const sharesToSell = trade.sharesRemaining ?? trade.shares
+
+        if (!DRY_RUN && tokenId) {
+          const result = await closePosition(tokenId, sharesToSell, exitPrice)
+          if (!result.success) {
+            console.log(`  ⚠️  EXIT FAILED | ${result.error} | ${trade.title.slice(0, 40)}`)
+            continue
+          }
+        }
+
+        resolvePaperTrade(trade.conditionId, exitPrice)
+        const pnl = sharesToSell * (exitPrice - trade.entryPrice)
+        const prefix = DRY_RUN ? '🏜️ DRY-RUN ' : '💰 LIVE '
+        console.log(`  ${prefix}${exitEmoji(decision.reason)} ${decision.reason.toUpperCase()} | ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)} | ${decision.message} | ${trade.title}`)
+        logBotEvent('live-exit', `${decision.reason} | ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)} | ${trade.title}`, decision.message)
+      }
+      counts[decision.reason] = (counts[decision.reason] ?? 0) + 1
+    } catch (err) {
+      console.error(`  ⚠ Exit failed for ${trade.conditionId}: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
+  return counts
+}
+
+// ── Stats ────────────────────────────────────────────────────────
+
+function printStats(): void {
+  const all = getLivePaperTrades()
+  const open = all.filter((t) => t.status === 'open')
+  const won = all.filter((t) => t.status === 'won')
+  const lost = all.filter((t) => t.status === 'lost')
+  const realizedPnl = [...won, ...lost].reduce((s, t) => s + (t.pnl ?? 0), 0)
+  const unrealizedPnl = open.reduce((s, t) => {
+    if (t.curPrice == null) return s
+    const sharesNow = t.sharesRemaining ?? t.shares
+    const fraction = sharesNow / t.shares
+    return s + sharesNow * t.curPrice * (1 - 0.02) - t.simulatedUsdc * fraction
+  }, 0)
+  const startBal = parseFloat(getPortfolioSetting('starting_balance', '100'))
+  const balance = startBal + realizedPnl
+  const winRate = (won.length + lost.length) > 0
+    ? won.length / (won.length + lost.length)
+    : 0
+
+  const totalInvested = open.reduce((s, t) => s + t.simulatedUsdc, 0)
+  const cash = startBal + realizedPnl - totalInvested
+  const nextBet = getDynamicBetSize()
+
+  console.log(`\n  ┌─────────────────────────────────────┐`)
+  console.log(`  │ 🔴 LIVE BALANCE                      │`)
+  console.log(`  │ Balance:  $${balance.toFixed(2).padStart(10)}  (start: $${startBal.toFixed(0)})`)
+  console.log(`  │ Realized: ${realizedPnl >= 0 ? '+' : ''}${realizedPnl.toFixed(2).padStart(10)}`)
+  console.log(`  │ Unreal:   ${unrealizedPnl >= 0 ? '+' : ''}${unrealizedPnl.toFixed(2).padStart(10)}`)
+  console.log(`  │ Cash:     $${cash.toFixed(2).padStart(10)}  (next bet: $${nextBet.toFixed(2)})`)
+  console.log(`  │ Open:     ${open.length.toString().padStart(10)}  trades`)
+  console.log(`  │ Win Rate: ${(winRate * 100).toFixed(0).padStart(9)}%  (${won.length}W / ${lost.length}L)`)
+  console.log(`  └─────────────────────────────────────┘`)
+
+  const trusts = getAllExpertTrust()
+  const active = trusts.filter((t) => t.status === 'active')
+  const reduced = trusts.filter((t) => t.status === 'reduced')
+  const paused = trusts.filter((t) => t.status === 'paused')
+  console.log(`  Experts: ${active.length} active | ${reduced.length} reduced | ${paused.length} paused`)
+  if (paused.length > 0) {
+    for (const p of paused.slice(0, 3)) {
+      console.log(`    ⛔ ${(p.label ?? p.wallet.slice(0, 12)).padEnd(20)} | ${p.reason}`)
+    }
+  }
+  console.log('')
+}
+
+// ── Main loop ────────────────────────────────────────────────────
 
 async function pollOnce(): Promise<void> {
   const wallets = getActiveWatchedWallets()
   const time = new Date().toISOString().slice(11, 19)
-  const realBalance = await getRealBalance()
 
-  console.log(`[${time}] 💰 Real balance: $${realBalance.toFixed(2)} | Deployed: $${totalDeployed.toFixed(2)} | Positions: ${livePositions.size}/${MAX_LIVE_POSITIONS}`)
-  console.log(`[${time}] Polling ${wallets.length} wallets...`)
+  // Safety check: daily loss limit
+  if (checkDailyLossLimit()) return
 
-  let liveCopied = 0
+  if (!DRY_RUN) {
+    const realBalance = await getRealBalance()
+    console.log(`[${time}] 🔴 LIVE | On-chain: $${realBalance.toFixed(2)} | Polling ${wallets.length} wallets...`)
+  } else {
+    console.log(`[${time}] 🏜️ DRY-RUN | Polling ${wallets.length} wallets...`)
+  }
+
+  // ── Phase 1: Collect signals & build consensus ──
+  consensusMap.clear()
+  const allNewAlerts: PositionAlert[] = []
 
   for (const { wallet, label } of wallets) {
     try {
       const alerts = await pollWallet(wallet, label)
-
       for (const alert of alerts) {
-        if (alert.type !== 'NEW_POSITION') continue
-
-        const side = alert.position.outcomeIndex === 0 ? 'YES' : 'NO'
-        console.log(`  🔔 ${alert.walletLabel ?? alert.wallet.slice(0, 10)} | ${side} @ ${(alert.position.curPrice * 100).toFixed(0)}¢ | ${alert.position.title.slice(0, 45)}`)
-
-        const openTrades = getOpenPaperTrades()
-        if (isContradictory(alert.position.conditionId, side, openTrades)) continue
-
-        if (await tryLiveCopy(alert)) liveCopied++
+        if (alert.type === 'NEW_POSITION') {
+          trackConsensus(alert)
+          allNewAlerts.push(alert)
+        }
       }
-    } catch (err) {
-      console.error(`  ⚠ Poll error ${wallet.slice(0, 10)}: ${err instanceof Error ? err.message : String(err)}`)
+    } catch {
+      // Skip
     }
-
     await new Promise((r) => setTimeout(r, 800))
   }
 
-  console.log(`  → ${liveCopied} live orders placed\n`)
-}
-
-// ── Main ──────────────────────────────────────────────────────────
-
-async function main(): Promise<void> {
-  console.log('═══════════════════════════════════════════════')
-  console.log('  🔴 LIVE TRADER — REAL MONEY MODE')
-  console.log('═══════════════════════════════════════════════')
-
-  // Verify credentials
-  if (!process.env.POLYMARKET_PRIVATE_KEY) {
-    console.error('❌ POLYMARKET_PRIVATE_KEY not set')
-    console.error('   Run: npx tsx scripts/init-polymarket-creds.ts')
-    process.exit(1)
+  // Log new positions
+  for (const alert of allNewAlerts) {
+    const side = alert.position.outcomeIndex === 0 ? 'YES' : 'NO'
+    const consensus = consensusMap.get(alert.position.conditionId)
+    const expertCount = consensus?.experts.length ?? 1
+    const consensusTag = expertCount > 1 ? ` [${expertCount} experts]` : ''
+    console.log(`  🔔 NEW | ${alert.walletLabel ?? alert.wallet.slice(0, 10)} | ${side} @ ${(alert.position.curPrice * 100).toFixed(0)}¢${consensusTag} | ${alert.position.title}`)
   }
 
-  const realBalance = await getRealBalance()
-  console.log(`  Real balance:   $${realBalance.toFixed(2)} USDC`)
-  console.log(`  Max per bet:    $${MAX_LIVE_BET_USDC}`)
-  console.log(`  Max positions:  ${MAX_LIVE_POSITIONS}`)
-  console.log(`  Max capital:    $${MAX_LIVE_CAPITAL}`)
-  console.log(`  Min signal:     ${MIN_SIGNAL_SCORE}/100`)
-  console.log(`  Entry range:    ${(MIN_ENTRY * 100).toFixed(0)}¢-${(MAX_ENTRY * 100).toFixed(0)}¢`)
-  console.log(`  Poll interval:  ${POLL_INTERVAL_MS / 1000}s`)
-  console.log('═══════════════════════════════════════════════')
+  // Log consensus
+  for (const [, entry] of consensusMap) {
+    if (entry.experts.length >= 2) {
+      const names = entry.experts.map((e) => e.label?.split(' ')[0] ?? e.wallet.slice(0, 8)).join(', ')
+      console.log(`  🤝 CONSENSUS ${entry.experts.length}x | ${entry.side} @ ${(entry.price * 100).toFixed(0)}¢ | ${entry.title} | by: ${names}`)
+    }
+  }
 
-  if (realBalance < 1) {
-    console.error(`❌ Balance too low ($${realBalance.toFixed(2)}) — need at least $1 USDC on Polygon`)
-    process.exit(1)
+  // ── Phase 2: Copy with signal-based sizing ──
+  let copied = 0
+  const copiedConditions = new Set<string>()
+
+  for (const alert of allNewAlerts) {
+    if (copiedConditions.has(alert.position.conditionId)) continue
+
+    const side = alert.position.outcomeIndex === 0 ? 'YES' : 'NO'
+    const openTrades = getOpenPaperTrades()
+    if (isContradictory(alert.position.conditionId, side, openTrades)) {
+      console.log(`  ⚠️  CONTRA | Already holding opposite side | ${alert.position.title}`)
+      continue
+    }
+
+    if (canCopy(alert) && await tryCopyWithSignal(alert)) {
+      copiedConditions.add(alert.position.conditionId)
+      copied++
+    }
+  }
+
+  // ── Phase 3: Manage existing positions ──
+  const pricesUpdated = await refreshOpenPrices()
+  const exits = await runExitStrategy()
+  const totalExits = Object.values(exits).reduce((s, n) => s + n, 0)
+  const exitSummary = Object.entries(exits).map(([k, v]) => `${v} ${k}`).join(', ')
+  const resolved = await resolveCompletedTrades()
+
+  // ── Summary ──
+  const parts = [`${allNewAlerts.length} new`, `${copied} copied`]
+  const consensusCount = [...consensusMap.values()].filter((e) => e.experts.length >= 2).length
+  if (consensusCount > 0) parts.push(`${consensusCount} consensus`)
+  if (totalExits > 0) parts.push(`${totalExits} exits (${exitSummary})`)
+  if (resolved > 0) parts.push(`${resolved} resolved`)
+  parts.push(`${pricesUpdated} prices`)
+  console.log(`  → ${parts.join(' | ')}`)
+
+  printStats()
+}
+
+// ── 24h Re-index ─────────────────────────────────────────────────
+
+async function reindexAllWallets(): Promise<void> {
+  const wallets = getActiveWatchedWallets()
+  const time = new Date().toISOString().slice(11, 19)
+  console.log(`\n[${time}] 📊 DAILY RE-INDEX — ${wallets.length} wallets`)
+
+  let indexed = 0
+  let errors = 0
+
+  for (const { wallet, label } of wallets) {
+    try {
+      const result = await indexWallet(wallet)
+      indexed += result.tradesIndexed
+      if (result.errors.length > 0) errors++
+      if (result.tradesIndexed > 0) {
+        console.log(`  ✓ ${(label ?? wallet.slice(0, 12)).padEnd(24)} +${result.tradesIndexed} trades`)
+      }
+    } catch {
+      errors++
+    }
+    await new Promise((r) => setTimeout(r, 1000))
+  }
+
+  console.log(`  → Re-index done: ${indexed} new trades, ${errors} errors\n`)
+}
+
+// ── Main ─────────────────────────────────────────────────────────
+
+async function main(): Promise<void> {
+  const mode = DRY_RUN ? '🏜️ DRY-RUN' : '🔴 REAL MONEY'
+
+  // Verify credentials (skip in dry-run)
+  if (!DRY_RUN) {
+    if (!process.env.POLYMARKET_PRIVATE_KEY) {
+      console.error('❌ POLYMARKET_PRIVATE_KEY not set')
+      console.error('   Run: npx tsx scripts/init-polymarket-creds.ts')
+      process.exit(1)
+    }
   }
 
   const wallets = getActiveWatchedWallets()
@@ -252,8 +708,53 @@ async function main(): Promise<void> {
     process.exit(1)
   }
 
-  console.log(`\nWatching ${wallets.length} wallets. Starting first poll...\n`)
+  // Init portfolio settings if not set
+  if (getPortfolioSetting('starting_balance', '') === '') {
+    setPortfolioSetting('starting_balance', '100')
+  }
 
+  const startBal = parseFloat(getPortfolioSetting('starting_balance', '100'))
+  const scale = getBankrollScale()
+
+  // Startup balance check
+  if (!DRY_RUN) {
+    const realBalance = await getRealBalance()
+    if (realBalance < 1) {
+      console.error(`❌ Balance too low ($${realBalance.toFixed(2)}) — need at least $1 USDC on Polygon`)
+      process.exit(1)
+    }
+    if (realBalance < startBal * 0.5) {
+      console.warn(`⚠️  WARNING: On-chain balance ($${realBalance.toFixed(2)}) is much lower than starting_balance ($${startBal})`)
+      console.warn(`   Some capital may already be deployed in open positions.`)
+    }
+  }
+
+  const eq = getCurrentEquity()
+
+  console.log('═══════════════════════════════════════════════')
+  console.log(`  ${mode} LIVE TRADER`)
+  console.log('═══════════════════════════════════════════════')
+  console.log(`  Bankroll:    $${startBal} (scale: ${scale.toFixed(3)})`)
+  console.log(`  Equity:      $${eq.toFixed(2)}`)
+  console.log(`  Wallets:     ${wallets.length}`)
+  console.log(`  Bet sizing:  ${(BET_PCT * 100).toFixed(0)}% of cash ($${getMinBet(eq).toFixed(2)}-$${getMaxBet(eq).toFixed(2)})`)
+  console.log(`  Entry range: ${(MIN_ENTRY * 100).toFixed(0)}¢ - ${(MAX_ENTRY * 100).toFixed(0)}¢`)
+  console.log(`  Min signal:  ${MIN_SIGNAL_SCORE}/100`)
+  console.log(`  Max open:    ${getMaxOpen()} (scales with equity)`)
+  console.log(`  Max capital: ${(getMaxCapitalPct() * 100).toFixed(0)}%`)
+  console.log(`  Stop-loss:   -${(EXIT_CONFIG.stopLossPct * 100).toFixed(0)}%`)
+  console.log(`  Near-res:    >${(EXIT_CONFIG.nearResolutionThreshold * 100).toFixed(0)}¢ YES / <${((1 - EXIT_CONFIG.nearResolutionThreshold) * 100).toFixed(0)}¢ NO`)
+  console.log(`  Partials:    50% @ +100%, 30% @ +150%`)
+  console.log(`  Stale exit:  ${EXIT_CONFIG.staleDays}d < ${(EXIT_CONFIG.staleThreshold * 100).toFixed(0)}¢ move`)
+  console.log(`  Expert exit: ${EXIT_CONFIG.followExpertExit ? 'ON' : 'OFF'}`)
+  console.log(`  Consensus:   1x=1.0 | 2x=0.7 | 3x=0.5 | 5x=0.3 (inverted)`)
+  console.log(`  Daily limit: -${(DAILY_LOSS_LIMIT_PCT * 100).toFixed(0)}% ($${(startBal * DAILY_LOSS_LIMIT_PCT).toFixed(0)})`)
+  console.log(`  Poll every:  ${POLL_INTERVAL_MS / 1000}s`)
+  console.log('═══════════════════════════════════════════════')
+
+  printStats()
+
+  console.log('Starting first poll...\n')
   await pollOnce()
 
   setInterval(() => {
@@ -261,6 +762,14 @@ async function main(): Promise<void> {
       console.error(`Poll error: ${err instanceof Error ? err.message : String(err)}`)
     })
   }, POLL_INTERVAL_MS)
+
+  // Re-index every 24h
+  const REINDEX_INTERVAL_MS = 24 * 60 * 60 * 1000
+  setInterval(() => {
+    reindexAllWallets().catch((err) => {
+      console.error(`Re-index error: ${err instanceof Error ? err.message : String(err)}`)
+    })
+  }, REINDEX_INTERVAL_MS)
 }
 
 main().catch(console.error)

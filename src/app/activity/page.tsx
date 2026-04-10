@@ -124,6 +124,7 @@ export default function ActivityPage(): React.ReactElement {
             <SideLink href="/">Dashboard</SideLink>
             <SideLink href="/analytics">Analytics</SideLink>
             <SideLink href="/paper-trading">Trades</SideLink>
+            <SideLink href="/live-trading">Live Trading</SideLink>
             <SideLink href="/activity" active>Activity</SideLink>
             <SideLink href="/leaderboard">Leaderboard</SideLink>
             <SideLink href="/rules">Rules</SideLink>
