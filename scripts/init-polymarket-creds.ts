@@ -20,14 +20,26 @@ async function main() {
 
   try {
     const { ClobClient } = await import('@polymarket/clob-client')
-    const { ethers } = await import('ethers')
+    const { createWalletClient, http } = await import('viem')
+    const { privateKeyToAccount } = await import('viem/accounts')
+    const { polygon } = await import('viem/chains')
 
-    const wallet = new ethers.Wallet(privateKey)
-    console.log(`Wallet address: ${wallet.address}`)
+    const account = privateKeyToAccount(privateKey as `0x${string}`)
+    console.log(`Wallet address: ${account.address}`)
     console.log(`⚠️  Make sure this wallet has USDC on Polygon before trading\n`)
 
+    const walletClient = createWalletClient({
+      account,
+      chain: polygon,
+      transport: http(),
+    })
+
     // Create client without creds first to derive them
-    const client = new ClobClient('https://clob.polymarket.com', 137, wallet)
+    const client = new ClobClient(
+      'https://clob.polymarket.com',
+      137,
+      walletClient as unknown as Parameters<typeof ClobClient>[2]
+    )
 
     // Derive API credentials from wallet signature
     const creds = await client.createOrDeriveApiKey()
@@ -44,8 +56,8 @@ async function main() {
     console.log('⚠️  Use a DEDICATED wallet — not your main wallet')
   } catch (err) {
     console.error('❌ Error:', err instanceof Error ? err.message : String(err))
-    console.error('\nMake sure @polymarket/clob-client is installed:')
-    console.error('  npm install @polymarket/clob-client ethers')
+    console.error('\nFull error:')
+    console.error(err)
     process.exit(1)
   }
 }
