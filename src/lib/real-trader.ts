@@ -161,25 +161,41 @@ export async function placeOrder(order: RealOrder): Promise<RealOrderResult> {
     // Parse response
     const orderInfo = result as {
       orderID?: string
+      success?: boolean
       status?: string
       successOrdering?: boolean
       transactionsHashes?: string[]
       errorMsg?: string
+      error?: string
     }
 
-    if (orderInfo.successOrdering || orderInfo.status === 'matched') {
+    // GTC: status='live' = order placed in orderbook (success, not yet filled)
+    // FOK: status='matched' = order filled immediately (success)
+    // Both: successOrdering=true or orderID present = success
+    const isSuccess = !!(
+      orderInfo.successOrdering ||
+      orderInfo.success ||
+      orderInfo.orderID ||
+      orderInfo.status === 'live' ||
+      orderInfo.status === 'matched'
+    )
+
+    if (isSuccess) {
+      const filled = orderInfo.status === 'matched'
       return {
         success: true,
         orderId: orderInfo.orderID,
-        filledSize: size,
-        filledPrice: roundedPrice,
+        filledSize: filled ? size : undefined,
+        filledPrice: filled ? cleanPrice : undefined,
         transactionHash: orderInfo.transactionsHashes?.[0],
       }
     }
 
+    // Truly rejected — show the real error
+    const errorMsg = orderInfo.errorMsg || orderInfo.error || JSON.stringify(result)
     return {
       success: false,
-      error: orderInfo.errorMsg ?? 'Order not filled (FOK rejected)',
+      error: errorMsg,
     }
   } catch (err) {
     return {

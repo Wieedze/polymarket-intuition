@@ -1,3 +1,4 @@
+cd /opt/polymarket-intuition && rm -f data/live.db && sqlite3 data/live.db "" && sqlite3 data/live.db "ATTACH 'data/polymarket.db' AS paper; INSERT OR IGNORE INTO watched_wallets SELECT * FROM paper.watched_wallets; INSERT OR IGNORE INTO wallet_stats SELECT * FROM paper.wallet_stats;" && sqlite3 data/live.db "CREATE TABLE IF NOT EXISTS paper_portfolio (key TEXT PRIMARY KEY, value TEXT NOT NULL); INSERT OR REPLACE INTO paper_portfolio VALUES ('starting_balance', '9'); INSERT OR REPLACE INTO paper_portfolio VALUES ('bet_size_usdc', '1');" && pm2 restart live-trader --update-env && sleep 5 && pm2 logs live-trader --lines 10
 import { getSharedPaperTrades, getPortfolioSetting, type PaperTrade } from './db'
 
 // ── Types ─────────────────────────────────────────────────────────

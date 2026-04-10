@@ -58,6 +58,10 @@ const MIN_ENTRY = parseFloat(process.env.MIN_ENTRY_PRICE ?? '0.15')
 const MAX_ENTRY = parseFloat(process.env.MAX_ENTRY_PRICE ?? '0.65')
 const BASE_MAX_OPEN = parseInt(process.env.MAX_OPEN_TRADES ?? '50', 10)
 const MIN_SIGNAL_SCORE = parseInt(process.env.MIN_SIGNAL_SCORE_LIVE ?? '65', 10)
+
+// Polymarket CLOB constraints (cannot change)
+const POLY_MIN_ORDER_SHARES = 15   // minimum shares to place a buy order
+const POLY_MIN_SELL_SHARES = 5     // minimum shares to sell (exit)
 const DRY_RUN = process.env.DRY_RUN === 'true'
 const DAILY_LOSS_LIMIT_PCT = 0.50  // 50% of bankroll — catastrophe safety net
 
@@ -288,12 +292,23 @@ async function tryCopyWithSignal(alert: PositionAlert): Promise<boolean> {
   const signalMulti = signalBetMultiplier(signal)
   const consensusMulti = getConsensusMultiplier(alert.position.conditionId)
   const trustMulti = trust.trustLevel
-  const betAmount = Math.min(baseBet * signalMulti * consensusMulti * trustMulti, maxBet)
+  let betAmount = Math.min(baseBet * signalMulti * consensusMulti * trustMulti, maxBet)
 
   // Final entry price with size-adjusted slippage
   const sizeImpact = (betAmount / 100) * 0.005
   const slippage = baseSlippage + sizeImpact
   const entryPrice = Math.min(rawPrice * (1 + slippage), 0.95)
+
+  // Polymarket minimum: order must have >= 15 shares
+  // shares = betAmount / entryPrice, so betAmount must be >= 15 * entryPrice
+  const minBetForShares = POLY_MIN_ORDER_SHARES * entryPrice
+  if (betAmount < minBetForShares) {
+    betAmount = minBetForShares  // bump up to meet minimum
+  }
+  if (betAmount > getAvailableCash() * 0.95) {
+    // Not enough cash for minimum order
+    return false
+  }
 
   // Dynamic stop-loss
   const dynamicStopLoss = entryPrice < 0.30 ? 0.20 : 0.25
@@ -343,8 +358,9 @@ async function tryCopyWithSignal(alert: PositionAlert): Promise<boolean> {
       return false
     }
 
-    console.log(`  💰 LIVE ${scoreTag} | ${side} @ ${(rawPrice * 100).toFixed(0)}¢→${(entryPrice * 100).toFixed(0)}¢ | $${betAmount.toFixed(2)}${consensusTag}${trustTag} | ${kellyTag} | ${stopTag} | orderId:${result.orderId} | ${alert.position.title.slice(0, 40)} ${domainTag}`)
-    logBotEvent('live-copy', `REAL ${side} @ ${(entryPrice * 100).toFixed(0)}¢ $${betAmount.toFixed(2)} | ${alert.position.title}`, `Score: ${signal.score}/100 | ${kellyTag}`)
+    const fillStatus = result.filledPrice ? 'FILLED' : 'PLACED (GTC pending)'
+    console.log(`  💰 LIVE ${scoreTag} ${fillStatus} | ${side} @ ${(rawPrice * 100).toFixed(0)}¢→${(entryPrice * 100).toFixed(0)}¢ | $${betAmount.toFixed(2)}${consensusTag}${trustTag} | ${kellyTag} | ${stopTag} | orderId:${result.orderId?.slice(0, 12)} | ${alert.position.title.slice(0, 40)} ${domainTag}`)
+    logBotEvent('live-copy', `${fillStatus} ${side} @ ${(entryPrice * 100).toFixed(0)}¢ $${betAmount.toFixed(2)} | ${alert.position.title}`, `Score: ${signal.score}/100 | ${kellyTag}`)
   }
 
   // Record as paper trade for tracking (labeled [LIVE])
@@ -481,7 +497,14 @@ async function runExitStrategy(): Promise<Record<string, number>> {
       if ((decision.reason === 'partial-exit-100' || decision.reason === 'partial-exit-150') && decision.partialFraction) {
         // Partial exit — sell a fraction
         const sharesRemaining = trade.sharesRemaining ?? trade.shares
-        const sharesToSell = sharesRemaining * decision.partialFraction
+        let sharesToSell = sharesRemaining * decision.partialFraction
+
+        // Polymarket minimum sell: 5 shares
+        if (sharesToSell < POLY_MIN_SELL_SHARES) {
+          // Can't do partial — too few shares. Skip and wait for full exit.
+          console.log(`  ⏭️  PARTIAL SKIP | ${sharesToSell.toFixed(1)} shares < ${POLY_MIN_SELL_SHARES} min | ${trade.title.slice(0, 40)}`)
+          continue
+        }
 
         if (!DRY_RUN && tokenId) {
           const result = await closePosition(tokenId, sharesToSell, exitPrice)
@@ -499,6 +522,16 @@ async function runExitStrategy(): Promise<Record<string, number>> {
       } else {
         // Full exit
         const sharesToSell = trade.sharesRemaining ?? trade.shares
+
+        // Polymarket minimum sell: 5 shares
+        if (!DRY_RUN && sharesToSell < POLY_MIN_SELL_SHARES) {
+          console.log(`  ⚠️  EXIT TOO SMALL | ${sharesToSell.toFixed(1)} shares < ${POLY_MIN_SELL_SHARES} min — position stuck | ${trade.title.slice(0, 40)}`)
+          // Still mark as resolved in DB so it doesn't retry every poll
+          resolvePaperTrade(trade.conditionId, exitPrice)
+          logBotEvent('live-exit', `EXIT TOO SMALL (${sharesToSell.toFixed(1)} shares) — tokens stuck on-chain | ${trade.title}`, decision.message)
+          counts[decision.reason] = (counts[decision.reason] ?? 0) + 1
+          continue
+        }
 
         if (!DRY_RUN && tokenId) {
           const result = await closePosition(tokenId, sharesToSell, exitPrice)
