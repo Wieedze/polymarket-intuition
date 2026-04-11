@@ -1090,40 +1090,20 @@ async function main(): Promise<void> {
         `https://data-api.polymarket.com/positions?user=${(await import('../src/lib/real-trader')).getWalletAddress().toLowerCase()}&sizeThreshold=0`
       )
       if (res.ok) {
+        // Only cache token IDs for exit orders — don't create phantom paper trades
+        // Real positions are visible via /api/wallet-equity (on-chain source of truth)
         const positions = await res.json() as Array<{
-          conditionId: string; title: string; outcome: string; outcomeIndex: number
-          size: number; avgPrice: number; curPrice: number; initialValue: number
-          asset: string; endDate: string; negativeRisk: boolean
+          conditionId: string; title: string; outcomeIndex: number
+          size: number; asset: string; negativeRisk: boolean
         }>
-        const openPositions = positions.filter(p => p.size > 0 && p.curPrice >= 0.05 && p.curPrice <= 0.95)
-        const existingTrades = getOpenPaperTrades()
-        let synced = 0
+        const openPositions = positions.filter(p => p.size > 0)
         for (const p of openPositions) {
-          // Skip if already tracked (open) OR was previously closed (don't re-sync sold positions)
-          const allTrades = getLivePaperTrades()
-          const alreadyTracked = existingTrades.some(t => t.conditionId === p.conditionId)
-            || allTrades.some(t => t.conditionId === p.conditionId && t.status !== 'open')
-          if (!alreadyTracked) {
-            const side = p.outcomeIndex === 0 ? 'YES' : 'NO'
-            // Cache the token ID for exit orders
-            cacheTokenId(p.conditionId, side, p.asset, p.negativeRisk ?? false)
-            openPaperTrade({
-              conditionId: p.conditionId,
-              title: p.title,
-              domain: keywordClassify(p.title)?.domain ?? null,
-              side,
-              entryPrice: p.avgPrice,
-              simulatedUsdc: p.initialValue,
-              copiedFrom: 'on-chain-sync',
-              copiedLabel: '[LIVE] synced from on-chain',
-            })
-            // Update price immediately
-            updatePaperTradePrice(p.conditionId, p.curPrice)
-            synced++
-            console.log(`  📥 SYNCED | ${side} @ ${(p.avgPrice * 100).toFixed(0)}¢ → ${(p.curPrice * 100).toFixed(0)}¢ | $${p.initialValue.toFixed(2)} | token:${p.asset.slice(0, 15)}... | ${p.title.slice(0, 50)}`)
-          }
+          const side = p.outcomeIndex === 0 ? 'YES' : 'NO'
+          cacheTokenId(p.conditionId, side, p.asset, p.negativeRisk ?? false)
         }
-        if (synced > 0) console.log(`  📥 Synced ${synced} existing on-chain positions into live.db`)
+        if (openPositions.length > 0) {
+          console.log(`  📥 Cached ${openPositions.length} on-chain token IDs (no phantom trades)`)
+        }
       }
     } catch (err) {
       console.log(`  ⚠️  Position sync failed: ${err instanceof Error ? err.message : String(err)}`)
