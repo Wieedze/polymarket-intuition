@@ -346,8 +346,14 @@ function canCopy(alert: PositionAlert): boolean {
   if (alert.type !== 'NEW_POSITION') return false
 
   const price = alert.position.curPrice
-  if (price < MIN_ENTRY || price > MAX_ENTRY) return false
-  if (paperTradeExistsForCondition(alert.position.conditionId)) return false
+  if (price < MIN_ENTRY || price > MAX_ENTRY) {
+    console.log(`  ⏭️  PRICE ${(price * 100).toFixed(0)}¢ out of ${(MIN_ENTRY * 100).toFixed(0)}-${(MAX_ENTRY * 100).toFixed(0)}¢ | ${alert.position.title.slice(0, 40)}`)
+    return false
+  }
+  if (paperTradeExistsForCondition(alert.position.conditionId)) {
+    console.log(`  ⏭️  ALREADY TRADED | ${alert.position.title.slice(0, 40)}`)
+    return false
+  }
 
   const openTrades = getOpenLiveTrades()
   if (openTrades.length >= getMaxOpen()) return false
@@ -375,9 +381,7 @@ async function tryCopyWithSignal(alert: PositionAlert): Promise<boolean> {
   })
 
   if (signal.score < MIN_SIGNAL_SCORE) {
-    if (signal.score > 20) {
-      console.log(`  ⏭️  SKIP (${signal.score}/${MIN_SIGNAL_SCORE}) | ${signal.reasons[0]} | ${alert.position.title}`)
-    }
+    console.log(`  ⏭️  SKIP (${signal.score}/${MIN_SIGNAL_SCORE}) | ${signal.reasons[0]} | ${alert.position.title.slice(0, 50)}`)
     return false
   }
 
