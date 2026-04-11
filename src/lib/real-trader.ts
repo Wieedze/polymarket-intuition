@@ -24,6 +24,7 @@ export type RealOrder = {
   price: number        // entry price (0-1)
   sizeUsdc: number     // amount in USDC to spend
   orderType: 'FOK' | 'GTC' | 'GTD'
+  negRisk?: boolean    // true for sports markets (neg_risk on Polymarket)
 }
 
 export type RealOrderResult = {
@@ -107,6 +108,26 @@ export function getWalletAddress(): string {
   return _walletAddress
 }
 
+// ── Orderbook price fetch ────────────────────────────────────────
+
+/**
+ * Fetch the current best ask price from the CLOB orderbook.
+ * Returns the lowest price at which someone is willing to sell.
+ * This is the price we should use for FOK orders (instant fill).
+ */
+export async function getBestAsk(tokenId: string): Promise<number | null> {
+  try {
+    const res = await fetch(`${CLOB_HOST}/book?token_id=${tokenId}`)
+    if (!res.ok) return null
+    const book = await res.json() as { asks?: Array<{ price: string; size: string }> }
+    if (!book.asks || book.asks.length === 0) return null
+    // Asks are sorted lowest first — first ask = best price to buy
+    return parseFloat(book.asks[0].price)
+  } catch {
+    return null
+  }
+}
+
 // ── Core trading functions ────────────────────────────────────────
 
 /**
@@ -154,7 +175,7 @@ export async function placeOrder(order: RealOrder): Promise<RealOrderResult> {
         size,
         side,
       },
-      { tickSize, negRisk: false },
+      { tickSize, negRisk: order.negRisk ?? false },
       orderType
     ) as Record<string, unknown>
 
@@ -360,7 +381,8 @@ export async function getRealBalance(): Promise<number> {
 export async function closePosition(
   tokenId: string,
   size: number,
-  curPrice: number
+  curPrice: number,
+  negRisk: boolean = false
 ): Promise<RealOrderResult> {
   try {
     const client = await getClient()
@@ -377,7 +399,7 @@ export async function closePosition(
         size,
         side: Side.SELL,
       },
-      { tickSize: '0.01', negRisk: false },
+      { tickSize: '0.01', negRisk },
       OrderType.GTC
     ) as Record<string, unknown>
 

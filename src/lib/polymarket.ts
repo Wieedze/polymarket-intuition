@@ -3,8 +3,8 @@ import { getMarketMetadata, saveMarketMetadata, type MarketMetadata } from './db
 
 const POLYMARKET_DATA_URL =
   process.env.POLYMARKET_DATA_URL ?? 'https://data-api.polymarket.com'
-const POLYMARKET_GAMMA_URL =
-  process.env.POLYMARKET_API_URL ?? 'https://gamma-api.polymarket.com'
+// Gamma API removed — unreliable (returns unrelated markets for any conditionId)
+// Token IDs are now resolved via CLOB API: /markets/{conditionId}
 
 // ── Raw API response types ────────────────────────────────────────
 
@@ -182,17 +182,7 @@ export async function fetchResolvedTrades(
   }
 }
 
-// ── Market metadata (Gamma API) ─────────────────────────────────
-
-type GammaMarket = {
-  conditionId: string
-  question: string
-  clobTokenIds: [string, string]
-  endDate: string | null
-  active: boolean
-  closed: boolean
-  liquidity: string
-}
+// ── Market metadata (CLOB API) ──────────────────────────────────
 
 /**
  * Fetch market metadata (token IDs, end date, liquidity) for a conditionId.
@@ -205,36 +195,42 @@ export async function fetchMarketMetadata(conditionId: string): Promise<MarketMe
   const cached = getMarketMetadata(conditionId)
   if (cached) return cached
 
+  // Strategy: try CLOB API first (exact match), then Gamma API (filtered)
+  // Gamma API's condition_id param doesn't filter properly — always returns GTA VI markets.
+
   try {
-    const res = await fetch(
-      `${POLYMARKET_GAMMA_URL}/markets?condition_id=${conditionId}`
-    )
-    if (!res.ok) return null
+    // ── CLOB API: exact conditionId match ──────────────────────────
+    const clobRes = await fetch(`https://clob.polymarket.com/markets/${conditionId}`)
+    if (!clobRes.ok) return null
 
-    const markets = await res.json() as GammaMarket[]
-    if (!markets || markets.length === 0) return null
-
-    const m = markets[0] as GammaMarket | undefined
-    if (!m || !m.clobTokenIds) return null
-
-    // Gamma API sometimes returns clobTokenIds as JSON string, sometimes as array
-    const rawIds = m.clobTokenIds
-    const ids: [string, string] = typeof rawIds === 'string'
-      ? JSON.parse(rawIds) as [string, string]
-      : rawIds
-    if (!ids || ids.length < 2) return null
-
-    const meta: MarketMetadata = {
-      conditionId: m.conditionId,
-      yesTokenId: ids[0],
-      noTokenId: ids[1],
-      endDate: m.endDate ?? null,
-      title: m.question ?? null,
-      liquidity: parseFloat(m.liquidity) || null,
-      active: m.active && !m.closed,
-      fetchedAt: new Date().toISOString(),
+    const clobMarket = await clobRes.json() as {
+      condition_id?: string
+      question?: string
+      tokens?: Array<{ token_id: string; outcome: string }>
+      end_date_iso?: string
+      active?: boolean
+      closed?: boolean
+      neg_risk?: boolean
+      error?: string
     }
 
+    if (clobMarket.error || !clobMarket.tokens || clobMarket.tokens.length < 2) return null
+
+    const yesToken = clobMarket.tokens.find(t => t.outcome === 'Yes')
+    const noToken = clobMarket.tokens.find(t => t.outcome === 'No')
+    if (!yesToken || !noToken) return null
+
+    const meta: MarketMetadata = {
+      conditionId: clobMarket.condition_id ?? conditionId,
+      yesTokenId: yesToken.token_id,
+      noTokenId: noToken.token_id,
+      endDate: clobMarket.end_date_iso ?? null,
+      title: clobMarket.question ?? null,
+      liquidity: null,
+      active: (clobMarket.active ?? true) && !(clobMarket.closed ?? false),
+      negRisk: clobMarket.neg_risk ?? false,
+      fetchedAt: new Date().toISOString(),
+    }
     saveMarketMetadata(meta)
     return meta
   } catch {

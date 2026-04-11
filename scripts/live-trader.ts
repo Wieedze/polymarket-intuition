@@ -37,11 +37,9 @@ import {
   updatePaperTradePrice,
   partialExitPaperTrade,
   logBotEvent,
-  savePendingOrder,
   getPendingOrders,
   removePendingOrder,
   type PaperTrade,
-  type PendingOrderRow,
 } from '../src/lib/db'
 import { indexWallet } from '../src/lib/indexer'
 import { pollWallet, type PositionAlert } from '../src/lib/position-tracker'
@@ -50,13 +48,13 @@ import { fetchAllPages, fetchMarketMetadata } from '../src/lib/polymarket'
 import { evaluateExit, exitEmoji, type ExitConfig } from '../src/lib/exit-strategy'
 import { scoreSignal, shouldCopySignal, signalBetMultiplier, isContradictory, kellyBetFraction } from '../src/lib/signal-scorer'
 import { evaluateExpertTrust, getAllExpertTrust, getBankrollScale } from '../src/lib/expert-trust'
-import { placeOrder, getRealBalance, getRealPositions, closePosition, checkOrderStatus, cancelOrder, type RealOrder } from '../src/lib/real-trader'
+import { placeOrder, getRealBalance, closePosition, checkOrderStatus, cancelOrder, getBestAsk, type RealOrder } from '../src/lib/real-trader'
 
 const POLYMARKET_DATA_URL = process.env.POLYMARKET_DATA_URL ?? 'https://data-api.polymarket.com'
 
 // ── Config ───────────────────────────────────────────────────────
 
-const POLL_INTERVAL_MS = parseInt(process.env.POLL_INTERVAL_MS ?? '30000', 10)
+const POLL_INTERVAL_MS = parseInt(process.env.POLL_INTERVAL_MS ?? '15000', 10)  // 15s — faster detection for FOK fills
 const BET_PCT = parseFloat(process.env.BET_PCT ?? '0.02')
 const MIN_ENTRY = parseFloat(process.env.MIN_ENTRY_PRICE ?? '0.15')
 const MAX_ENTRY = parseFloat(process.env.MAX_ENTRY_PRICE ?? '0.50')  // block 50¢+ — no edge
@@ -248,7 +246,7 @@ function checkDrawdownBreaker(): boolean {
 // ── Live token ID cache ──────────────────────────────────────────
 // Maps conditionId+side → tokenId for exit orders
 
-const tokenIdCache = new Map<string, string>()
+const tokenIdCache = new Map<string, { tokenId: string; negRisk: boolean }>()
 
 // ── GTC order tracking (persisted in DB) ────────────────────────
 // Track pending GTC orders in SQLite so they survive restarts.
@@ -297,11 +295,11 @@ async function checkPendingOrders(): Promise<void> {
   }
 }
 
-function cacheTokenId(conditionId: string, side: string, tokenId: string): void {
-  tokenIdCache.set(`${conditionId}-${side}`, tokenId)
+function cacheTokenId(conditionId: string, side: string, tokenId: string, negRisk: boolean): void {
+  tokenIdCache.set(`${conditionId}-${side}`, { tokenId, negRisk })
 }
 
-async function getTokenId(conditionId: string, side: string): Promise<string | null> {
+async function getTokenId(conditionId: string, side: string): Promise<{ tokenId: string; negRisk: boolean } | null> {
   const cached = tokenIdCache.get(`${conditionId}-${side}`)
   if (cached) return cached
 
@@ -309,8 +307,8 @@ async function getTokenId(conditionId: string, side: string): Promise<string | n
   if (!metadata) return null
 
   const tokenId = side === 'YES' ? metadata.yesTokenId : metadata.noTokenId
-  cacheTokenId(conditionId, side, tokenId)
-  return tokenId
+  cacheTokenId(conditionId, side, tokenId, metadata.negRisk)
+  return { tokenId, negRisk: metadata.negRisk }
 }
 
 // ── Entry logic (mirrors auto-trader exactly) ────────────────────
@@ -401,7 +399,7 @@ async function tryCopyWithSignal(alert: PositionAlert): Promise<boolean> {
     return false
   }
   const tokenId = side === 'YES' ? metadata.yesTokenId : metadata.noTokenId
-  cacheTokenId(alert.position.conditionId, side, tokenId)
+  cacheTokenId(alert.position.conditionId, side, tokenId, metadata.negRisk)
 
   // ── Place real order (or dry-run log) ──────────────────────────
   const consensusEntry = consensusMap.get(alert.position.conditionId)
@@ -414,58 +412,64 @@ async function tryCopyWithSignal(alert: PositionAlert): Promise<boolean> {
   const domainTag = domain ? `[${domain.domain.replace('pm-domain/', '')}]` : ''
 
   if (DRY_RUN) {
-    console.log(`  🏜️  DRY-RUN | ${scoreTag} ${side} @ ${(rawPrice * 100).toFixed(0)}¢→${(entryPrice * 100).toFixed(0)}¢ | $${betAmount.toFixed(2)}${consensusTag}${trustTag} | ${kellyTag} | ${stopTag} | ${alert.position.title.slice(0, 45)} ${domainTag}`)
+    console.log(`  🏜️  DRY-RUN | ${scoreTag} ${side} @ ${(rawPrice * 100).toFixed(0)}¢ | $${betAmount.toFixed(2)}${consensusTag}${trustTag} | ${kellyTag} | ${stopTag} | ${alert.position.title.slice(0, 45)} ${domainTag}`)
     logBotEvent('live-dry-run', `${side} @ ${(entryPrice * 100).toFixed(0)}¢ $${betAmount.toFixed(2)} | ${alert.position.title}`, `Score: ${signal.score}/100`)
   } else {
+    // ── Fetch live best ask from CLOB orderbook ───────────────────
+    const bestAsk = await getBestAsk(tokenId)
+    if (!bestAsk) {
+      console.log(`  ⚠️  NO ORDERBOOK | ${alert.position.title.slice(0, 45)}`)
+      return false
+    }
+
+    // Use best ask price — this is the current market price to buy
+    // Cap at MAX_ENTRY to respect our edge filter
+    const livePrice = bestAsk
+    if (livePrice > MAX_ENTRY) {
+      console.log(`  ⏭️  SKIP (ask ${(livePrice * 100).toFixed(0)}¢ > ${(MAX_ENTRY * 100).toFixed(0)}¢ cap) | ${alert.position.title.slice(0, 45)}`)
+      return false
+    }
+
+    // Recalculate shares with live price
+    const liveBetAmount = Math.min(betAmount, getAvailableCash() * 0.30)  // max 30% of cash per order
+    if (liveBetAmount < POLY_MIN_ORDER_SHARES * livePrice) {
+      return false  // can't meet minimum shares
+    }
+
     const order: RealOrder = {
       conditionId: alert.position.conditionId,
       tokenId,
       title: alert.position.title,
       side: side as 'YES' | 'NO',
-      price: entryPrice,
-      sizeUsdc: betAmount,
-      orderType: 'GTC',  // GTC instead of FOK — stays in orderbook if not immediately filled
+      price: livePrice,
+      sizeUsdc: liveBetAmount,
+      orderType: 'FOK',  // Fill or Kill — instant fill at best ask, no pending orders
+      negRisk: metadata.negRisk,
     }
 
     const result = await placeOrder(order)
 
     if (!result.success) {
       console.log(`  ❌ ORDER FAILED | ${result.error} | ${alert.position.title.slice(0, 45)}`)
-      logBotEvent('live-error', `FAILED ${side} @ ${(entryPrice * 100).toFixed(0)}¢ | ${alert.position.title}`, result.error ?? '')
+      logBotEvent('live-error', `FAILED ${side} @ ${(livePrice * 100).toFixed(0)}¢ | ${alert.position.title}`, result.error ?? '')
       return false
     }
 
-    const fillStatus = result.filledPrice ? 'FILLED' : 'PLACED (GTC pending)'
-    console.log(`  💰 LIVE ${scoreTag} ${fillStatus} | ${side} @ ${(rawPrice * 100).toFixed(0)}¢→${(entryPrice * 100).toFixed(0)}¢ | $${betAmount.toFixed(2)}${consensusTag}${trustTag} | ${kellyTag} | ${stopTag} | orderId:${result.orderId?.slice(0, 12)} | ${alert.position.title.slice(0, 40)} ${domainTag}`)
-    logBotEvent('live-copy', `${fillStatus} ${side} @ ${(entryPrice * 100).toFixed(0)}¢ $${betAmount.toFixed(2)} | ${alert.position.title}`, `Score: ${signal.score}/100 | ${kellyTag}`)
+    const filledPrice = result.filledPrice ?? livePrice
+    console.log(`  💰 LIVE ${scoreTag} FILLED | ${side} @ ${(rawPrice * 100).toFixed(0)}¢→${(filledPrice * 100).toFixed(0)}¢ | $${liveBetAmount.toFixed(2)}${consensusTag}${trustTag} | ${kellyTag} | ${stopTag} | orderId:${result.orderId?.slice(0, 12)} | ${alert.position.title.slice(0, 40)} ${domainTag}`)
+    logBotEvent('live-copy', `FILLED ${side} @ ${(filledPrice * 100).toFixed(0)}¢ $${liveBetAmount.toFixed(2)} | ${alert.position.title}`, `Score: ${signal.score}/100 | ${kellyTag} | ask:${(livePrice * 100).toFixed(0)}¢`)
 
-    if (result.filledPrice) {
-      // Immediately filled — record paper trade now
-      openPaperTrade({
-        conditionId: alert.position.conditionId,
-        title: alert.position.title,
-        domain: domain?.domain ?? null,
-        side,
-        entryPrice: result.filledPrice,
-        simulatedUsdc: betAmount,
-        copiedFrom: alert.wallet,
-        copiedLabel: `[LIVE] ${alert.walletLabel ?? alert.wallet.slice(0, 10)}`,
-      })
-    } else if (result.orderId) {
-      // GTC pending — save to DB, paper trade created only when confirmed FILLED
-      savePendingOrder({
-        orderId: result.orderId,
-        conditionId: alert.position.conditionId,
-        title: alert.position.title,
-        domain: domain?.domain ?? null,
-        side,
-        entryPrice,
-        simulatedUsdc: betAmount,
-        copiedFrom: alert.wallet,
-        copiedLabel: `[LIVE] ${alert.walletLabel ?? alert.wallet.slice(0, 10)}`,
-        placedAt: new Date().toISOString(),
-      })
-    }
+    // FOK = always filled if success — record paper trade immediately
+    openPaperTrade({
+      conditionId: alert.position.conditionId,
+      title: alert.position.title,
+      domain: domain?.domain ?? null,
+      side,
+      entryPrice: filledPrice,
+      simulatedUsdc: liveBetAmount,
+      copiedFrom: alert.wallet,
+      copiedLabel: `[LIVE] ${alert.walletLabel ?? alert.wallet.slice(0, 10)}`,
+    })
   }
 
   return true
@@ -583,8 +587,8 @@ async function runExitStrategy(): Promise<Record<string, number>> {
 
     const exitPrice = trade.curPrice ?? trade.entryPrice
 
-    // Get token ID for the close order
-    const tokenId = await getTokenId(trade.conditionId, trade.side)
+    // Get token ID + negRisk for the close order
+    const exitMeta = await getTokenId(trade.conditionId, trade.side)
 
     try {
       if ((decision.reason === 'partial-exit-100' || decision.reason === 'partial-exit-150') && decision.partialFraction) {
@@ -599,8 +603,8 @@ async function runExitStrategy(): Promise<Record<string, number>> {
           continue
         }
 
-        if (!DRY_RUN && tokenId) {
-          const result = await closePosition(tokenId, sharesToSell, exitPrice)
+        if (!DRY_RUN && exitMeta) {
+          const result = await closePosition(exitMeta.tokenId, sharesToSell, exitPrice, exitMeta.negRisk)
           if (!result.success) {
             console.log(`  ⚠️  PARTIAL EXIT FAILED | ${result.error} | ${trade.title.slice(0, 40)}`)
             continue
@@ -626,8 +630,8 @@ async function runExitStrategy(): Promise<Record<string, number>> {
           continue
         }
 
-        if (!DRY_RUN && tokenId) {
-          const result = await closePosition(tokenId, sharesToSell, exitPrice)
+        if (!DRY_RUN && exitMeta) {
+          const result = await closePosition(exitMeta.tokenId, sharesToSell, exitPrice, exitMeta.negRisk)
           if (!result.success) {
             console.log(`  ⚠️  EXIT FAILED | ${result.error} | ${trade.title.slice(0, 40)}`)
             continue
@@ -899,7 +903,7 @@ async function main(): Promise<void> {
         const positions = await res.json() as Array<{
           conditionId: string; title: string; outcome: string; outcomeIndex: number
           size: number; avgPrice: number; curPrice: number; initialValue: number
-          asset: string; endDate: string
+          asset: string; endDate: string; negativeRisk: boolean
         }>
         const openPositions = positions.filter(p => p.size > 0 && p.curPrice >= 0.05 && p.curPrice <= 0.95)
         const existingTrades = getOpenPaperTrades()
@@ -912,7 +916,7 @@ async function main(): Promise<void> {
           if (!alreadyTracked) {
             const side = p.outcomeIndex === 0 ? 'YES' : 'NO'
             // Cache the token ID for exit orders
-            cacheTokenId(p.conditionId, side, p.asset)
+            cacheTokenId(p.conditionId, side, p.asset, p.negativeRisk ?? false)
             openPaperTrade({
               conditionId: p.conditionId,
               title: p.title,

@@ -292,6 +292,7 @@ function initTables(db: Database.Database): void {
       title TEXT,
       liquidity REAL,
       active INTEGER DEFAULT 1,
+      neg_risk INTEGER NOT NULL DEFAULT 0,
       fetched_at TEXT NOT NULL
     );
 
@@ -327,6 +328,11 @@ function initTables(db: Database.Database): void {
   // Migration: implicit edge in wallet_stats
   try {
     db.exec('ALTER TABLE wallet_stats ADD COLUMN implicit_edge REAL NOT NULL DEFAULT 0')
+  } catch {}
+
+  // Migration: neg_risk in market_metadata
+  try {
+    db.exec('ALTER TABLE market_metadata ADD COLUMN neg_risk INTEGER NOT NULL DEFAULT 0')
   } catch {}
 }
 
@@ -749,19 +755,6 @@ export type PendingOrderRow = {
   placedAt: string
 }
 
-export function savePendingOrder(order: PendingOrderRow): void {
-  const db = getDb()
-  db.prepare(
-    `INSERT OR REPLACE INTO pending_orders
-     (order_id, condition_id, title, domain, side, entry_price, simulated_usdc, copied_from, copied_label, placed_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(
-    order.orderId, order.conditionId, order.title, order.domain,
-    order.side, order.entryPrice, order.simulatedUsdc,
-    order.copiedFrom, order.copiedLabel, order.placedAt
-  )
-}
-
 export function getPendingOrders(): PendingOrderRow[] {
   const db = getDb()
   const rows = db.prepare('SELECT * FROM pending_orders').all() as Array<Record<string, unknown>>
@@ -1129,6 +1122,7 @@ export type MarketMetadata = {
   title: string | null
   liquidity: number | null
   active: boolean
+  negRisk: boolean
   fetchedAt: string
 }
 
@@ -1154,6 +1148,7 @@ export function getMarketMetadata(conditionId: string): MarketMetadata | null {
     title: row.title as string | null,
     liquidity: row.liquidity as number | null,
     active: (row.active as number) === 1,
+    negRisk: (row.neg_risk as number) === 1,
     fetchedAt,
   }
 }
@@ -1162,8 +1157,8 @@ export function saveMarketMetadata(meta: MarketMetadata): void {
   const db = getDb()
   db.prepare(`
     INSERT OR REPLACE INTO market_metadata
-    (condition_id, yes_token_id, no_token_id, end_date, title, liquidity, active, fetched_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    (condition_id, yes_token_id, no_token_id, end_date, title, liquidity, active, neg_risk, fetched_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     meta.conditionId,
     meta.yesTokenId,
@@ -1172,6 +1167,7 @@ export function saveMarketMetadata(meta: MarketMetadata): void {
     meta.title,
     meta.liquidity,
     meta.active ? 1 : 0,
+    meta.negRisk ? 1 : 0,
     meta.fetchedAt,
   )
 }
