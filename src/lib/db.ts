@@ -357,6 +357,37 @@ function initTables(db: Database.Database): void {
   try {
     db.exec('ALTER TABLE pending_orders ADD COLUMN exit_reason TEXT')
   } catch {}
+
+  // Sports arbitrage tables
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS sports_markets (
+      condition_id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      yes_token_id TEXT,
+      no_token_id TEXT,
+      polymarket_price REAL,
+      end_date TEXT,
+      sport_key TEXT,
+      home_team TEXT,
+      away_team TEXT,
+      market_type TEXT,
+      line_value REAL,
+      last_scanned_at TEXT NOT NULL,
+      active INTEGER DEFAULT 1
+    );
+
+    CREATE TABLE IF NOT EXISTS sports_odds_cache (
+      sport_key TEXT NOT NULL,
+      home_team TEXT NOT NULL,
+      away_team TEXT NOT NULL,
+      market_type TEXT NOT NULL,
+      outcome_name TEXT NOT NULL,
+      no_vig_prob REAL NOT NULL,
+      raw_odds_json TEXT,
+      fetched_at TEXT NOT NULL,
+      PRIMARY KEY (sport_key, home_team, away_team, market_type, outcome_name)
+    );
+  `)
 }
 
 // ── Trade operations ──────────────────────────────────────────────
@@ -586,6 +617,102 @@ export function updateWalletPolledAt(wallet: string): void {
   db.prepare(
     'UPDATE watched_wallets SET last_polled_at = ? WHERE wallet = ?'
   ).run(new Date().toISOString(), wallet)
+}
+
+// ── Sports market operations ────────────────────────────────────
+
+export type SportsMarketRow = {
+  conditionId: string
+  title: string
+  yesTokenId: string | null
+  noTokenId: string | null
+  polymarketPrice: number | null
+  endDate: string | null
+  sportKey: string | null
+  homeTeam: string | null
+  awayTeam: string | null
+  marketType: string | null
+  lineValue: number | null
+  lastScannedAt: string
+  active: boolean
+}
+
+export type SportsOddsRow = {
+  sportKey: string
+  homeTeam: string
+  awayTeam: string
+  marketType: string
+  outcomeName: string
+  noVigProb: number
+  fetchedAt: string
+}
+
+export function saveSportsMarket(market: SportsMarketRow): void {
+  const db = getDb()
+  db.prepare(`
+    INSERT OR REPLACE INTO sports_markets
+    (condition_id, title, yes_token_id, no_token_id, polymarket_price, end_date,
+     sport_key, home_team, away_team, market_type, line_value, last_scanned_at, active)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    market.conditionId, market.title, market.yesTokenId, market.noTokenId,
+    market.polymarketPrice, market.endDate, market.sportKey,
+    market.homeTeam, market.awayTeam, market.marketType, market.lineValue,
+    market.lastScannedAt, market.active ? 1 : 0
+  )
+}
+
+export function getActiveSportsMarkets(): SportsMarketRow[] {
+  const db = getDb()
+  const rows = db.prepare('SELECT * FROM sports_markets WHERE active = 1').all() as Array<Record<string, unknown>>
+  return rows.map((r): SportsMarketRow => ({
+    conditionId: r.condition_id as string,
+    title: r.title as string,
+    yesTokenId: r.yes_token_id as string | null,
+    noTokenId: r.no_token_id as string | null,
+    polymarketPrice: r.polymarket_price as number | null,
+    endDate: r.end_date as string | null,
+    sportKey: r.sport_key as string | null,
+    homeTeam: r.home_team as string | null,
+    awayTeam: r.away_team as string | null,
+    marketType: r.market_type as string | null,
+    lineValue: r.line_value as number | null,
+    lastScannedAt: r.last_scanned_at as string,
+    active: true,
+  }))
+}
+
+export function upsertSportsOdds(entry: SportsOddsRow): void {
+  const db = getDb()
+  db.prepare(`
+    INSERT OR REPLACE INTO sports_odds_cache
+    (sport_key, home_team, away_team, market_type, outcome_name, no_vig_prob, fetched_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(entry.sportKey, entry.homeTeam, entry.awayTeam, entry.marketType, entry.outcomeName, entry.noVigProb, entry.fetchedAt)
+}
+
+export function getSportsOddsForGame(sportKey: string, homeTeam: string, awayTeam: string): SportsOddsRow[] {
+  const db = getDb()
+  const rows = db.prepare(
+    'SELECT * FROM sports_odds_cache WHERE sport_key = ? AND home_team = ? AND away_team = ?'
+  ).all(sportKey, homeTeam, awayTeam) as Array<Record<string, unknown>>
+  return rows.map((r): SportsOddsRow => ({
+    sportKey: r.sport_key as string,
+    homeTeam: r.home_team as string,
+    awayTeam: r.away_team as string,
+    marketType: r.market_type as string,
+    outcomeName: r.outcome_name as string,
+    noVigProb: r.no_vig_prob as number,
+    fetchedAt: r.fetched_at as string,
+  }))
+}
+
+export function deactivateOldSportsMarkets(maxAgeHours: number = 48): void {
+  const db = getDb()
+  db.prepare(
+    `UPDATE sports_markets SET active = 0
+     WHERE last_scanned_at < datetime('now', '-' || ? || ' hours')`
+  ).run(maxAgeHours)
 }
 
 // ── Position snapshot operations ────────────────────────────────
