@@ -57,7 +57,7 @@ const BET_PCT = parseFloat(process.env.BET_PCT ?? '0.02')
 const MIN_ENTRY = parseFloat(process.env.MIN_ENTRY_PRICE ?? '0.15')
 const MAX_ENTRY = parseFloat(process.env.MAX_ENTRY_PRICE ?? '0.50')  // block 50¢+ — no edge
 const MAX_OPEN = parseInt(process.env.MAX_OPEN_TRADES ?? '100', 10)  // fixed cap
-const MIN_SIGNAL_SCORE = parseInt(process.env.MIN_SIGNAL_SCORE_LIVE ?? '65', 10)
+const MIN_SIGNAL_SCORE = parseInt(process.env.MIN_SIGNAL_SCORE_LIVE ?? '50', 10)  // 50¢ cap already filters, no need for double filter
 
 // Polymarket CLOB constraints (cannot change)
 const POLY_MIN_ORDER_SHARES = 15   // minimum shares to place a buy order

@@ -73,7 +73,7 @@ const EVENT_ICONS: Record<string, string> = {
   copy: '📋', exit: '🚪', resolve: '✅',
 }
 
-function pnlStr(n: number): string { return `${n >= 0 ? '+' : ''}$${Math.abs(n).toFixed(0)}` }
+function pnlStr(n: number): string { return `${n >= 0 ? '+' : '-'}$${Math.abs(n).toFixed(0)}` }
 
 export default function Dashboard(): React.ReactElement {
   const [data, setData] = useState<DashboardData | null>(null)

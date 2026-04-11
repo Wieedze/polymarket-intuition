@@ -71,7 +71,7 @@ const DOMAIN_PIE_COLORS: Record<string, string> = {
   unknown: '#52525b',
 }
 
-function pnlStr(n: number): string { return `${n >= 0 ? '+' : ''}$${Math.abs(n).toFixed(2)}` }
+function pnlStr(n: number): string { return `${n >= 0 ? '+' : '-'}$${Math.abs(n).toFixed(2)}` }
 
 export default function LiveTrading(): React.ReactElement {
   const [data, setData] = useState<LiveData | null>(null)
