@@ -1,12 +1,12 @@
 /**
- * Orderbook WebSocket — Real-time best bid/ask from Polymarket CLOB
+ * Orderbook WebSocket — Real-time prices + order fill notifications
  *
- * Subscribes to specific token IDs and maintains a live price cache.
- * Used by live-trader.ts for instant entry/exit price lookups.
+ * Two WS connections:
+ * 1. Market channel: best bid/ask for tokens (public, no auth)
+ * 2. User channel: order fill/cancel notifications (authenticated)
  *
- * Protocol: wss://ws-subscriptions-clob.polymarket.com/ws/market
- * Subscribe with: { assets_ids: [tokenId], type: "market", custom_feature_enabled: true }
- * Receives: book, price_change, best_bid_ask events
+ * Market: wss://ws-subscriptions-clob.polymarket.com/ws/market
+ * User:   wss://ws-subscriptions-clob.polymarket.com/ws/user
  */
 
 import WebSocket from 'ws'
@@ -44,18 +44,61 @@ type BestBidAskEvent = {
 
 type WsEvent = BookEvent | PriceChangeEvent | BestBidAskEvent | { event_type: string }
 
+// ── User WS types (order fills) ──────────────────────────────────
+
+type OrderFillCallback = (orderId: string, filledPrice: number, filledSize: number) => void
+type OrderCancelCallback = (orderId: string) => void
+
+type UserTradeEvent = {
+  event_type: 'trade'
+  id: string
+  status: 'MATCHED' | 'MINED' | 'CONFIRMED' | 'RETRYING' | 'FAILED'
+  asset_id: string
+  price: string
+  size: string
+  side: string
+  trade_owner: string
+  maker_orders: Array<{ matched_amount: string; order_id: string }>
+}
+
+type UserOrderEvent = {
+  event_type: 'order'
+  id: string
+  asset_id: string
+  type: 'PLACEMENT' | 'UPDATE' | 'CANCELLATION'
+  price: string
+  original_size: string
+  size_matched: string
+  order_owner: string
+}
+
+type UserWsEvent = UserTradeEvent | UserOrderEvent | { event_type: string }
+
 // ── State ─────────────────────────────────────────────────────────
 
-const WS_URL = 'wss://ws-subscriptions-clob.polymarket.com/ws/market'
+const MARKET_WS_URL = 'wss://ws-subscriptions-clob.polymarket.com/ws/market'
+const USER_WS_URL = 'wss://ws-subscriptions-clob.polymarket.com/ws/user'
 const STALE_MS = 120_000  // 2 min — price considered stale after this
 
+// ── Market WS state ──────────────────────────────────────────────
 let ws: WebSocket | null = null
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null
-let reconnectDelay = 1000  // starts at 1s, doubles up to 30s
+let reconnectDelay = 1000
 let isConnecting = false
 
 const priceCache = new Map<string, PriceEntry>()
 const subscribedTokens = new Set<string>()
+
+// ── User WS state ────────────────────────────────────────────────
+let userWs: WebSocket | null = null
+let userReconnectTimer: ReturnType<typeof setTimeout> | null = null
+let userReconnectDelay = 1000
+let userIsConnecting = false
+
+let _onOrderFill: OrderFillCallback | null = null
+let _onOrderCancel: OrderCancelCallback | null = null
+let _userAuth: { apiKey: string; secret: string; passphrase: string } | null = null
+let _userMarkets: string[] = []  // conditionIds to subscribe to
 
 // ── Public API ────────────────────────────────────────────────────
 
@@ -215,6 +258,128 @@ function _handleMessage(msg: WsEvent): void {
         updatedAt: Date.now(),
       })
       break
+    }
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════
+// ── User WS (authenticated — order fill notifications) ───────────
+// ══════════════════════════════════════════════════════════════════
+
+export function connectUserWS(
+  auth: { apiKey: string; secret: string; passphrase: string },
+  onFill: OrderFillCallback,
+  onCancel: OrderCancelCallback
+): void {
+  if (userWs || userIsConnecting) return
+  _userAuth = auth
+  _onOrderFill = onFill
+  _onOrderCancel = onCancel
+  userIsConnecting = true
+  _connectUser()
+}
+
+export function subscribeUserMarket(conditionId: string): void {
+  if (_userMarkets.includes(conditionId)) return
+  _userMarkets.push(conditionId)
+  _sendUserSubscription()
+}
+
+export function isUserWsConnected(): boolean {
+  return userWs !== null && userWs.readyState === WebSocket.OPEN
+}
+
+export function disconnectUserWS(): void {
+  _userMarkets = []
+  if (userReconnectTimer) clearTimeout(userReconnectTimer)
+  if (userWs) {
+    userWs.close()
+    userWs = null
+  }
+}
+
+// ── User WS internal ─────────────────────────────────────────────
+
+function _connectUser(): void {
+  if (!_userAuth) return
+
+  try {
+    userWs = new WebSocket(USER_WS_URL)
+
+    userWs.on('open', () => {
+      console.log(`  [USER-WS] Connected — order notifications active`)
+      userIsConnecting = false
+      userReconnectDelay = 1000
+      _sendUserSubscription()
+    })
+
+    userWs.on('message', (data: WebSocket.Data) => {
+      try {
+        const msg = JSON.parse(data.toString()) as UserWsEvent
+        _handleUserMessage(msg)
+      } catch {
+        // Ignore parse errors
+      }
+    })
+
+    userWs.on('close', () => {
+      userWs = null
+      userIsConnecting = false
+      _scheduleUserReconnect()
+    })
+
+    userWs.on('error', (err: Error) => {
+      console.log(`  [USER-WS] Error: ${err.message}`)
+      if (userWs) userWs.close()
+    })
+  } catch {
+    userIsConnecting = false
+    _scheduleUserReconnect()
+  }
+}
+
+function _scheduleUserReconnect(): void {
+  if (userReconnectTimer) return
+  userReconnectTimer = setTimeout(() => {
+    userReconnectTimer = null
+    userReconnectDelay = Math.min(userReconnectDelay * 2, 30_000)
+    _connectUser()
+  }, userReconnectDelay)
+}
+
+function _sendUserSubscription(): void {
+  if (!userWs || userWs.readyState !== WebSocket.OPEN || !_userAuth) return
+
+  const msg = JSON.stringify({
+    auth: {
+      apiKey: _userAuth.apiKey,
+      secret: _userAuth.secret,
+      passphrase: _userAuth.passphrase,
+    },
+    markets: _userMarkets,
+    type: 'user',
+  })
+  userWs.send(msg)
+}
+
+function _handleUserMessage(msg: UserWsEvent): void {
+  if (msg.event_type === 'trade') {
+    const e = msg as UserTradeEvent
+    if (e.status === 'MATCHED' || e.status === 'CONFIRMED' || e.status === 'MINED') {
+      // Our order was filled
+      const orderId = e.maker_orders?.[0]?.order_id ?? e.id
+      const filledPrice = parseFloat(e.price)
+      const filledSize = parseFloat(e.size)
+      console.log(`  [USER-WS] 🎯 ORDER FILLED | ${e.side} @ ${(filledPrice * 100).toFixed(0)}¢ | ${filledSize.toFixed(2)} shares`)
+      _onOrderFill?.(orderId, filledPrice, filledSize)
+    } else if (e.status === 'FAILED') {
+      console.log(`  [USER-WS] ❌ TRADE FAILED | ${e.id}`)
+    }
+  } else if (msg.event_type === 'order') {
+    const e = msg as UserOrderEvent
+    if (e.type === 'CANCELLATION') {
+      console.log(`  [USER-WS] ⏰ ORDER CANCELLED | ${e.id}`)
+      _onOrderCancel?.(e.id)
     }
   }
 }

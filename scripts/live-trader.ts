@@ -37,6 +37,7 @@ import {
   updatePaperTradePrice,
   partialExitPaperTrade,
   logBotEvent,
+  savePendingOrder,
   getPendingOrders,
   removePendingOrder,
   type PaperTrade,
@@ -48,8 +49,8 @@ import { fetchAllPages, fetchMarketMetadata } from '../src/lib/polymarket'
 import { evaluateExit, exitEmoji, type ExitConfig } from '../src/lib/exit-strategy'
 import { scoreSignal, shouldCopySignal, signalBetMultiplier, isContradictory, kellyBetFraction } from '../src/lib/signal-scorer'
 import { evaluateExpertTrust, getAllExpertTrust, getBankrollScale } from '../src/lib/expert-trust'
-import { placeOrder, getRealBalance, closePosition, checkOrderStatus, cancelOrder, getBestAsk, type RealOrder } from '../src/lib/real-trader'
-import { connectOrderbookWS, subscribeToken, unsubscribeToken, getWsBestAsk, getWsBestBid, isWsConnected, getSubscribedCount } from '../src/lib/orderbook-ws'
+import { placeOrder, getRealBalance, closePosition, checkOrderStatus, cancelOrder, type RealOrder } from '../src/lib/real-trader'
+import { connectOrderbookWS, subscribeToken, unsubscribeToken, getWsBestBid, isWsConnected, getSubscribedCount, connectUserWS, subscribeUserMarket, isUserWsConnected } from '../src/lib/orderbook-ws'
 
 const POLYMARKET_DATA_URL = process.env.POLYMARKET_DATA_URL ?? 'https://data-api.polymarket.com'
 
@@ -253,7 +254,7 @@ const tokenIdCache = new Map<string, { tokenId: string; negRisk: boolean }>()
 // Track pending GTC orders in SQLite so they survive restarts.
 // Paper trade is ONLY created when order is confirmed FILLED.
 
-const GTC_TIMEOUT_MS = 30 * 1000  // 30 seconds — if not filled, price has moved
+const GTC_TIMEOUT_MS = 5 * 60 * 1000  // 5 minutes — give market maker time to recharge
 
 async function checkPendingOrders(): Promise<void> {
   const pending = getPendingOrders()
@@ -416,56 +417,19 @@ async function tryCopyWithSignal(alert: PositionAlert): Promise<boolean> {
     console.log(`  🏜️  DRY-RUN | ${scoreTag} ${side} @ ${(rawPrice * 100).toFixed(0)}¢ | $${betAmount.toFixed(2)}${consensusTag}${trustTag} | ${kellyTag} | ${stopTag} | ${alert.position.title.slice(0, 45)} ${domainTag}`)
     logBotEvent('live-dry-run', `${side} @ ${(entryPrice * 100).toFixed(0)}¢ $${betAmount.toFixed(2)} | ${alert.position.title}`, `Score: ${signal.score}/100`)
   } else {
-    // ── Wait for liquidity via WS, then buy at best ask ────────────
-    // Subscribe to this token for real-time price updates
+    // ── Place GTC order at expert price + buffer ─────────────────────
+    // The order sits in the orderbook until filled or timeout.
+    // User WS notifies us instantly when filled — no polling needed.
     subscribeToken(tokenId)
 
-    // Check ask immediately, then wait up to 60s for liquidity to return
-    const WAIT_LIQUIDITY_MS = 60_000
-    const WAIT_CHECK_MS = 2_000  // check every 2s
-    const maxWaitUntil = Date.now() + WAIT_LIQUIDITY_MS
+    // Price: expert's entry price + 5¢ buffer (max MAX_ENTRY)
+    const PRICE_BUFFER = 0.05
+    const maxPrice = Math.min(rawPrice + PRICE_BUFFER, MAX_ENTRY)
+    const orderPrice = parseFloat(maxPrice.toFixed(2))
 
-    let livePrice: number | null = null
-    let priceSource = 'WS'
-
-    // First check: WS or REST
-    livePrice = getWsBestAsk(tokenId) ?? await getBestAsk(tokenId)
-    if (!livePrice) priceSource = 'REST'
-
-    if (livePrice && livePrice <= MAX_ENTRY) {
-      // Liquidity available immediately
-      priceSource = getWsBestAsk(tokenId) ? 'WS' : 'REST'
-    } else if (livePrice && livePrice > MAX_ENTRY) {
-      // Ask too high — wait for market maker to recharge
-      console.log(`  ⏳ WAIT | ask ${(livePrice * 100).toFixed(0)}¢ > ${(MAX_ENTRY * 100).toFixed(0)}¢ — waiting for liquidity | ${alert.position.title.slice(0, 35)}`)
-
-      livePrice = null  // reset, will be set when ask drops
-      while (Date.now() < maxWaitUntil) {
-        await new Promise(r => setTimeout(r, WAIT_CHECK_MS))
-        const wsAsk = getWsBestAsk(tokenId)
-        if (wsAsk && wsAsk <= MAX_ENTRY) {
-          livePrice = wsAsk
-          priceSource = 'WS'
-          console.log(`  ✅ LIQUIDITY | ask dropped to ${(wsAsk * 100).toFixed(0)}¢ after ${((Date.now() - (maxWaitUntil - WAIT_LIQUIDITY_MS)) / 1000).toFixed(0)}s | ${alert.position.title.slice(0, 35)}`)
-          break
-        }
-      }
-
-      if (!livePrice) {
-        console.log(`  ⏭️  TIMEOUT | no liquidity after ${(WAIT_LIQUIDITY_MS / 1000).toFixed(0)}s | ${alert.position.title.slice(0, 45)}`)
-        unsubscribeToken(tokenId)
-        return false
-      }
-    } else if (!livePrice) {
-      console.log(`  ⚠️  NO ORDERBOOK | ${alert.position.title.slice(0, 45)}`)
-      unsubscribeToken(tokenId)
+    const liveBetAmount = Math.min(betAmount, getAvailableCash() * 0.30)
+    if (liveBetAmount < POLY_MIN_ORDER_SHARES * orderPrice) {
       return false
-    }
-
-    // Recalculate shares with live price
-    const liveBetAmount = Math.min(betAmount, getAvailableCash() * 0.30)  // max 30% of cash per order
-    if (liveBetAmount < POLY_MIN_ORDER_SHARES * livePrice) {
-      return false  // can't meet minimum shares
     }
 
     const order: RealOrder = {
@@ -473,9 +437,9 @@ async function tryCopyWithSignal(alert: PositionAlert): Promise<boolean> {
       tokenId,
       title: alert.position.title,
       side: side as 'YES' | 'NO',
-      price: livePrice,
+      price: orderPrice,
       sizeUsdc: liveBetAmount,
-      orderType: 'FOK',  // Fill or Kill — instant fill at best ask, no pending orders
+      orderType: 'GTC',  // stays in orderbook until filled or cancelled
       negRisk: metadata.negRisk,
     }
 
@@ -483,28 +447,46 @@ async function tryCopyWithSignal(alert: PositionAlert): Promise<boolean> {
 
     if (!result.success) {
       console.log(`  ❌ ORDER FAILED | ${result.error} | ${alert.position.title.slice(0, 45)}`)
-      logBotEvent('live-error', `FAILED ${side} @ ${(livePrice * 100).toFixed(0)}¢ | ${alert.position.title}`, result.error ?? '')
+      logBotEvent('live-error', `FAILED ${side} @ ${(orderPrice * 100).toFixed(0)}¢ | ${alert.position.title}`, result.error ?? '')
       return false
     }
 
-    const filledPrice = result.filledPrice ?? livePrice
-    console.log(`  💰 LIVE ${scoreTag} FILLED [${priceSource}] | ${side} @ ${(rawPrice * 100).toFixed(0)}¢→${(filledPrice * 100).toFixed(0)}¢ | $${liveBetAmount.toFixed(2)}${consensusTag}${trustTag} | ${kellyTag} | ${stopTag} | orderId:${result.orderId?.slice(0, 12)} | ${alert.position.title.slice(0, 40)} ${domainTag}`)
-    logBotEvent('live-copy', `FILLED ${side} @ ${(filledPrice * 100).toFixed(0)}¢ $${liveBetAmount.toFixed(2)} | ${alert.position.title}`, `Score: ${signal.score}/100 | ${kellyTag} | ask(${priceSource}):${(livePrice * 100).toFixed(0)}¢`)
+    if (result.filledPrice) {
+      // Filled immediately — record paper trade
+      console.log(`  💰 LIVE ${scoreTag} FILLED | ${side} @ ${(rawPrice * 100).toFixed(0)}¢→${(result.filledPrice * 100).toFixed(0)}¢ | $${liveBetAmount.toFixed(2)}${consensusTag}${trustTag} | ${kellyTag} | ${stopTag} | orderId:${result.orderId?.slice(0, 12)} | ${alert.position.title.slice(0, 40)} ${domainTag}`)
+      logBotEvent('live-copy', `FILLED ${side} @ ${(result.filledPrice * 100).toFixed(0)}¢ $${liveBetAmount.toFixed(2)} | ${alert.position.title}`, `Score: ${signal.score}/100 | ${kellyTag}`)
 
-    // FOK = always filled if success — record paper trade immediately
-    openPaperTrade({
-      conditionId: alert.position.conditionId,
-      title: alert.position.title,
-      domain: domain?.domain ?? null,
-      side,
-      entryPrice: filledPrice,
-      simulatedUsdc: liveBetAmount,
-      copiedFrom: alert.wallet,
-      copiedLabel: `[LIVE] ${alert.walletLabel ?? alert.wallet.slice(0, 10)}`,
-    })
+      openPaperTrade({
+        conditionId: alert.position.conditionId,
+        title: alert.position.title,
+        domain: domain?.domain ?? null,
+        side,
+        entryPrice: result.filledPrice,
+        simulatedUsdc: liveBetAmount,
+        copiedFrom: alert.wallet,
+        copiedLabel: `[LIVE] ${alert.walletLabel ?? alert.wallet.slice(0, 10)}`,
+      })
+    } else if (result.orderId) {
+      // GTC pending — save to DB, User WS will notify when filled
+      console.log(`  📋 LIVE ${scoreTag} GTC PLACED | ${side} @ ${(orderPrice * 100).toFixed(0)}¢ | $${liveBetAmount.toFixed(2)}${consensusTag} | ${kellyTag} | orderId:${result.orderId.slice(0, 12)} | ${alert.position.title.slice(0, 40)} ${domainTag}`)
+      logBotEvent('live-gtc', `GTC ${side} @ ${(orderPrice * 100).toFixed(0)}¢ $${liveBetAmount.toFixed(2)} | ${alert.position.title}`, `Score: ${signal.score}/100 | timeout: 5min`)
 
-    // Subscribe to WS for real-time exit price tracking
-    subscribeToken(tokenId)
+      savePendingOrder({
+        orderId: result.orderId,
+        conditionId: alert.position.conditionId,
+        title: alert.position.title,
+        domain: domain?.domain ?? null,
+        side,
+        entryPrice: orderPrice,
+        simulatedUsdc: liveBetAmount,
+        copiedFrom: alert.wallet,
+        copiedLabel: `[LIVE] ${alert.walletLabel ?? alert.wallet.slice(0, 10)}`,
+        placedAt: new Date().toISOString(),
+      })
+
+      // Subscribe User WS to this market for fill notifications
+      subscribeUserMarket(alert.position.conditionId)
+    }
   }
 
   return true
@@ -721,7 +703,7 @@ function printStats(): void {
   console.log(`  │ Cash:     $${cash.toFixed(2).padStart(10)}  (next bet: $${nextBet.toFixed(2)})`)
   console.log(`  │ Open:     ${open.length.toString().padStart(10)}  trades`)
   console.log(`  │ Win Rate: ${(winRate * 100).toFixed(0).padStart(9)}%  (${won.length}W / ${lost.length}L)`)
-  console.log(`  │ WS:      ${isWsConnected() ? '🟢 connected' : '🔴 disconnected'}  (${getSubscribedCount()} tokens)`)
+  console.log(`  │ WS:      ${isWsConnected() ? '🟢' : '🔴'} market | ${isUserWsConnected() ? '🟢' : '🔴'} user  (${getSubscribedCount()} tokens, ${getPendingOrders().length} pending)`)
   console.log(`  └─────────────────────────────────────┘`)
 
   const trusts = getAllExpertTrust()
@@ -989,6 +971,44 @@ async function main(): Promise<void> {
 
   // ── Connect orderbook websocket for real-time prices ───────────
   connectOrderbookWS()
+
+  // ── Connect User WS for order fill/cancel notifications ────────
+  const apiKey = process.env.POLYMARKET_API_KEY ?? ''
+  const apiSecret = process.env.POLYMARKET_API_SECRET ?? ''
+  const apiPassphrase = process.env.POLYMARKET_API_PASSPHRASE ?? ''
+
+  if (apiKey && apiSecret) {
+    connectUserWS(
+      { apiKey, secret: apiSecret, passphrase: apiPassphrase },
+      // On order fill: create paper trade from pending order
+      (orderId: string, filledPrice: number, _filledSize: number) => {
+        const pending = getPendingOrders()
+        const po = pending.find(p => p.orderId === orderId)
+        if (po) {
+          openPaperTrade({
+            conditionId: po.conditionId,
+            title: po.title,
+            domain: po.domain,
+            side: po.side,
+            entryPrice: filledPrice,
+            simulatedUsdc: po.simulatedUsdc,
+            copiedFrom: po.copiedFrom,
+            copiedLabel: po.copiedLabel,
+          })
+          removePendingOrder(orderId)
+          subscribeToken(po.side === 'YES'
+            ? (tokenIdCache.get(`${po.conditionId}-YES`)?.tokenId ?? '')
+            : (tokenIdCache.get(`${po.conditionId}-NO`)?.tokenId ?? ''))
+          console.log(`  💰 FILLED via WS | ${po.side} @ ${(filledPrice * 100).toFixed(0)}¢ | $${po.simulatedUsdc.toFixed(2)} | ${po.title.slice(0, 40)}`)
+          logBotEvent('live-filled', `FILLED ${po.side} @ ${(filledPrice * 100).toFixed(0)}¢ $${po.simulatedUsdc.toFixed(2)} | ${po.title}`, `orderId:${orderId.slice(0, 12)}`)
+        }
+      },
+      // On order cancel
+      (orderId: string) => {
+        removePendingOrder(orderId)
+      }
+    )
+  }
 
   // Subscribe to tokens for any existing open positions
   const openForWs = getOpenLiveTrades()

@@ -755,6 +755,19 @@ export type PendingOrderRow = {
   placedAt: string
 }
 
+export function savePendingOrder(order: PendingOrderRow): void {
+  const db = getDb()
+  db.prepare(
+    `INSERT OR REPLACE INTO pending_orders
+     (order_id, condition_id, title, domain, side, entry_price, simulated_usdc, copied_from, copied_label, placed_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    order.orderId, order.conditionId, order.title, order.domain,
+    order.side, order.entryPrice, order.simulatedUsdc,
+    order.copiedFrom, order.copiedLabel, order.placedAt
+  )
+}
+
 export function getPendingOrders(): PendingOrderRow[] {
   const db = getDb()
   const rows = db.prepare('SELECT * FROM pending_orders').all() as Array<Record<string, unknown>>
