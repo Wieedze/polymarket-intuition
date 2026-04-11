@@ -118,27 +118,25 @@ describe('scoreSignal', () => {
 })
 
 describe('shouldCopySignal', () => {
-  it('returns true for score >= 40', () => {
-    expect(shouldCopySignal({ score: 40 } as ReturnType<typeof scoreSignal>)).toBe(true)
+  it('returns true for score >= 50', () => {
+    expect(shouldCopySignal({ score: 50 } as ReturnType<typeof scoreSignal>)).toBe(true)
     expect(shouldCopySignal({ score: 80 } as ReturnType<typeof scoreSignal>)).toBe(true)
   })
 
-  it('returns false for score < 40', () => {
-    expect(shouldCopySignal({ score: 39 } as ReturnType<typeof scoreSignal>)).toBe(false)
+  it('returns false for score < 50', () => {
+    expect(shouldCopySignal({ score: 49 } as ReturnType<typeof scoreSignal>)).toBe(false)
     expect(shouldCopySignal({ score: 0 } as ReturnType<typeof scoreSignal>)).toBe(false)
   })
 })
 
 describe('signalBetMultiplier', () => {
-  it('returns 0.5x for low signal', () => {
-    expect(signalBetMultiplier({ score: 40 } as ReturnType<typeof scoreSignal>)).toBe(0.5)
-  })
-
-  it('returns 1.0x for medium signal', () => {
+  it('returns 1.0x for score below 80', () => {
+    expect(signalBetMultiplier({ score: 40 } as ReturnType<typeof scoreSignal>)).toBe(1.0)
     expect(signalBetMultiplier({ score: 65 } as ReturnType<typeof scoreSignal>)).toBe(1.0)
   })
 
-  it('returns 1.5x for high signal', () => {
+  it('returns 1.5x for score >= 80', () => {
+    expect(signalBetMultiplier({ score: 80 } as ReturnType<typeof scoreSignal>)).toBe(1.5)
     expect(signalBetMultiplier({ score: 85 } as ReturnType<typeof scoreSignal>)).toBe(1.5)
   })
 })
