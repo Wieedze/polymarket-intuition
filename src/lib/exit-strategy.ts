@@ -91,7 +91,7 @@ export function evaluateExit(
   //    Check how many partial exits already done to avoid re-triggering
   const partialExits = trade.partialExits ?? []
   const done100 = partialExits.some((e) => e.pct === config.partialExitAt100Pct && e.price >= trade.entryPrice * 2)
-  const done150 = partialExits.some((e) => e.pct === config.partialExitAt150Pct && e.price >= trade.entryPrice * 2.5)
+  const done150 = partialExits.some((e) => e.pct === config.partialExitAt150Pct)
 
   if (!done150 && pnlPct >= 1.50 && config.partialExitAt150Pct > 0) {
     return {
