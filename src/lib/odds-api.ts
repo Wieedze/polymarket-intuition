@@ -105,7 +105,7 @@ export async function fetchOddsForSport(
     const remaining = res.headers.get('x-requests-remaining')
     if (remaining) {
       requestsRemaining = parseInt(remaining, 10)
-      if (requestsRemaining < 1000 && now - lastBudgetWarning > 3600000) {
+      if (requestsRemaining < 100 && now - lastBudgetWarning > 3600000) {
         console.log(`  ⚠️  [odds-api] Budget low: ${requestsRemaining} requests remaining`)
         lastBudgetWarning = now
       }

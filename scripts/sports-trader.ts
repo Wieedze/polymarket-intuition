@@ -395,10 +395,12 @@ async function scanMarkets(): Promise<void> {
 
     console.log(`  Found ${discovered.length} sports markets | Active: ${activeSportKeys.join(', ') || 'none'}`)
 
-    // Subscribe WS for all active markets
-    for (const market of discovered) {
+    // Subscribe WS only for markets in active sports (not all 280)
+    const activeMarkets = discovered.filter((m) => m.sportKey && activeSportKeys.includes(m.sportKey))
+    for (const market of activeMarkets) {
       if (market.yesTokenId) subscribeToken(market.yesTokenId)
     }
+    console.log(`  Subscribed ${activeMarkets.length} markets to WS (filtered from ${discovered.length})`)
   } catch (err) {
     console.log(`  ❌ Scan error: ${err instanceof Error ? err.message : String(err)}`)
   }
@@ -485,9 +487,25 @@ async function pollOnce(): Promise<void> {
 
   // Also update prices from Gamma scan data
   const sportsMarkets = getActiveSportsMarkets()
+  const filteredMarkets = sportsMarkets.filter((m) => m.sportKey && activeSportKeys.includes(m.sportKey))
+
+  // Debug: show matching stats
+  const withTeams = filteredMarkets.filter((m) => m.homeTeam && m.awayTeam)
+  console.log(`  📋 Markets: ${filteredMarkets.length} active | ${withTeams.length} with teams parsed | ${allNoVigGames.length} bookmaker games`)
+  if (withTeams.length > 0 && withTeams.length <= 5) {
+    for (const m of withTeams) {
+      console.log(`    → ${m.awayTeam} vs ${m.homeTeam} (${m.marketType}) @ ${((m.polymarketPrice ?? 0) * 100).toFixed(0)}¢`)
+    }
+  }
+  if (allNoVigGames.length > 0 && allNoVigGames.length <= 5) {
+    for (const g of allNoVigGames) {
+      const h2h = g.markets.find((m) => m.type === 'h2h')
+      console.log(`    🎯 ${g.awayTeam} @ ${g.homeTeam} | h2h: ${h2h ? h2h.outcomes.map((o) => `${o.name}:${(o.noVigProb * 100).toFixed(0)}%`).join(' vs ') : 'n/a'}`)
+    }
+  }
 
   // Generate signals
-  const signals = generateSportsSignals(sportsMarkets, allNoVigGames)
+  const signals = generateSportsSignals(filteredMarkets, allNoVigGames)
   const ranked = rankSignals(signals)
 
   const openCount = getOpenSportsTrades().length
