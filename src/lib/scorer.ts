@@ -167,6 +167,31 @@ export function calculateCopyabilityScore(trades: ResolvedTrade[]): number {
 }
 
 /**
+ * Approximate copyability from wallet_stats (no raw trades needed).
+ * Uses winRate and calibration from best domain stats.
+ * profitFactor and streakScore use neutral defaults (0.5 each)
+ * since wallet_stats doesn't store these metrics.
+ */
+export function calculateCopyabilityFromStats(
+  stats: Array<{ winRate: number; calibration: number; tradesCount: number }>
+): number {
+  if (stats.length === 0) return 0
+  // Pick best domain by trades count (most data = most reliable)
+  const best = stats.reduce((a, b) => (b.tradesCount > a.tradesCount ? b : a))
+  if (best.tradesCount < 5) return 0
+
+  const winRateScore = Math.min(Math.max(best.winRate / 0.7, 0), 1)
+  const calibrationScore = Math.min(Math.max((best.calibration - 0.5) / 0.5, 0), 1)
+
+  return (
+    winRateScore * 0.25 +
+    calibrationScore * 0.25 +
+    0.5 * 0.30 +     // profitFactor neutral default
+    0.5 * 0.20        // streakScore neutral default
+  )
+}
+
+/**
  * Implicit Edge — the core metric for 0/1 prediction markets.
  *
  * Measures how much the wallet BEATS the market's implied probability.

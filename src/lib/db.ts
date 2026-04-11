@@ -334,6 +334,11 @@ function initTables(db: Database.Database): void {
   try {
     db.exec('ALTER TABLE market_metadata ADD COLUMN neg_risk INTEGER NOT NULL DEFAULT 0')
   } catch {}
+
+  // Migration: copyability score as dedicated column in watched_wallets
+  try {
+    db.exec('ALTER TABLE watched_wallets ADD COLUMN copyability_score REAL')
+  } catch {}
 }
 
 // ── Trade operations ──────────────────────────────────────────────
@@ -540,11 +545,17 @@ export function addWatchedWallet(wallet: string, label?: string): void {
   ).run(wallet, label ?? null, new Date().toISOString())
 }
 
-export function getActiveWatchedWallets(): Array<{ wallet: string; label: string | null }> {
+export function getActiveWatchedWallets(): Array<{ wallet: string; label: string | null; copyabilityScore: number | null }> {
   const db = getSharedDb()  // experts are shared intelligence
-  return db
-    .prepare('SELECT wallet, label FROM watched_wallets WHERE active = 1')
-    .all() as Array<{ wallet: string; label: string | null }>
+  return (db
+    .prepare('SELECT wallet, label, copyability_score FROM watched_wallets WHERE active = 1')
+    .all() as Array<{ wallet: string; label: string | null; copyability_score: number | null }>
+  ).map((r) => ({ wallet: r.wallet, label: r.label, copyabilityScore: r.copyability_score }))
+}
+
+export function updateWalletCopyability(wallet: string, score: number): void {
+  const db = getDb()
+  db.prepare('UPDATE watched_wallets SET copyability_score = ? WHERE wallet = ?').run(score, wallet)
 }
 
 export function updateWalletPolledAt(wallet: string): void {

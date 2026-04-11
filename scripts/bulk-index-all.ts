@@ -1,5 +1,5 @@
 import { indexWallet } from '../src/lib/indexer'
-import { saveLeaderboardEntry, addWatchedWallet, getWalletStats } from '../src/lib/db'
+import { saveLeaderboardEntry, addWatchedWallet, getWalletStats, updateWalletCopyability } from '../src/lib/db'
 
 type LeaderboardEntry = {
   rank: string
@@ -85,7 +85,8 @@ async function main(): Promise<void> {
       }
 
       if (WATCH && topCopyability > 0.5) {
-        addWatchedWallet(entry.proxyWallet, `${name} [${category}] (copy:${(topCopyability * 100).toFixed(0)}%)`)
+        addWatchedWallet(entry.proxyWallet, `${name} [${category}]`)
+        updateWalletCopyability(entry.proxyWallet, topCopyability)
       }
 
       console.log(

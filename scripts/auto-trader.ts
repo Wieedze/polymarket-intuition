@@ -15,8 +15,9 @@
  *   MAX_OPEN_TRADES   — max simultaneous open paper trades (default: 50)
  */
 
-import { getActiveWatchedWallets, getOpenPaperTrades, openPaperTrade, paperTradeExistsForCondition, getPortfolioSetting, setPortfolioSetting, getAllPaperTrades, getPositionSnapshot } from '../src/lib/db'
+import { getActiveWatchedWallets, getOpenPaperTrades, openPaperTrade, paperTradeExistsForCondition, getPortfolioSetting, setPortfolioSetting, getAllPaperTrades, getPositionSnapshot, getWalletStats, updateWalletCopyability } from '../src/lib/db'
 import { indexWallet } from '../src/lib/indexer'
+import { calculateCopyabilityFromStats } from '../src/lib/scorer'
 import { pollWallet, type PositionAlert } from '../src/lib/position-tracker'
 import { keywordClassify } from '../src/lib/classifier'
 import { fetchAllPages } from '../src/lib/polymarket'
@@ -466,6 +467,10 @@ async function pollOnce(): Promise<void> {
   // ── Phase 1: Collect all signals & build consensus ──
   consensusMap.clear()
   const allNewAlerts: PositionAlert[] = []
+  const copyScoreMap = new Map<string, number>()
+  for (const w of wallets) {
+    if (w.copyabilityScore != null) copyScoreMap.set(w.wallet, w.copyabilityScore)
+  }
 
   for (const { wallet, label } of wallets) {
     try {
@@ -488,7 +493,9 @@ async function pollOnce(): Promise<void> {
     const consensus = consensusMap.get(alert.position.conditionId)
     const expertCount = consensus?.experts.length ?? 1
     const consensusTag = expertCount > 1 ? ` [${expertCount} experts]` : ''
-    console.log(`  🔔 NEW | ${alert.walletLabel ?? alert.wallet.slice(0, 10)} | ${side} @ ${(alert.position.curPrice * 100).toFixed(0)}¢${consensusTag} | ${alert.position.title}`)
+    const copyScore = copyScoreMap.get(alert.wallet)
+    const copyTag = copyScore != null ? ` (copy:${(copyScore * 100).toFixed(0)}%)` : ''
+    console.log(`  🔔 NEW | ${alert.walletLabel ?? alert.wallet.slice(0, 10)}${copyTag} | ${side} @ ${(alert.position.curPrice * 100).toFixed(0)}¢${consensusTag} | ${alert.position.title}`)
   }
 
   // Log consensus markets
@@ -558,8 +565,14 @@ async function reindexAllWallets(): Promise<void> {
       const result = await indexWallet(wallet)
       indexed += result.tradesIndexed
       if (result.errors.length > 0) errors++
+
+      // Recalculate copyability from fresh wallet_stats
+      const stats = getWalletStats(wallet)
+      const newScore = calculateCopyabilityFromStats(stats)
+      if (newScore > 0) updateWalletCopyability(wallet, newScore)
+
       if (result.tradesIndexed > 0) {
-        console.log(`  ✓ ${(label ?? wallet.slice(0, 12)).padEnd(24)} +${result.tradesIndexed} trades`)
+        console.log(`  ✓ ${(label ?? wallet.slice(0, 12)).padEnd(24)} +${result.tradesIndexed} trades (copy:${(newScore * 100).toFixed(0)}%)`)
       }
     } catch {
       errors++

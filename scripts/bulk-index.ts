@@ -1,5 +1,5 @@
 import { indexWallet } from '../src/lib/indexer'
-import { saveLeaderboardEntry, addWatchedWallet, getWalletStats } from '../src/lib/db'
+import { saveLeaderboardEntry, addWatchedWallet, getWalletStats, updateWalletCopyability } from '../src/lib/db'
 import {
   calculateCopyabilityScore,
   calculateProfitFactor,
@@ -80,7 +80,8 @@ async function main(): Promise<void> {
 
     // Auto-watch if high copyability
     if (WATCH && topCopyability > 0.5) {
-      addWatchedWallet(entry.proxyWallet, `${name} (copy:${(topCopyability * 100).toFixed(0)}%)`)
+      addWatchedWallet(entry.proxyWallet, name)
+      updateWalletCopyability(entry.proxyWallet, topCopyability)
     }
 
     console.log(
