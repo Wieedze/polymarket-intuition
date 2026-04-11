@@ -793,24 +793,32 @@ async function pollOnce(): Promise<void> {
     }
   }
 
-  // ── Phase 2: Copy with signal-based sizing ──
+  // ── Phase 2: Copy with signal-based sizing (parallel liquidity wait) ──
   let copied = 0
   const copiedConditions = new Set<string>()
 
+  // Filter eligible alerts first, then launch all copies in parallel
+  const eligibleAlerts: PositionAlert[] = []
   for (const alert of allNewAlerts) {
     if (copiedConditions.has(alert.position.conditionId)) continue
-
     const side = alert.position.outcomeIndex === 0 ? 'YES' : 'NO'
     const openTrades = getOpenPaperTrades()
     if (isContradictory(alert.position.conditionId, side, openTrades)) {
       console.log(`  ⚠️  CONTRA | Already holding opposite side | ${alert.position.title}`)
       continue
     }
-
-    if (canCopy(alert) && await tryCopyWithSignal(alert)) {
-      copiedConditions.add(alert.position.conditionId)
-      copied++
+    if (canCopy(alert)) {
+      eligibleAlerts.push(alert)
+      copiedConditions.add(alert.position.conditionId)  // prevent duplicates
     }
+  }
+
+  // Launch all copy attempts in parallel (each waits for its own liquidity)
+  if (eligibleAlerts.length > 0) {
+    const results = await Promise.allSettled(
+      eligibleAlerts.map(alert => tryCopyWithSignal(alert))
+    )
+    copied = results.filter(r => r.status === 'fulfilled' && r.value).length
   }
 
   // ── Phase 3: Manage existing positions ──
