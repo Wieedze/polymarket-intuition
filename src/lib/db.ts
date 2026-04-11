@@ -501,50 +501,6 @@ export function getWalletStats(wallet: string): WalletDomainStats[] {
   )
 }
 
-export type ExpertRow = {
-  wallet: string
-  calibration: number
-  tradesCount: number
-  avgConviction: number
-}
-
-export function getExpertsByDomain(
-  domain: string,
-  minCalibration: number,
-  minTrades: number
-): ExpertRow[] {
-  const db = getDb()
-  const rows = db
-    .prepare(
-      `SELECT wallet, calibration, trades_count, avg_conviction
-       FROM wallet_stats
-       WHERE domain = ? AND calibration >= ? AND trades_count >= ?
-       ORDER BY calibration DESC`
-    )
-    .all(domain, minCalibration, minTrades) as Array<{
-    wallet: string
-    calibration: number
-    trades_count: number
-    avg_conviction: number
-  }>
-
-  return rows.map(
-    (r): ExpertRow => ({
-      wallet: r.wallet,
-      calibration: r.calibration,
-      tradesCount: r.trades_count,
-      avgConviction: r.avg_conviction,
-    })
-  )
-}
-
-export function markAttestedOnChain(wallet: string, domain: string): void {
-  const db = getDb()
-  db.prepare(
-    `UPDATE wallet_stats SET attested_on_chain = 1 WHERE wallet = ? AND domain = ?`
-  ).run(wallet, domain)
-}
-
 // ── Leaderboard cache operations ────────────────────────────────
 
 export type LeaderboardRow = {
@@ -572,37 +528,6 @@ export function saveLeaderboardEntry(entry: LeaderboardRow): void {
     entry.period,
     entry.fetchedAt
   )
-}
-
-export function getLeaderboard(period: string): Array<LeaderboardRow & { stats: WalletDomainStats[] }> {
-  const db = getDb()
-  const entries = db
-    .prepare(
-      `SELECT wallet, user_name, rank, pnl, volume, period, fetched_at
-       FROM leaderboard_cache
-       WHERE period = ?
-       ORDER BY rank ASC`
-    )
-    .all(period) as Array<{
-    wallet: string
-    user_name: string
-    rank: number
-    pnl: number
-    volume: number
-    period: string
-    fetched_at: string
-  }>
-
-  return entries.map((e) => ({
-    wallet: e.wallet,
-    userName: e.user_name,
-    rank: e.rank,
-    pnl: e.pnl,
-    volume: e.volume,
-    period: e.period,
-    fetchedAt: e.fetched_at,
-    stats: getWalletStats(e.wallet),
-  }))
 }
 
 // ── Watched wallets operations ──────────────────────────────────
@@ -1006,13 +931,6 @@ export function partialExitPaperTrade(
   )
 
   return pnl
-}
-
-/**
- * Get total realized PnL from partial exits for a trade (before full resolution).
- */
-export function getPartialExitPnl(trade: PaperTrade): number {
-  return trade.partialExits.reduce((s, e) => s + e.pnl, 0)
 }
 
 export function paperTradeExistsForCondition(conditionId: string): boolean {

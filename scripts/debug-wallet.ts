@@ -1,6 +1,5 @@
 import { fetchResolvedTrades } from '../src/lib/polymarket'
 import { keywordClassify } from '../src/lib/classifier'
-import { classifyMarket } from '../src/lib/classifier'
 
 const WALLET = process.argv[2] ?? '0xf2f6af4f27ec2dcf4072095ab804016e14cd5817'
 

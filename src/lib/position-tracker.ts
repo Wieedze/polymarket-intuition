@@ -24,7 +24,7 @@ type PositionRecord = {
   cashPnl: number
 }
 
-export type OpenPosition = {
+type OpenPosition = {
   conditionId: string
   outcomeIndex: number
   title: string
@@ -44,7 +44,7 @@ export type PositionAlert = {
 
 // ── Core logic ────────────────────────────────────────────────────
 
-export async function fetchOpenPositions(address: string): Promise<OpenPosition[]> {
+async function fetchOpenPositions(address: string): Promise<OpenPosition[]> {
   const positions = await fetchAllPages<PositionRecord>(
     `${POLYMARKET_DATA_URL}/positions?user=${address}&sizeThreshold=0`,
     3
@@ -63,7 +63,7 @@ export async function fetchOpenPositions(address: string): Promise<OpenPosition[
     }))
 }
 
-export function diffPositions(
+function diffPositions(
   previous: Map<string, PositionSnapshotRow>,
   current: Map<string, OpenPosition>
 ): Omit<PositionAlert, 'wallet' | 'walletLabel'>[] {

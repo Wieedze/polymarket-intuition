@@ -2,7 +2,7 @@ import { DOMAIN_ATOMS, type DomainAtomValue } from './atoms'
 
 // ── Types ─────────────────────────────────────────────────────────
 
-export type ClassificationResult = {
+type ClassificationResult = {
   domain: DomainAtomValue
   confidence: number
 } | null

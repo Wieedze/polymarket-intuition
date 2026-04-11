@@ -27,7 +27,7 @@ export type RealOrder = {
   negRisk?: boolean    // true for sports markets (neg_risk on Polymarket)
 }
 
-export type RealOrderResult = {
+type RealOrderResult = {
   success: boolean
   orderId?: string
   filledSize?: number
@@ -115,19 +115,6 @@ export function getWalletAddress(): string {
  * Returns the lowest price at which someone is willing to sell.
  * This is the price we should use for FOK orders (instant fill).
  */
-export async function getBestAsk(tokenId: string): Promise<number | null> {
-  try {
-    const res = await fetch(`${CLOB_HOST}/book?token_id=${tokenId}`)
-    if (!res.ok) return null
-    const book = await res.json() as { asks?: Array<{ price: string; size: string }> }
-    if (!book.asks || book.asks.length === 0) return null
-    // Asks are sorted lowest first — first ask = best price to buy
-    return parseFloat(book.asks[0].price)
-  } catch {
-    return null
-  }
-}
-
 // ── Core trading functions ────────────────────────────────────────
 
 /**
@@ -266,33 +253,6 @@ export async function cancelOrder(orderId: string): Promise<boolean> {
     return true
   } catch {
     return false
-  }
-}
-
-/**
- * Get all open orders (unfilled GTC orders in the orderbook).
- */
-export async function getOpenOrders(): Promise<Array<{
-  orderId: string
-  tokenId: string
-  side: string
-  price: number
-  size: number
-  status: string
-}>> {
-  try {
-    const client = await getClient()
-    const orders = await client.getOpenOrders() as Array<Record<string, unknown>>
-    return (orders ?? []).map((o) => ({
-      orderId: (o.id ?? o.order_id ?? '') as string,
-      tokenId: (o.asset_id ?? o.token_id ?? '') as string,
-      side: (o.side ?? '') as string,
-      price: Number(o.price ?? 0),
-      size: Number(o.original_size ?? o.size ?? 0),
-      status: (o.status ?? '') as string,
-    }))
-  } catch {
-    return []
   }
 }
 

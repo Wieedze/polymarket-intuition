@@ -108,16 +108,6 @@ export function connectOrderbookWS(): void {
   _connect()
 }
 
-export function disconnectOrderbookWS(): void {
-  subscribedTokens.clear()
-  priceCache.clear()
-  if (reconnectTimer) clearTimeout(reconnectTimer)
-  if (ws) {
-    ws.close()
-    ws = null
-  }
-}
-
 export function subscribeToken(tokenId: string): void {
   if (subscribedTokens.has(tokenId)) return
   subscribedTokens.add(tokenId)
@@ -127,16 +117,6 @@ export function subscribeToken(tokenId: string): void {
 export function unsubscribeToken(tokenId: string): void {
   subscribedTokens.delete(tokenId)
   priceCache.delete(tokenId)
-}
-
-/**
- * Get real-time best ask (buy price). Returns null if no WS data or stale.
- */
-export function getWsBestAsk(tokenId: string): number | null {
-  const entry = priceCache.get(tokenId)
-  if (!entry) return null
-  if (Date.now() - entry.updatedAt > STALE_MS) return null
-  return entry.bestAsk > 0 ? entry.bestAsk : null
 }
 
 /**
@@ -289,14 +269,6 @@ export function isUserWsConnected(): boolean {
   return userWs !== null && userWs.readyState === WebSocket.OPEN
 }
 
-export function disconnectUserWS(): void {
-  _userMarkets = []
-  if (userReconnectTimer) clearTimeout(userReconnectTimer)
-  if (userWs) {
-    userWs.close()
-    userWs = null
-  }
-}
 
 // ── User WS internal ─────────────────────────────────────────────
 
