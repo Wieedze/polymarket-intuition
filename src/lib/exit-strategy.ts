@@ -35,7 +35,7 @@ export type ExitConfig = {
 
 export const DEFAULT_CONFIG: ExitConfig = {
   takeProfitPct: 999,           // disabled — use nearResolutionThreshold instead
-  stopLossPct: 0.25,            // -25% → cut losses (was 0.40 — too generous on fast-resolving markets)
+  stopLossPct: 0.40,            // -40% → cut losses
   trailingActivatePct: 999,     // disabled — bad for binary markets
   trailingStopPct: 0.10,        // (unused when trailing disabled)
   nearResolutionThreshold: 0.85, // exit YES at 85¢+, exit NO at 15¢-
