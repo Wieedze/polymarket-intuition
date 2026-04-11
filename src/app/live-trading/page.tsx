@@ -6,85 +6,60 @@ import Link from 'next/link'
 import {
   AreaChart, Area, BarChart, Bar, LineChart, Line,
   XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
-  PieChart, Pie, Cell, ReferenceLine,
+  PieChart, Pie, Cell, ReferenceLine, ComposedChart,
 } from 'recharts'
 
-type ChartPoint = {
-  date: string
-  equity: number
-  dailyPnl: number
-  cumPnl: number
-  trades: number
-  winRate: number
-}
+// ── Types ────────────────────────────────────────────────────────
+
+type ChartPoint = { date: string; equity: number; dailyPnl: number; cumPnl: number; trades: number; winRate: number }
+type EquityDay = { day: string; balance: number; dailyPnl: number; trades: number }
 type BotEvent = { id: number; type: string; message: string; detail: string | null; createdAt: string }
 type DomainInfo = { domain: string; pnl: number; trades: number; won: number; winRate: number; avgPnl: number }
 type ExpertInfo = { expert: string; trades: number; won: number; winRate: number; pnl: number; avgPnl: number }
-type TradeInfo = {
-  title: string; side: string; entryPrice: number; curPrice: number
-  unrealized: number; expert: string; domain: string
-}
+type TradeInfo = { title: string; side: string; entryPrice: number; curPrice: number; unrealized: number; expert: string; domain: string }
 type SideInfo = { trades: number; won: number; winRate: number; pnl: number }
 type EntryInfo = { label: string; trades: number; won: number; winRate: number; expectedWinRate: number; implicitEdge: number; pnl: number }
 type ExpertTrustInfo = { expert: string; phase: string; status: string; trustLevel: number; resolvedTrades: number; winRate: number; pnl: number; reason: string }
 type GateInfo = { value: number; threshold: number; ok: boolean }
+type ClosedTrade = { title: string; side: string; entryPrice: number; pnl: number; expert: string; domain: string }
 
 type LiveData = {
-  balance: number
-  startingBalance: number
-  realizedPnl: number
-  partialExitsPnl: number
-  unrealizedPnl: number
-  tradingDays: number
-  avgHoldDays: number
-  totalInvested: number
-  totalEquity: number
-  winRate: number
-  wins: number
-  losses: number
-  openTrades: number
-  totalTrades: number
-  closedTrades: number
-  roi: number
-  chartData: ChartPoint[]
-  events: BotEvent[]
-  domains: DomainInfo[]
-  experts: ExpertInfo[]
-  topOpen: TradeInfo[]
-  bestTrades: Array<{ title: string; side: string; entryPrice: number; pnl: number; expert: string; domain: string }>
-  worstTrades: Array<{ title: string; side: string; entryPrice: number; pnl: number; expert: string; domain: string }>
-  bySide: { yes: SideInfo; no: SideInfo }
-  byEntry: EntryInfo[]
+  balance: number; startingBalance: number; realizedPnl: number; partialExitsPnl: number
+  unrealizedPnl: number; tradingDays: number; avgHoldDays: number; totalInvested: number
+  totalEquity: number; winRate: number; wins: number; losses: number; openTrades: number
+  totalTrades: number; closedTrades: number; roi: number; availableCash: number
+  chartData: ChartPoint[]; equityCurve: EquityDay[]; events: BotEvent[]
+  domains: DomainInfo[]; experts: ExpertInfo[]; topOpen: TradeInfo[]
+  bestTrades: ClosedTrade[]; worstTrades: ClosedTrade[]
+  bySide: { yes: SideInfo; no: SideInfo }; byEntry: EntryInfo[]
   costs: { preCostPnl: number; totalFees: number; totalSlippage: number; feePct: number; slippagePct: number; totalDeployed: number }
-  gates: { profitFactor: GateInfo; maxConsecutiveLosses: GateInfo; avgPnlPerTrade: GateInfo; minResolvedTrades: GateInfo }
+  gates: { profitFactor: GateInfo; maxConsecutiveLosses: GateInfo; avgPnlPerTrade: GateInfo; minResolvedTrades: GateInfo; allOk: boolean }
   stats: { profitFactor: number; maxConsecutiveLosses: number; avgPnlPerTrade: number; maxDrawdown: number; significance: string; winRateCI: { lower: number; upper: number }; grossWins: number; grossLosses: number }
   expertTrust: ExpertTrustInfo[]
+  risk: { maxDrawdown: number; currentDrawdown: number; peakEquity: number; topConcentration: number; top3Concentration: number; openCount: number; cashPct: number }
 }
 
-const COLORS = {
-  bg: '#171821',
-  card: '#21222D',
-  surface: '#2B2B36',
-  teal: '#A9DFD8',
-  amber: '#FCB859',
-  pink: '#F2C8ED',
-  red: '#EA1701',
-  green: '#029F04',
-  blue: '#28AEF3',
-  textMuted: '#87888C',
-  textLight: '#D2D2D2',
-  live: '#3B82F6',
-  liveGlow: '#60A5FA',
+// ── Design ───────────────────────────────────────────────────────
+
+const C = {
+  bg: '#171821', card: '#21222D', surface: '#2B2B36',
+  teal: '#A9DFD8', amber: '#FCB859', pink: '#F2C8ED',
+  red: '#EA1701', green: '#029F04', blue: '#28AEF3',
+  muted: '#87888C', text: '#D2D2D2',
+  live: '#3B82F6', liveGlow: '#60A5FA',
 }
 
-const DOMAIN_PIE_COLORS: Record<string, string> = {
-  sports: COLORS.teal, weather: COLORS.blue, politics: '#6366f1',
-  crypto: COLORS.amber, economics: '#eab308', science: '#06b6d4',
-  culture: COLORS.pink, 'ai-tech': '#8b5cf6', geopolitics: COLORS.red,
+const DOMAIN_COLORS: Record<string, string> = {
+  sports: C.teal, weather: C.blue, politics: '#6366f1',
+  crypto: C.amber, economics: '#eab308', science: '#06b6d4',
+  culture: C.pink, 'ai-tech': '#8b5cf6', geopolitics: C.red,
   unknown: '#52525b',
 }
 
-function pnlStr(n: number): string { return `${n >= 0 ? '+' : '-'}$${Math.abs(n).toFixed(2)}` }
+function pnl(n: number): string { return `${n >= 0 ? '+' : '-'}$${Math.abs(n).toFixed(2)}` }
+function pct(n: number): string { return `${(n * 100).toFixed(1)}%` }
+
+// ── Page ─────────────────────────────────────────────────────────
 
 export default function LiveTrading(): React.ReactElement {
   const [data, setData] = useState<LiveData | null>(null)
@@ -92,82 +67,71 @@ export default function LiveTrading(): React.ReactElement {
   const { tick } = useRefresh()
 
   useEffect(() => {
-    function loadData(): void {
-      fetch('/api/snapshot?mode=live')
-        .then(async (res) => {
-          if (!res.ok) return null
-          const snap = await res.json()
-          const p = snap.portfolio
-          return {
-            balance: p.currentBalance,
-            startingBalance: p.startingBalance,
-            realizedPnl: p.realizedPnl,
-            partialExitsPnl: p.partialExitsPnl,
-            unrealizedPnl: p.unrealizedPnl,
-            tradingDays: p.tradingDays,
-            avgHoldDays: p.avgHoldDays,
-            totalInvested: p.totalInvested,
-            totalEquity: p.totalEquity,
-            winRate: p.winRate,
-            wins: p.wins,
-            losses: p.losses,
-            openTrades: p.openTrades,
-            totalTrades: p.totalTrades,
-            closedTrades: p.closedTrades ?? 0,
-            roi: p.roi,
-            chartData: snap.chartData,
-            events: snap.events,
-            domains: snap.byDomain,
-            experts: snap.byExpert ?? [],
-            topOpen: snap.topOpen ?? [],
-            bestTrades: snap.bestTrades ?? [],
-            worstTrades: snap.worstTrades ?? [],
-            bySide: snap.bySide ?? { yes: { trades: 0, won: 0, winRate: 0, pnl: 0 }, no: { trades: 0, won: 0, winRate: 0, pnl: 0 } },
-            byEntry: snap.byEntry ?? [],
-            costs: snap.costs ?? { preCostPnl: 0, totalFees: 0, totalSlippage: 0, feePct: 0, slippagePct: 0, totalDeployed: 0 },
-            gates: snap.gates ?? {},
-            stats: snap.stats ?? {},
-            expertTrust: snap.expertTrust ?? [],
-          } as LiveData
-        })
-        .then((d) => { if (d) setData(d) })
-        .catch(() => null)
-        .finally(() => setLoading(false))
-    }
-    loadData()
+    fetch('/api/snapshot?mode=live')
+      .then(async (res) => {
+        if (!res.ok) return null
+        const s = await res.json()
+        const p = s.portfolio
+        return {
+          balance: p.currentBalance, startingBalance: p.startingBalance,
+          realizedPnl: p.realizedPnl, partialExitsPnl: p.partialExitsPnl,
+          unrealizedPnl: p.unrealizedPnl, tradingDays: p.tradingDays,
+          avgHoldDays: p.avgHoldDays, totalInvested: p.totalInvested,
+          totalEquity: p.totalEquity, winRate: p.winRate,
+          wins: p.wins, losses: p.losses, openTrades: p.openTrades,
+          totalTrades: p.totalTrades, closedTrades: p.closedTrades ?? 0,
+          roi: p.roi, availableCash: p.availableCash ?? 0,
+          chartData: s.chartData, equityCurve: s.equityCurve ?? [],
+          events: s.events, domains: s.byDomain,
+          experts: s.byExpert ?? [], topOpen: s.topOpen ?? [],
+          bestTrades: s.bestTrades ?? [], worstTrades: s.worstTrades ?? [],
+          bySide: s.bySide ?? { yes: { trades: 0, won: 0, winRate: 0, pnl: 0 }, no: { trades: 0, won: 0, winRate: 0, pnl: 0 } },
+          byEntry: s.byEntry ?? [], costs: s.costs ?? {},
+          gates: s.gates ?? {}, stats: s.stats ?? {},
+          expertTrust: s.expertTrust ?? [],
+          risk: s.risk ?? { maxDrawdown: 0, currentDrawdown: 0, peakEquity: 0, topConcentration: 0, top3Concentration: 0, openCount: 0, cashPct: 1 },
+        } as LiveData
+      })
+      .then((d) => { if (d) setData(d) })
+      .catch(() => null)
+      .finally(() => setLoading(false))
   }, [tick])
 
   if (loading) return (
-    <div className="min-h-screen flex items-center justify-center" style={{ background: COLORS.bg }}>
-      <div className="w-8 h-8 border-2 border-t-transparent rounded-full animate-spin" style={{ borderColor: COLORS.live, borderTopColor: 'transparent' }} />
+    <div className="min-h-screen flex items-center justify-center" style={{ background: C.bg }}>
+      <div className="w-8 h-8 border-2 border-t-transparent rounded-full animate-spin" style={{ borderColor: C.live, borderTopColor: 'transparent' }} />
     </div>
   )
 
   if (!data || data.totalTrades === 0) return (
-    <div className="min-h-screen flex items-center justify-center" style={{ background: COLORS.bg }}>
+    <div className="min-h-screen flex items-center justify-center" style={{ background: C.bg }}>
       <div className="text-center">
         <div className="text-4xl mb-4">🔴</div>
         <h2 className="text-lg font-bold text-white mb-2">Live Trading</h2>
-        <p className="text-sm mb-4" style={{ color: COLORS.textMuted }}>
-          No live trades yet. Start the live trader to see data here.
-        </p>
+        <p className="text-sm" style={{ color: C.muted }}>No live trades yet.</p>
       </div>
     </div>
   )
 
-  const donutData = data.domains.filter((d) => d.trades > 0).map((d) => ({
-    name: d.domain, value: d.trades
-  }))
+  // Equity curve with drawdown
+  let peak = data.startingBalance
+  const eqWithDD = data.equityCurve.map((d) => {
+    if (d.balance > peak) peak = d.balance
+    const dd = peak > 0 ? ((peak - d.balance) / peak) * 100 : 0
+    return { ...d, drawdown: -dd, date: d.day.slice(5) }
+  })
+
+  const donutData = data.domains.filter((d) => d.trades > 0).map((d) => ({ name: d.domain, value: d.trades }))
 
   return (
-    <div className="min-h-screen" style={{ background: COLORS.bg, color: COLORS.textLight }}>
+    <div className="min-h-screen" style={{ background: C.bg, color: C.text }}>
       <div className="flex">
         {/* Sidebar */}
-        <aside className="hidden lg:flex flex-col w-56 min-h-screen p-5 border-r" style={{ background: COLORS.card, borderColor: COLORS.surface }}>
+        <aside className="hidden lg:flex flex-col w-56 min-h-screen p-5 border-r" style={{ background: C.card, borderColor: C.surface }}>
           <div className="mb-10">
             <h1 className="text-lg font-bold text-white">Copy Trader</h1>
-            <p className="text-xs mt-1" style={{ color: COLORS.live }}>
-              <span className="inline-block w-2 h-2 rounded-full mr-1 animate-pulse" style={{ background: COLORS.live }} />
+            <p className="text-xs mt-1" style={{ color: C.live }}>
+              <span className="inline-block w-2 h-2 rounded-full mr-1 animate-pulse" style={{ background: C.live }} />
               Live Trading
             </p>
           </div>
@@ -178,372 +142,291 @@ export default function LiveTrading(): React.ReactElement {
             <SideLink href="/live-trading" active>Live Trading</SideLink>
             <SideLink href="/activity">Activity</SideLink>
             <SideLink href="/leaderboard">Leaderboard</SideLink>
-            <SideLink href="/rules">Rules</SideLink>
             <SideLink href="/settings">Settings</SideLink>
           </nav>
         </aside>
 
-        {/* Main */}
-        <main className="flex-1 p-6 lg:p-8">
-          {/* Mobile nav */}
-          <div className="lg:hidden flex items-center justify-between mb-6">
-            <div className="flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full animate-pulse" style={{ background: COLORS.live }} />
-              <h1 className="text-lg font-bold text-white">Live Trading</h1>
-            </div>
-            <div className="flex gap-2">
-              <Link href="/" className="text-xs px-3 py-1 rounded-lg" style={{ background: COLORS.surface, color: COLORS.textMuted }}>Paper</Link>
-              <Link href="/paper-trading" className="text-xs px-3 py-1 rounded-lg" style={{ background: COLORS.surface, color: COLORS.textMuted }}>Trades</Link>
-            </div>
-          </div>
+        <main className="flex-1 p-6 lg:p-8 max-w-[1400px]">
 
-          {/* Live banner */}
-          <div className="rounded-xl p-4 mb-6 flex items-center gap-3" style={{ background: `${COLORS.live}15`, border: `1px solid ${COLORS.live}40` }}>
-            <span className="w-3 h-3 rounded-full animate-pulse" style={{ background: COLORS.live }} />
-            <div>
-              <span className="text-sm font-medium" style={{ color: COLORS.live }}>Real Money Mode</span>
-              <span className="text-xs ml-3" style={{ color: COLORS.textMuted }}>
-                Started at ${data.startingBalance.toFixed(0)} | {data.tradingDays.toFixed(1)} days | {data.totalTrades} total trades
-              </span>
-            </div>
-          </div>
-
-          {/* Top stats */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4 mb-8">
-            <BigStat
-              label="Live Equity"
-              value={`$${data.totalEquity.toFixed(2)}`}
-              sub={`${data.roi >= 0 ? '+' : ''}${(data.roi * 100).toFixed(1)}% ROI`}
-              color={data.totalEquity >= data.startingBalance ? COLORS.teal : COLORS.red}
-            />
-            <BigStat
-              label="Realized P&L"
-              value={pnlStr(data.realizedPnl)}
-              sub={`avg hold ${data.avgHoldDays < 1 ? `${(data.avgHoldDays * 24).toFixed(0)}h` : `${data.avgHoldDays.toFixed(1)}d`}`}
-              color={data.realizedPnl >= 0 ? COLORS.green : COLORS.red}
-            />
-            <BigStat
-              label="Win Rate"
-              value={data.wins + data.losses > 0 ? `${(data.winRate * 100).toFixed(0)}%` : '--'}
-              sub={`${data.wins}W / ${data.losses}L`}
-              color={COLORS.amber}
-            />
-            <BigStat
-              label="Open Positions"
-              value={`${data.openTrades}`}
-              sub={`$${data.totalInvested.toFixed(2)} deployed`}
-              color={COLORS.blue}
-            />
-            <BigStat
-              label="Unrealized"
-              value={pnlStr(data.unrealizedPnl)}
-              sub="after 2% exit fee"
-              color={data.unrealizedPnl >= 0 ? COLORS.teal : COLORS.red}
-            />
-          </div>
-
-          {/* Cost waterfall + Edge quality */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
-            {/* Cost waterfall */}
-            <div className="rounded-xl p-5" style={{ background: COLORS.card }}>
-              <h2 className="text-sm font-medium mb-4" style={{ color: COLORS.textMuted }}>P&L BREAKDOWN</h2>
-              <div className="flex items-center gap-3 text-xs">
-                <div className="text-center p-3 rounded-lg" style={{ background: COLORS.surface }}>
-                  <div style={{ color: COLORS.textMuted }}>Gross P&L</div>
-                  <div className="text-lg font-bold mt-1" style={{ color: data.costs.preCostPnl >= 0 ? COLORS.teal : COLORS.red }}>
-                    {pnlStr(data.costs.preCostPnl)}
-                  </div>
-                  <div className="text-[10px]" style={{ color: COLORS.textMuted }}>before fees</div>
-                </div>
-                <span style={{ color: COLORS.textMuted }}>-</span>
-                <div className="text-center p-3 rounded-lg" style={{ background: COLORS.surface, border: `1px solid ${COLORS.amber}40` }}>
-                  <div style={{ color: COLORS.textMuted }}>Fees (2% taker)</div>
-                  <div className="text-lg font-bold mt-1" style={{ color: COLORS.amber }}>
-                    -${data.costs.totalFees.toFixed(2)}
-                  </div>
-                  <div className="text-[10px]" style={{ color: COLORS.textMuted }}>{(data.costs.feePct * 100).toFixed(1)}% of deployed</div>
-                </div>
-                <span style={{ color: COLORS.textMuted }}>=</span>
-                <div className="text-center p-3 rounded-lg" style={{ background: COLORS.surface, border: `1px solid ${COLORS.live}40` }}>
-                  <div style={{ color: COLORS.textMuted }}>Net realized P&L</div>
-                  <div className="text-lg font-bold mt-1" style={{ color: data.realizedPnl >= 0 ? COLORS.teal : COLORS.red }}>
-                    {pnlStr(data.realizedPnl)}
-                  </div>
-                  <div className="text-[10px]" style={{ color: COLORS.textMuted }}>real execution price</div>
-                </div>
-              </div>
-            </div>
-
-            {/* Edge quality + Risk */}
-            <div className="rounded-xl p-5" style={{ background: COLORS.card }}>
-              <h2 className="text-sm font-medium mb-4" style={{ color: COLORS.textMuted }}>EDGE & RISK</h2>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <div className="text-xs" style={{ color: COLORS.textMuted }}>Profit Factor</div>
-                  <div className="text-xl font-bold" style={{ color: data.stats.profitFactor >= 1.3 ? COLORS.green : COLORS.amber }}>
-                    {data.stats.profitFactor?.toFixed(2) ?? '--'}
-                  </div>
-                  <div className="text-[10px]" style={{ color: data.gates?.profitFactor?.ok ? COLORS.green : COLORS.red }}>
-                    {data.gates?.profitFactor?.ok ? '✅' : '❌'} need ≥ 1.30
-                  </div>
-                </div>
-                <div>
-                  <div className="text-xs" style={{ color: COLORS.textMuted }}>Max Drawdown</div>
-                  <div className="text-xl font-bold" style={{ color: data.stats.maxDrawdown > 0.20 ? COLORS.red : COLORS.teal }}>
-                    -{(data.stats.maxDrawdown * 100).toFixed(1)}%
-                  </div>
-                  <div className="text-[10px]" style={{ color: COLORS.textMuted }}>from peak equity</div>
-                </div>
-                <div>
-                  <div className="text-xs" style={{ color: COLORS.textMuted }}>Avg P&L / trade</div>
-                  <div className="text-xl font-bold" style={{ color: data.stats.avgPnlPerTrade >= 0 ? COLORS.green : COLORS.red }}>
-                    {pnlStr(data.stats.avgPnlPerTrade ?? 0)}
-                  </div>
-                  <div className="text-[10px]" style={{ color: data.gates?.avgPnlPerTrade?.ok ? COLORS.green : COLORS.red }}>
-                    {data.gates?.avgPnlPerTrade?.ok ? '✅' : '❌'} need {'>'}  +$5
-                  </div>
-                </div>
-                <div>
-                  <div className="text-xs" style={{ color: COLORS.textMuted }}>Max Consec. Losses</div>
-                  <div className="text-xl font-bold" style={{ color: data.stats.maxConsecutiveLosses <= 15 ? COLORS.teal : COLORS.red }}>
-                    {data.stats.maxConsecutiveLosses ?? '--'}
-                  </div>
-                  <div className="text-[10px]" style={{ color: data.gates?.maxConsecutiveLosses?.ok ? COLORS.green : COLORS.red }}>
-                    {data.gates?.maxConsecutiveLosses?.ok ? '✅' : '❌'} need ≤ 15
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Charts */}
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
-            {/* Equity curve */}
-            <div className="lg:col-span-2 rounded-xl p-5" style={{ background: COLORS.card }}>
-              <div className="flex items-center justify-between mb-1">
-                <h2 className="text-sm font-medium" style={{ color: COLORS.textMuted }}>Live Equity Curve</h2>
-                <span className="text-lg font-bold" style={{ color: data.totalEquity >= data.startingBalance ? COLORS.teal : COLORS.red }}>
-                  ${data.totalEquity.toFixed(2)}
+          {/* ═══ 1. STATUS BAR ═══ */}
+          <div className="rounded-xl p-4 mb-6 flex flex-wrap items-center justify-between gap-4" style={{ background: `${C.live}10`, border: `1px solid ${C.live}30` }}>
+            <div className="flex items-center gap-3">
+              <span className="w-3 h-3 rounded-full animate-pulse" style={{ background: C.live }} />
+              <div>
+                <span className="text-2xl font-bold text-white">${data.totalEquity.toFixed(2)}</span>
+                <span className="text-sm ml-2" style={{ color: data.roi >= 0 ? C.green : C.red }}>
+                  {data.roi >= 0 ? '+' : ''}{(data.roi * 100).toFixed(1)}%
                 </span>
               </div>
-              <p className="text-xs mb-3" style={{ color: COLORS.textMuted }}>Real money portfolio (started at ${data.startingBalance.toFixed(0)})</p>
-              {data.chartData.length > 0 ? (
-                <ResponsiveContainer width="100%" height={200}>
-                  <AreaChart data={data.chartData} margin={{ top: 5, right: 10, bottom: 5, left: 10 }}>
+            </div>
+            <div className="flex items-center gap-6 text-xs">
+              <div className="text-center">
+                <div style={{ color: C.muted }}>Realized</div>
+                <div className="font-bold" style={{ color: data.realizedPnl >= 0 ? C.green : C.red }}>{pnl(data.realizedPnl)}</div>
+              </div>
+              <div className="text-center">
+                <div style={{ color: C.muted }}>Unrealized</div>
+                <div className="font-bold" style={{ color: data.unrealizedPnl >= 0 ? C.teal : C.red }}>{pnl(data.unrealizedPnl)}</div>
+              </div>
+              <div className="text-center">
+                <div style={{ color: C.muted }}>Cash</div>
+                <div className="font-bold" style={{ color: C.text }}>${data.availableCash.toFixed(2)}</div>
+              </div>
+              <div className="text-center">
+                <div style={{ color: C.muted }}>Win Rate</div>
+                <div className="font-bold" style={{ color: C.amber }}>{(data.winRate * 100).toFixed(0)}%</div>
+              </div>
+              <div className="text-center">
+                <div style={{ color: C.muted }}>Open</div>
+                <div className="font-bold" style={{ color: C.blue }}>{data.openTrades}</div>
+              </div>
+              <div className="text-center">
+                <div style={{ color: C.muted }}>Trades</div>
+                <div className="font-bold" style={{ color: C.text }}>{data.totalTrades}</div>
+              </div>
+            </div>
+          </div>
+
+          {/* ═══ 2. RISK GAUGES ═══ */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-6">
+            <RiskGauge
+              label="Drawdown"
+              value={`-${(data.risk.currentDrawdown * 100).toFixed(1)}%`}
+              sub={`peak $${data.risk.peakEquity.toFixed(0)}`}
+              level={data.risk.currentDrawdown > 0.15 ? 'danger' : data.risk.currentDrawdown > 0.08 ? 'warn' : 'ok'}
+            />
+            <RiskGauge
+              label="Max Drawdown"
+              value={`-${(data.risk.maxDrawdown * 100).toFixed(1)}%`}
+              sub="all time"
+              level={data.risk.maxDrawdown > 0.20 ? 'danger' : data.risk.maxDrawdown > 0.12 ? 'warn' : 'ok'}
+            />
+            <RiskGauge
+              label="Loss Streak"
+              value={`${data.stats.maxConsecutiveLosses ?? 0}`}
+              sub="consecutive"
+              level={(data.stats.maxConsecutiveLosses ?? 0) > 15 ? 'danger' : (data.stats.maxConsecutiveLosses ?? 0) > 8 ? 'warn' : 'ok'}
+            />
+            <RiskGauge
+              label="Profit Factor"
+              value={data.stats.profitFactor?.toFixed(2) ?? '--'}
+              sub="wins / losses"
+              level={(data.stats.profitFactor ?? 0) >= 1.3 ? 'ok' : (data.stats.profitFactor ?? 0) >= 1.0 ? 'warn' : 'danger'}
+            />
+            <RiskGauge
+              label="Concentration"
+              value={pct(data.risk.topConcentration)}
+              sub="top 1 position"
+              level={data.risk.topConcentration > 0.30 ? 'danger' : data.risk.topConcentration > 0.15 ? 'warn' : 'ok'}
+            />
+            <RiskGauge
+              label="Cash Reserve"
+              value={pct(data.risk.cashPct)}
+              sub="available"
+              level={data.risk.cashPct < 0.10 ? 'danger' : data.risk.cashPct < 0.30 ? 'warn' : 'ok'}
+            />
+          </div>
+
+          {/* ═══ 3. EQUITY CURVE + DRAWDOWN ═══ */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
+            <div className="lg:col-span-2 rounded-xl p-5" style={{ background: C.card }}>
+              <div className="flex items-center justify-between mb-1">
+                <h2 className="text-sm font-medium" style={{ color: C.muted }}>Equity Curve + Drawdown</h2>
+                <span className="text-xs" style={{ color: C.muted }}>started ${data.startingBalance.toFixed(0)} | {data.tradingDays.toFixed(1)}d</span>
+              </div>
+              {eqWithDD.length > 0 ? (
+                <ResponsiveContainer width="100%" height={220}>
+                  <ComposedChart data={eqWithDD} margin={{ top: 5, right: 10, bottom: 5, left: 10 }}>
                     <defs>
-                      <linearGradient id="liveEqFill" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor={COLORS.live} stopOpacity={0.3} />
-                        <stop offset="100%" stopColor={COLORS.live} stopOpacity={0} />
+                      <linearGradient id="eqFill" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor={C.live} stopOpacity={0.3} />
+                        <stop offset="100%" stopColor={C.live} stopOpacity={0} />
                       </linearGradient>
                     </defs>
-                    <CartesianGrid strokeDasharray="3 3" stroke={COLORS.surface} />
-                    <XAxis dataKey="date" tickFormatter={(d: string) => d.slice(5)} tick={{ fill: COLORS.textMuted, fontSize: 10 }} axisLine={false} tickLine={false} />
-                    <YAxis tickFormatter={(v: number) => `$${v.toFixed(0)}`} tick={{ fill: COLORS.textMuted, fontSize: 10 }} axisLine={false} tickLine={false} width={45} />
-                    <Tooltip contentStyle={{ background: COLORS.surface, border: 'none', borderRadius: 8, fontSize: 12 }} formatter={(value) => [`$${(typeof value === 'number' ? value : Number(value ?? 0)).toFixed(2)}`, 'Equity']} />
-                    <ReferenceLine y={data.startingBalance} stroke={COLORS.textMuted} strokeDasharray="3 3" />
-                    <Area type="monotone" dataKey="equity" stroke={COLORS.live} fill="url(#liveEqFill)" strokeWidth={2} dot={false} />
-                  </AreaChart>
+                    <CartesianGrid strokeDasharray="3 3" stroke={C.surface} />
+                    <XAxis dataKey="date" tick={{ fill: C.muted, fontSize: 10 }} axisLine={false} tickLine={false} />
+                    <YAxis yAxisId="eq" tickFormatter={(v: number) => `$${v}`} tick={{ fill: C.muted, fontSize: 10 }} axisLine={false} tickLine={false} width={45} />
+                    <YAxis yAxisId="dd" orientation="right" tickFormatter={(v: number) => `${v}%`} tick={{ fill: C.muted, fontSize: 10 }} axisLine={false} tickLine={false} width={35} domain={[-50, 0]} />
+                    <Tooltip contentStyle={{ background: C.surface, border: 'none', borderRadius: 8, fontSize: 12 }} />
+                    <ReferenceLine yAxisId="eq" y={data.startingBalance} stroke={C.muted} strokeDasharray="3 3" />
+                    <Area yAxisId="eq" type="monotone" dataKey="balance" stroke={C.live} fill="url(#eqFill)" strokeWidth={2} dot={false} />
+                    <Bar yAxisId="dd" dataKey="drawdown" fill={C.red} fillOpacity={0.3} radius={[2, 2, 0, 0]} />
+                  </ComposedChart>
                 </ResponsiveContainer>
               ) : (
-                <div className="h-[200px] flex items-center justify-center text-sm" style={{ color: COLORS.textMuted }}>Chart appears after trades resolve</div>
+                <div className="h-[220px] flex items-center justify-center text-sm" style={{ color: C.muted }}>Chart appears after trades resolve</div>
               )}
             </div>
 
             {/* Domain donut */}
-            <div className="rounded-xl p-5" style={{ background: COLORS.card }}>
-              <h2 className="text-sm font-medium mb-3" style={{ color: COLORS.textMuted }}>Domains</h2>
+            <div className="rounded-xl p-5" style={{ background: C.card }}>
+              <h2 className="text-sm font-medium mb-3" style={{ color: C.muted }}>Domain Allocation</h2>
               {donutData.length > 0 ? (
                 <>
-                  <ResponsiveContainer width="100%" height={130}>
+                  <ResponsiveContainer width="100%" height={120}>
                     <PieChart>
-                      <Pie data={donutData} cx="50%" cy="50%" innerRadius={38} outerRadius={58} paddingAngle={3} dataKey="value">
-                        {donutData.map((entry) => (
-                          <Cell key={entry.name} fill={DOMAIN_PIE_COLORS[entry.name] ?? '#52525b'} />
-                        ))}
+                      <Pie data={donutData} cx="50%" cy="50%" innerRadius={35} outerRadius={55} paddingAngle={3} dataKey="value">
+                        {donutData.map((e) => <Cell key={e.name} fill={DOMAIN_COLORS[e.name] ?? '#52525b'} />)}
                       </Pie>
                     </PieChart>
                   </ResponsiveContainer>
-                  <div className="space-y-2 mt-2">
+                  <div className="space-y-1.5 mt-2">
                     {data.domains.slice(0, 6).map((d) => (
                       <div key={d.domain} className="flex items-center justify-between text-xs">
                         <div className="flex items-center gap-2">
-                          <span className="w-2 h-2 rounded-full" style={{ background: DOMAIN_PIE_COLORS[d.domain] ?? '#52525b' }} />
-                          <span className="capitalize" style={{ color: COLORS.textLight }}>{d.domain}</span>
-                          <span style={{ color: COLORS.textMuted }}>{d.trades}t</span>
+                          <span className="w-2 h-2 rounded-full" style={{ background: DOMAIN_COLORS[d.domain] ?? '#52525b' }} />
+                          <span className="capitalize">{d.domain}</span>
+                          <span style={{ color: C.muted }}>{d.trades}t / {(d.winRate * 100).toFixed(0)}%</span>
                         </div>
-                        <span style={{ color: d.pnl >= 0 ? COLORS.teal : COLORS.red }}>{pnlStr(d.pnl)}</span>
+                        <span style={{ color: d.pnl >= 0 ? C.green : C.red }}>{pnl(d.pnl)}</span>
                       </div>
                     ))}
                   </div>
                 </>
               ) : (
-                <div className="h-[200px] flex items-center justify-center text-sm" style={{ color: COLORS.textMuted }}>No data yet</div>
+                <div className="h-[200px] flex items-center justify-center text-sm" style={{ color: C.muted }}>No data</div>
               )}
             </div>
           </div>
 
-          {/* Daily PnL + Rolling Win Rate */}
+          {/* ═══ 4. OPEN POSITIONS ═══ */}
+          {data.topOpen.length > 0 && (
+            <div className="rounded-xl p-5 mb-6" style={{ background: C.card }}>
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-sm font-medium" style={{ color: C.muted }}>Open Positions</h2>
+                <span className="text-xs px-2 py-1 rounded" style={{ background: C.surface, color: C.live }}>{data.openTrades} active / ${data.totalInvested.toFixed(2)} deployed</span>
+              </div>
+              <table className="w-full text-xs">
+                <thead>
+                  <tr style={{ color: C.muted }}>
+                    <th className="text-left pb-2">Market</th>
+                    <th className="text-left pb-2">Side</th>
+                    <th className="text-left pb-2">Expert</th>
+                    <th className="text-right pb-2">Entry</th>
+                    <th className="text-right pb-2">Now</th>
+                    <th className="text-right pb-2">P&L</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.topOpen.map((t, i) => (
+                    <tr key={i} className="border-t" style={{ borderColor: C.surface }}>
+                      <td className="py-2 max-w-[250px] truncate">{t.title}</td>
+                      <td className="py-2">
+                        <span className="px-1.5 py-0.5 rounded text-[10px] font-bold" style={{
+                          background: t.side === 'YES' ? `${C.green}20` : `${C.red}20`,
+                          color: t.side === 'YES' ? C.green : C.red,
+                        }}>{t.side}</span>
+                      </td>
+                      <td className="py-2" style={{ color: C.muted }}>{t.expert}</td>
+                      <td className="py-2 text-right">{(t.entryPrice * 100).toFixed(0)}¢</td>
+                      <td className="py-2 text-right">{(t.curPrice * 100).toFixed(0)}¢</td>
+                      <td className="py-2 text-right font-medium" style={{ color: t.unrealized >= 0 ? C.green : C.red }}>{pnl(t.unrealized)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* ═══ 5. P&L + EDGE ═══ */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+            {/* P&L Breakdown */}
+            <div className="rounded-xl p-5" style={{ background: C.card }}>
+              <h2 className="text-sm font-medium mb-4" style={{ color: C.muted }}>P&L BREAKDOWN</h2>
+              <div className="flex items-center gap-3 text-xs flex-wrap">
+                <MetricBox label="Gross P&L" value={pnl(data.costs.preCostPnl)} color={data.costs.preCostPnl >= 0 ? C.teal : C.red} sub="before fees" />
+                <span style={{ color: C.muted }}>-</span>
+                <MetricBox label="Fees (2%)" value={`-$${data.costs.totalFees.toFixed(2)}`} color={C.amber} sub={`${(data.costs.feePct * 100).toFixed(1)}% of deployed`} />
+                <span style={{ color: C.muted }}>=</span>
+                <MetricBox label="Net P&L" value={pnl(data.realizedPnl)} color={data.realizedPnl >= 0 ? C.teal : C.red} sub="real execution" highlight />
+              </div>
+            </div>
+
+            {/* Entry Price Edge */}
+            <div className="rounded-xl p-5" style={{ background: C.card }}>
+              <h2 className="text-sm font-medium mb-4" style={{ color: C.muted }}>ENTRY PRICE EDGE</h2>
+              {data.byEntry.length > 0 ? (
+                <div className="space-y-3">
+                  {data.byEntry.map((b) => (
+                    <div key={b.label}>
+                      <div className="flex justify-between text-xs mb-1">
+                        <span>{b.label}</span>
+                        <span style={{ color: b.pnl >= 0 ? C.green : C.red }}>{pnl(b.pnl)} / {b.trades}t</span>
+                      </div>
+                      <div className="flex items-center gap-2 text-[10px]">
+                        <div className="flex-1 h-2 rounded-full overflow-hidden" style={{ background: C.surface }}>
+                          <div className="h-full rounded-full" style={{
+                            width: `${Math.min(b.winRate * 100, 100)}%`,
+                            background: b.implicitEdge >= 0 ? C.green : C.red,
+                          }} />
+                        </div>
+                        <span style={{ color: b.implicitEdge >= 0 ? C.green : C.red }}>
+                          {b.implicitEdge >= 0 ? '+' : ''}{(b.implicitEdge * 100).toFixed(0)}pts
+                        </span>
+                      </div>
+                      <div className="text-[10px] mt-0.5" style={{ color: C.muted }}>
+                        expected {(b.expectedWinRate * 100).toFixed(0)}% / actual {(b.winRate * 100).toFixed(0)}%
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-sm py-4 text-center" style={{ color: C.muted }}>Not enough data</div>
+              )}
+            </div>
+          </div>
+
+          {/* ═══ 6. DAILY P&L + WIN RATE ═══ */}
           {data.chartData.length > 0 && (
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
-              <div className="rounded-xl p-5" style={{ background: COLORS.card }}>
-                <h2 className="text-sm font-medium mb-1" style={{ color: COLORS.textMuted }}>Daily P&L</h2>
-                <ResponsiveContainer width="100%" height={160}>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+              <div className="rounded-xl p-5" style={{ background: C.card }}>
+                <h2 className="text-sm font-medium mb-1" style={{ color: C.muted }}>Daily P&L</h2>
+                <ResponsiveContainer width="100%" height={140}>
                   <BarChart data={data.chartData} margin={{ top: 5, right: 10, bottom: 5, left: 10 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke={COLORS.surface} />
-                    <XAxis dataKey="date" tickFormatter={(d: string) => d.slice(8)} tick={{ fill: COLORS.textMuted, fontSize: 10 }} axisLine={false} tickLine={false} />
-                    <YAxis tickFormatter={(v: number) => `$${v}`} tick={{ fill: COLORS.textMuted, fontSize: 10 }} axisLine={false} tickLine={false} width={40} />
-                    <Tooltip contentStyle={{ background: COLORS.surface, border: 'none', borderRadius: 8, fontSize: 12 }} />
-                    <ReferenceLine y={0} stroke={COLORS.textMuted} />
+                    <CartesianGrid strokeDasharray="3 3" stroke={C.surface} />
+                    <XAxis dataKey="date" tickFormatter={(d: string) => d.slice(8)} tick={{ fill: C.muted, fontSize: 10 }} axisLine={false} tickLine={false} />
+                    <YAxis tickFormatter={(v: number) => `$${v}`} tick={{ fill: C.muted, fontSize: 10 }} axisLine={false} tickLine={false} width={40} />
+                    <ReferenceLine y={0} stroke={C.muted} />
                     <Bar dataKey="dailyPnl" radius={[3, 3, 0, 0]}>
-                      {data.chartData.map((entry, i) => (
-                        <Cell key={i} fill={entry.dailyPnl >= 0 ? COLORS.teal : COLORS.red} fillOpacity={0.8} />
-                      ))}
+                      {data.chartData.map((e, i) => <Cell key={i} fill={e.dailyPnl >= 0 ? C.teal : C.red} fillOpacity={0.8} />)}
                     </Bar>
                   </BarChart>
                 </ResponsiveContainer>
               </div>
-              <div className="rounded-xl p-5" style={{ background: COLORS.card }}>
-                <h2 className="text-sm font-medium mb-1" style={{ color: COLORS.textMuted }}>Win Rate (rolling 20d)</h2>
-                <ResponsiveContainer width="100%" height={160}>
+              <div className="rounded-xl p-5" style={{ background: C.card }}>
+                <h2 className="text-sm font-medium mb-1" style={{ color: C.muted }}>Win Rate (rolling 20d)</h2>
+                <ResponsiveContainer width="100%" height={140}>
                   <LineChart data={data.chartData} margin={{ top: 5, right: 10, bottom: 5, left: 10 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke={COLORS.surface} />
-                    <XAxis dataKey="date" tickFormatter={(d: string) => d.slice(8)} tick={{ fill: COLORS.textMuted, fontSize: 10 }} axisLine={false} tickLine={false} />
-                    <YAxis tickFormatter={(v: number) => `${v}%`} tick={{ fill: COLORS.textMuted, fontSize: 10 }} axisLine={false} tickLine={false} width={35} domain={[0, 100]} />
-                    <Tooltip contentStyle={{ background: COLORS.surface, border: 'none', borderRadius: 8, fontSize: 12 }} />
-                    <ReferenceLine y={50} stroke={COLORS.amber} strokeDasharray="3 3" />
-                    <Line type="monotone" dataKey="winRate" stroke={COLORS.amber} strokeWidth={2} dot={{ r: 3, fill: COLORS.amber }} />
+                    <CartesianGrid strokeDasharray="3 3" stroke={C.surface} />
+                    <XAxis dataKey="date" tickFormatter={(d: string) => d.slice(8)} tick={{ fill: C.muted, fontSize: 10 }} axisLine={false} tickLine={false} />
+                    <YAxis tickFormatter={(v: number) => `${v}%`} tick={{ fill: C.muted, fontSize: 10 }} axisLine={false} tickLine={false} width={35} domain={[0, 100]} />
+                    <ReferenceLine y={50} stroke={C.amber} strokeDasharray="3 3" />
+                    <Line type="monotone" dataKey="winRate" stroke={C.amber} strokeWidth={2} dot={{ r: 3, fill: C.amber }} />
                   </LineChart>
                 </ResponsiveContainer>
               </div>
             </div>
           )}
 
-          {/* YES vs NO + Entry Price Edge */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+          {/* ═══ 7. YES/NO + EXPERTS ═══ */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
             {/* YES vs NO */}
-            <div className="rounded-xl p-5" style={{ background: COLORS.card }}>
-              <h2 className="text-sm font-medium mb-4" style={{ color: COLORS.textMuted }}>YES VS NO</h2>
-              <div className="space-y-3">
-                <div className="flex items-center justify-between text-sm">
-                  <span className="font-bold" style={{ color: COLORS.green }}>YES</span>
-                  <span style={{ color: COLORS.textMuted }}>{data.bySide.yes.trades} trades &nbsp; WR {(data.bySide.yes.winRate * 100).toFixed(0)}%</span>
-                  <span className="font-bold" style={{ color: data.bySide.yes.pnl >= 0 ? COLORS.green : COLORS.red }}>{pnlStr(data.bySide.yes.pnl)}</span>
-                </div>
-                <div className="flex items-center justify-between text-sm">
-                  <span className="font-bold" style={{ color: COLORS.red }}>NO</span>
-                  <span style={{ color: COLORS.textMuted }}>{data.bySide.no.trades} trades &nbsp; WR {(data.bySide.no.winRate * 100).toFixed(0)}%</span>
-                  <span className="font-bold" style={{ color: data.bySide.no.pnl >= 0 ? COLORS.green : COLORS.red }}>{pnlStr(data.bySide.no.pnl)}</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Entry price edge */}
-            <div className="rounded-xl p-5" style={{ background: COLORS.card }}>
-              <h2 className="text-sm font-medium mb-4" style={{ color: COLORS.textMuted }}>ENTRY PRICE EDGE</h2>
-              {data.byEntry.length > 0 ? (
-                <div className="space-y-3">
-                  {data.byEntry.map((b) => (
-                    <div key={b.label} className="flex items-center justify-between text-xs">
-                      <div className="flex-1">
-                        <div style={{ color: COLORS.textLight }}>{b.label}</div>
-                        <div style={{ color: COLORS.textMuted }}>
-                          Expected: {(b.expectedWinRate * 100).toFixed(0)}% / Actual: {(b.winRate * 100).toFixed(0)}%
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <div className="font-bold" style={{ color: b.pnl >= 0 ? COLORS.green : COLORS.red }}>{pnlStr(b.pnl)}</div>
-                        <div style={{ color: b.implicitEdge >= 0 ? COLORS.green : COLORS.red }}>
-                          {b.implicitEdge >= 0 ? '+' : ''}{(b.implicitEdge * 100).toFixed(0)}pts edge / {b.trades}t
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="text-sm py-4 text-center" style={{ color: COLORS.textMuted }}>Not enough data</div>
-              )}
-            </div>
-          </div>
-
-          {/* Performance by Domain + Expert */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
-            {/* By Domain */}
-            <div className="rounded-xl p-5" style={{ background: COLORS.card }}>
-              <h2 className="text-sm font-medium mb-4" style={{ color: COLORS.textMuted }}>PERFORMANCE BY DOMAIN</h2>
-              <table className="w-full text-xs">
-                <thead>
-                  <tr style={{ color: COLORS.textMuted }}>
-                    <th className="text-left pb-2">Domain</th>
-                    <th className="text-right pb-2">Trades</th>
-                    <th className="text-right pb-2">WR</th>
-                    <th className="text-right pb-2">P&L</th>
-                    <th className="text-right pb-2">Avg</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.domains.map((d) => (
-                    <tr key={d.domain} className="border-t" style={{ borderColor: COLORS.surface }}>
-                      <td className="py-1.5 capitalize" style={{ color: COLORS.textLight }}>{d.domain}</td>
-                      <td className="py-1.5 text-right" style={{ color: COLORS.textMuted }}>{d.trades}</td>
-                      <td className="py-1.5 text-right" style={{ color: COLORS.textMuted }}>{(d.winRate * 100).toFixed(0)}%</td>
-                      <td className="py-1.5 text-right font-medium" style={{ color: d.pnl >= 0 ? COLORS.green : COLORS.red }}>{pnlStr(d.pnl)}</td>
-                      <td className="py-1.5 text-right" style={{ color: d.avgPnl >= 0 ? COLORS.teal : COLORS.red }}>{pnlStr(d.avgPnl)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
-            {/* By Expert */}
-            <div className="rounded-xl p-5" style={{ background: COLORS.card }}>
-              <h2 className="text-sm font-medium mb-4" style={{ color: COLORS.textMuted }}>PERFORMANCE BY EXPERT</h2>
-              <table className="w-full text-xs">
-                <thead>
-                  <tr style={{ color: COLORS.textMuted }}>
-                    <th className="text-left pb-2">Expert</th>
-                    <th className="text-right pb-2">Trades</th>
-                    <th className="text-right pb-2">WR</th>
-                    <th className="text-right pb-2">P&L</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.experts.slice(0, 15).map((e) => (
-                    <tr key={e.expert} className="border-t" style={{ borderColor: COLORS.surface }}>
-                      <td className="py-1.5 truncate max-w-[150px]" style={{ color: COLORS.textLight }}>{e.expert}</td>
-                      <td className="py-1.5 text-right" style={{ color: COLORS.textMuted }}>{e.trades}</td>
-                      <td className="py-1.5 text-right" style={{ color: COLORS.textMuted }}>{(e.winRate * 100).toFixed(0)}%</td>
-                      <td className="py-1.5 text-right font-medium" style={{ color: e.pnl >= 0 ? COLORS.green : COLORS.red }}>{pnlStr(e.pnl)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          {/* Expert Trust Levels */}
-          {data.expertTrust.length > 0 && (
-            <div className="rounded-xl p-5 mb-8" style={{ background: COLORS.card }}>
-              <h2 className="text-sm font-medium mb-4" style={{ color: COLORS.textMuted }}>EXPERT TRUST LEVELS</h2>
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                {data.expertTrust.slice(0, 12).map((t) => {
-                  const statusColor = t.status === 'active' ? COLORS.green
-                    : t.status === 'reduced' ? COLORS.amber
-                    : COLORS.red
+            <div className="rounded-xl p-5" style={{ background: C.card }}>
+              <h2 className="text-sm font-medium mb-4" style={{ color: C.muted }}>YES VS NO</h2>
+              <div className="space-y-4">
+                {(['yes', 'no'] as const).map((side) => {
+                  const s = data.bySide[side]
                   return (
-                    <div key={t.expert} className="p-3 rounded-lg text-xs" style={{ background: COLORS.surface }}>
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="font-medium truncate" style={{ color: COLORS.textLight }}>{t.expert}</span>
-                        <span className="px-1.5 py-0.5 rounded text-[10px] font-bold" style={{ background: `${statusColor}20`, color: statusColor }}>
-                          {t.status}
-                        </span>
+                    <div key={side}>
+                      <div className="flex justify-between text-sm mb-1">
+                        <span className="font-bold" style={{ color: side === 'yes' ? C.green : C.red }}>{side.toUpperCase()}</span>
+                        <span className="font-bold" style={{ color: s.pnl >= 0 ? C.green : C.red }}>{pnl(s.pnl)}</span>
                       </div>
-                      <div className="flex items-center justify-between" style={{ color: COLORS.textMuted }}>
-                        <span>{t.phase} / {t.resolvedTrades}t / WR {(t.winRate * 100).toFixed(0)}%</span>
-                        <span style={{ color: t.pnl >= 0 ? COLORS.green : COLORS.red }}>{pnlStr(t.pnl)}</span>
-                      </div>
-                      <div className="mt-1">
-                        <div className="h-1.5 rounded-full" style={{ background: COLORS.card }}>
-                          <div className="h-full rounded-full" style={{ width: `${Math.min(t.trustLevel * 100, 100)}%`, background: statusColor }} />
+                      <div className="flex items-center gap-2 text-[10px]" style={{ color: C.muted }}>
+                        <span>{s.trades}t</span>
+                        <span>WR {(s.winRate * 100).toFixed(0)}%</span>
+                        <div className="flex-1 h-1.5 rounded-full" style={{ background: C.surface }}>
+                          <div className="h-full rounded-full" style={{ width: `${s.winRate * 100}%`, background: side === 'yes' ? C.green : C.red }} />
                         </div>
                       </div>
                     </div>
@@ -551,121 +434,130 @@ export default function LiveTrading(): React.ReactElement {
                 })}
               </div>
             </div>
-          )}
 
-          {/* Open positions */}
-          {data.topOpen.length > 0 && (
-            <div className="rounded-xl p-5 mb-8" style={{ background: COLORS.card }}>
-              <h2 className="text-sm font-medium mb-4" style={{ color: COLORS.textMuted }}>Open Live Positions</h2>
-              <div className="space-y-2">
-                {data.topOpen.map((t, i) => (
-                  <div key={i} className="flex items-center justify-between text-xs py-2 border-b" style={{ borderColor: COLORS.surface }}>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="px-1.5 py-0.5 rounded text-[10px] font-bold" style={{
-                          background: t.side === 'YES' ? `${COLORS.green}20` : `${COLORS.red}20`,
-                          color: t.side === 'YES' ? COLORS.green : COLORS.red,
-                        }}>
-                          {t.side}
-                        </span>
-                        <span className="truncate" style={{ color: COLORS.textLight }}>{t.title}</span>
-                      </div>
-                      <div className="mt-1 flex items-center gap-3" style={{ color: COLORS.textMuted }}>
-                        <span>{t.domain}</span>
-                        <span>{t.expert}</span>
-                        <span>entry: {(t.entryPrice * 100).toFixed(0)}¢</span>
-                        <span>now: {(t.curPrice * 100).toFixed(0)}¢</span>
-                      </div>
-                    </div>
-                    <span className="text-sm font-medium ml-3" style={{ color: t.unrealized >= 0 ? COLORS.teal : COLORS.red }}>
-                      {pnlStr(t.unrealized)}
-                    </span>
-                  </div>
-                ))}
-              </div>
+            {/* Expert Performance */}
+            <div className="lg:col-span-2 rounded-xl p-5" style={{ background: C.card }}>
+              <h2 className="text-sm font-medium mb-3" style={{ color: C.muted }}>EXPERT PERFORMANCE</h2>
+              <table className="w-full text-xs">
+                <thead>
+                  <tr style={{ color: C.muted }}>
+                    <th className="text-left pb-2">Expert</th>
+                    <th className="text-center pb-2">Trust</th>
+                    <th className="text-right pb-2">Trades</th>
+                    <th className="text-right pb-2">WR</th>
+                    <th className="text-right pb-2">P&L</th>
+                    <th className="text-right pb-2">Avg</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.experts.slice(0, 10).map((e) => {
+                    const trust = data.expertTrust.find((t) => e.expert.includes(t.expert.slice(0, 10)) || t.expert.includes(e.expert.slice(0, 10)))
+                    const statusColor = trust?.status === 'active' ? C.green : trust?.status === 'reduced' ? C.amber : C.red
+                    return (
+                      <tr key={e.expert} className="border-t" style={{ borderColor: C.surface }}>
+                        <td className="py-1.5 truncate max-w-[120px]">{e.expert}</td>
+                        <td className="py-1.5 text-center">
+                          {trust && (
+                            <span className="px-1 py-0.5 rounded text-[9px] font-bold" style={{ background: `${statusColor}20`, color: statusColor }}>
+                              {trust.status}
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-1.5 text-right" style={{ color: C.muted }}>{e.trades}</td>
+                        <td className="py-1.5 text-right">{(e.winRate * 100).toFixed(0)}%</td>
+                        <td className="py-1.5 text-right font-medium" style={{ color: e.pnl >= 0 ? C.green : C.red }}>{pnl(e.pnl)}</td>
+                        <td className="py-1.5 text-right" style={{ color: e.avgPnl >= 0 ? C.teal : C.red }}>{pnl(e.avgPnl)}</td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
             </div>
-          )}
+          </div>
 
-          {/* Best / Worst trades */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+          {/* ═══ 8. BEST/WORST + ACTIVITY ═══ */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
             {data.bestTrades.length > 0 && (
-              <div className="rounded-xl p-5" style={{ background: COLORS.card }}>
-                <h2 className="text-sm font-medium mb-3" style={{ color: COLORS.textMuted }}>Best Live Trades</h2>
+              <div className="rounded-xl p-5" style={{ background: C.card }}>
+                <h2 className="text-sm font-medium mb-3" style={{ color: C.muted }}>Best Trades</h2>
                 {data.bestTrades.slice(0, 5).map((t, i) => (
-                  <div key={i} className="flex items-center justify-between text-xs py-2 border-b" style={{ borderColor: COLORS.surface }}>
-                    <div className="flex-1 min-w-0">
-                      <span className="truncate block" style={{ color: COLORS.textLight }}>{t.title}</span>
-                      <span style={{ color: COLORS.textMuted }}>{t.side} @ {(t.entryPrice * 100).toFixed(0)}¢ | {t.domain}</span>
-                    </div>
-                    <span className="font-medium ml-2" style={{ color: COLORS.green }}>{pnlStr(t.pnl)}</span>
+                  <div key={i} className="flex justify-between text-xs py-1.5 border-b" style={{ borderColor: C.surface }}>
+                    <div className="truncate max-w-[180px]">{t.title}</div>
+                    <span className="font-medium ml-2" style={{ color: C.green }}>{pnl(t.pnl)}</span>
                   </div>
                 ))}
               </div>
             )}
             {data.worstTrades.length > 0 && (
-              <div className="rounded-xl p-5" style={{ background: COLORS.card }}>
-                <h2 className="text-sm font-medium mb-3" style={{ color: COLORS.textMuted }}>Worst Live Trades</h2>
+              <div className="rounded-xl p-5" style={{ background: C.card }}>
+                <h2 className="text-sm font-medium mb-3" style={{ color: C.muted }}>Worst Trades</h2>
                 {data.worstTrades.slice(0, 5).map((t, i) => (
-                  <div key={i} className="flex items-center justify-between text-xs py-2 border-b" style={{ borderColor: COLORS.surface }}>
-                    <div className="flex-1 min-w-0">
-                      <span className="truncate block" style={{ color: COLORS.textLight }}>{t.title}</span>
-                      <span style={{ color: COLORS.textMuted }}>{t.side} @ {(t.entryPrice * 100).toFixed(0)}¢ | {t.domain}</span>
-                    </div>
-                    <span className="font-medium ml-2" style={{ color: COLORS.red }}>{pnlStr(t.pnl)}</span>
+                  <div key={i} className="flex justify-between text-xs py-1.5 border-b" style={{ borderColor: C.surface }}>
+                    <div className="truncate max-w-[180px]">{t.title}</div>
+                    <span className="font-medium ml-2" style={{ color: C.red }}>{pnl(t.pnl)}</span>
                   </div>
                 ))}
               </div>
             )}
-          </div>
-
-          {/* Events */}
-          <div className="rounded-xl p-5" style={{ background: COLORS.card }}>
-            <h2 className="text-sm font-medium mb-4" style={{ color: COLORS.textMuted }}>Live Activity</h2>
-            <div className="space-y-3">
-              {data.events.length > 0 ? data.events.slice(0, 15).map((e) => (
-                <div key={e.id} className="flex gap-3 text-xs py-2 border-b" style={{ borderColor: COLORS.surface }}>
-                  <span className="text-base">{e.type.startsWith('live') ? '🔴' : '📋'}</span>
-                  <div className="flex-1 min-w-0">
-                    <div style={{ color: COLORS.textLight }}>{e.message}</div>
-                    {e.detail && <div className="mt-0.5 truncate" style={{ color: COLORS.textMuted }}>{e.detail}</div>}
+            <div className="rounded-xl p-5" style={{ background: C.card }}>
+              <h2 className="text-sm font-medium mb-3" style={{ color: C.muted }}>Activity</h2>
+              <div className="space-y-2">
+                {data.events.length > 0 ? data.events.slice(0, 8).map((e) => (
+                  <div key={e.id} className="text-xs py-1 border-b" style={{ borderColor: C.surface }}>
+                    <div className="flex justify-between">
+                      <span className="truncate" style={{ color: C.text }}>{e.message.slice(0, 60)}</span>
+                      <span className="ml-2 shrink-0" style={{ color: C.muted }}>{e.createdAt.slice(11, 16)}</span>
+                    </div>
                   </div>
-                  <span style={{ color: COLORS.textMuted }}>{e.createdAt.slice(11, 16)}</span>
-                </div>
-              )) : (
-                <div className="text-sm py-8 text-center" style={{ color: COLORS.textMuted }}>
-                  Live activity will appear once the bot starts trading
-                </div>
-              )}
+                )) : (
+                  <div className="text-sm py-4 text-center" style={{ color: C.muted }}>No activity</div>
+                )}
+              </div>
             </div>
           </div>
+
         </main>
       </div>
     </div>
   )
 }
 
-function BigStat({ label, value, sub, color }: {
-  label: string; value: string; color: string; sub?: string
+// ── Components ───────────────────────────────────────────────────
+
+function RiskGauge({ label, value, sub, level }: {
+  label: string; value: string; sub: string; level: 'ok' | 'warn' | 'danger'
+}): React.ReactElement {
+  const color = level === 'ok' ? C.green : level === 'warn' ? C.amber : C.red
+  const bg = level === 'ok' ? `${C.green}10` : level === 'warn' ? `${C.amber}10` : `${C.red}10`
+  const border = level === 'ok' ? `${C.green}30` : level === 'warn' ? `${C.amber}30` : `${C.red}30`
+  return (
+    <div className="rounded-xl p-3 text-center" style={{ background: bg, border: `1px solid ${border}` }}>
+      <div className="text-[10px] uppercase tracking-wider mb-1" style={{ color: C.muted }}>{label}</div>
+      <div className="text-lg font-bold" style={{ color }}>{value}</div>
+      <div className="text-[10px]" style={{ color: C.muted }}>{sub}</div>
+    </div>
+  )
+}
+
+function MetricBox({ label, value, color, sub, highlight }: {
+  label: string; value: string; color: string; sub: string; highlight?: boolean
 }): React.ReactElement {
   return (
-    <div className="rounded-xl p-4" style={{ background: COLORS.card }}>
-      <div className="text-[11px] uppercase tracking-wider mb-2" style={{ color: COLORS.textMuted }}>{label}</div>
-      <div className="text-xl font-bold" style={{ color }}>{value}</div>
-      {sub && <div className="text-xs mt-1" style={{ color: COLORS.textMuted }}>{sub}</div>}
+    <div className="text-center p-3 rounded-lg" style={{
+      background: C.surface,
+      border: highlight ? `1px solid ${C.live}40` : undefined,
+    }}>
+      <div style={{ color: C.muted }}>{label}</div>
+      <div className="text-lg font-bold mt-1" style={{ color }}>{value}</div>
+      <div className="text-[10px]" style={{ color: C.muted }}>{sub}</div>
     </div>
   )
 }
 
 function SideLink({ href, children, active }: { href: string; children: React.ReactNode; active?: boolean }): React.ReactElement {
   return (
-    <Link
-      href={href}
-      className="px-3 py-2 rounded-lg text-sm transition-colors"
-      style={{
-        background: active ? COLORS.surface : 'transparent',
-        color: active ? COLORS.teal : COLORS.textMuted,
-      }}
-    >
+    <Link href={href} className="px-3 py-2 rounded-lg text-sm transition-colors"
+      style={{ background: active ? C.surface : 'transparent', color: active ? C.teal : C.muted }}>
       {children}
     </Link>
   )

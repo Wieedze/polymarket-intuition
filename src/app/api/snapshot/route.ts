@@ -282,7 +282,8 @@ export async function GET(request: Request): Promise<NextResponse> {
     const closedEntryFees = closed.reduce((s, t) => s + t.simulatedUsdc * FEE, 0)
     const closedExitFees = closed.reduce((s, t) => {
       if (t.exitPrice == null) return s
-      return s + t.shares * t.exitPrice * FEE
+      const sharesAtExit = t.sharesRemaining ?? t.shares  // account for partial exits
+      return s + sharesAtExit * t.exitPrice * FEE
     }, 0)
     const closedSlippage = closed.reduce((s, t) => s + estimateSlippage(t.entryPrice, t.simulatedUsdc) * t.simulatedUsdc, 0)
     const totalEntryFees = all.reduce((s, t) => s + t.simulatedUsdc * FEE, 0)
@@ -397,6 +398,29 @@ export async function GET(request: Request): Promise<NextResponse> {
       reason: t.reason,
     }))
 
+    // ── Concentration risk ────────────────────────────────────────────
+    const openByMarket = open.reduce((map, t) => {
+      const key = t.conditionId
+      map.set(key, (map.get(key) ?? 0) + t.simulatedUsdc)
+      return map
+    }, new Map<string, number>())
+    const topConcentration = totalInvested > 0
+      ? Math.max(...openByMarket.values(), 0) / totalInvested
+      : 0
+    const top3Concentration = totalInvested > 0
+      ? [...openByMarket.values()].sort((a, b) => b - a).slice(0, 3).reduce((s, v) => s + v, 0) / totalInvested
+      : 0
+
+    const risk = {
+      maxDrawdown,
+      currentDrawdown: ecPeak > 0 ? (ecPeak - ecCum) / ecPeak : 0,
+      peakEquity: ecPeak,
+      topConcentration,
+      top3Concentration,
+      openCount: open.length,
+      cashPct: totalEquity > 0 ? availableCash / totalEquity : 1,
+    }
+
     // ── Return everything ───────────────────────────────────────────
 
     return NextResponse.json({
@@ -416,6 +440,7 @@ export async function GET(request: Request): Promise<NextResponse> {
       stats,
       equityCurve,
       expertTrust,
+      risk,
       trades: all,
     })
   } catch (err) {
