@@ -387,8 +387,6 @@ async function tryCopyWithSignal(alert: PositionAlert): Promise<boolean> {
     return false
   }
 
-  // Dynamic stop-loss
-  const dynamicStopLoss = entryPrice < 0.30 ? 0.20 : 0.25
 
   // ── Fetch token ID for real order ──────────────────────────────
   const metadata = await fetchMarketMetadata(alert.position.conditionId)
@@ -410,7 +408,7 @@ async function tryCopyWithSignal(alert: PositionAlert): Promise<boolean> {
   const kellyTag = kellyFraction > 0 ? `kelly:${(kellyFraction * 100).toFixed(1)}%` : 'kelly:0→min'
   const trustTag = trust.status === 'reduced' ? ' ⚡reduced' : ''
   const scoreTag = signal.score >= 80 ? '🔥' : signal.score >= 60 ? '✅' : '⚠️'
-  const stopTag = `stop:-${(dynamicStopLoss * 100).toFixed(0)}%`
+  const stopTag = `stop:-${(EXIT_CONFIG.stopLossPct * 100).toFixed(0)}%`
   const domainTag = domain ? `[${domain.domain.replace('pm-domain/', '')}]` : ''
 
   if (DRY_RUN) {

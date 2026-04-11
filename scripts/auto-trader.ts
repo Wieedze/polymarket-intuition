@@ -243,10 +243,6 @@ function tryCopyWithSignal(alert: PositionAlert): boolean {
   const slippage = baseSlippage + sizeImpact
   const entryPrice = Math.min(rawPrice * (1 + slippage), 0.95)
 
-  // Dynamic stop loss: tighter on longshots (they resolve fast, no need for wide stop)
-  // 15-30¢ → -20% stop | 30-55¢ → -25% stop
-  const dynamicStopLoss = entryPrice < 0.30 ? 0.20 : 0.25
-
   const consensusEntry = consensusMap.get(alert.position.conditionId)
   const expertCount = consensusEntry?.experts.length ?? 1
 
@@ -267,7 +263,7 @@ function tryCopyWithSignal(alert: PositionAlert): boolean {
   const kellyTag = kellyFraction > 0 ? `kelly:${(kellyFraction * 100).toFixed(1)}%` : 'kelly:0→min'
   const trustTag = trust.status === 'reduced' ? ' ⚡reduced' : ''
   const scoreTag = signal.score >= 80 ? '🔥' : signal.score >= 60 ? '✅' : '⚠️'
-  const stopTag = `stop:-${(dynamicStopLoss * 100).toFixed(0)}%`
+  const stopTag = `stop:-${(EXIT_CONFIG.stopLossPct * 100).toFixed(0)}%`
   const logMsg = `${scoreTag} COPY (${signal.score}/100) | ${side} @ ${(rawPrice * 100).toFixed(0)}¢→${(entryPrice * 100).toFixed(0)}¢ | $${betAmount.toFixed(0)}${consensusTag}${trustTag} | ${kellyTag} | ${stopTag} | ${slippageTag} | ${trust.phase} | ${signal.reasons.slice(0, 2).join(', ')} | ${alert.position.title} ${domainTag}`
   console.log(`  📋 ${logMsg}`)
   logBotEvent('copy', `${side} @ ${(entryPrice * 100).toFixed(0)}¢ $${betAmount.toFixed(0)} | ${alert.position.title}`, `Score: ${signal.score}/100 | ${alert.walletLabel ?? alert.wallet.slice(0, 10)} | ${domainTag} | ${kellyTag}`)
