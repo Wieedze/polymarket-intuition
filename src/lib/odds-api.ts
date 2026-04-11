@@ -170,7 +170,7 @@ export function computeNoVigForGame(game: OddsApiGame): NoVigGame {
       type: mType,
       outcomes: names.map((name, i) => ({
         name,
-        noVigProb: noVigProbs[i],
+        noVigProb: noVigProbs[i] ?? 0,
         point: points[i],
       })),
     })
