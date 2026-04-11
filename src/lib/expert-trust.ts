@@ -100,9 +100,9 @@ function computeRiskMetrics(resolved: PaperTrade[]): RiskMetrics {
  * Trust level is a multiplier (0-1.5) applied to bet size.
  *
  * Phases:
- *   observation (< 10 resolved) → trust 0.7 (cautious default)
- *   evaluation (10-40 resolved) → trust based on rolling performance
- *   proven (40+ resolved) → trust based on full history, more stable
+ *   observation (< 20 resolved) → trust 0.7 (cautious default)
+ *   evaluation (20-59 resolved) → trust based on rolling performance
+ *   proven (60+ resolved) → trust based on full history, more stable
  */
 export function evaluateExpertTrust(
   wallet: string,
@@ -188,12 +188,7 @@ export function evaluateExpertTrust(
     }
   }
 
-  // ── Phase 3: Proven (40+ trades) ──
-  // Use both full history and recent window
-  const recent = resolved.slice(-20)
-  const recentWR = recent.filter((t) => t.status === 'won').length / recent.length
-  const recentPnl = recent.reduce((s, t) => s + (t.pnl ?? 0), 0)
-
+  // ── Phase 3: Proven (60+ trades) ──
   // ── Proven experts: risk-adjusted composite score ──
   // Like real trading firms: Profit Factor + Max Drawdown + Momentum + Win/Loss ratio
   const risk = computeRiskMetrics(resolved)
@@ -327,10 +322,6 @@ export function evaluateExpertTrustFromTrades(
     return { ...base, phase: 'evaluation', trustLevel: Math.max(trust, 0.3), status: 'active',
       reason: `Eval: WR ${(recentWR * 100).toFixed(0)}%, PnL ${recentPnl >= 0 ? '+' : ''}${recentPnl.toFixed(0)} (last 15)` }
   }
-
-  const recent = resolved.slice(-20)
-  const recentWR = recent.filter((t) => t.status === 'won').length / recent.length
-  const recentPnl = recent.reduce((s, t) => s + (t.pnl ?? 0), 0)
 
   // Risk-adjusted composite score (same logic as main function)
   const risk = computeRiskMetrics(resolved)
