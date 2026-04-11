@@ -69,16 +69,16 @@ const MONEYLINE_RE = /^(.+?)\s+vs\.?\s+(.+?)$/i
 export function parseMarketTitle(title: string): ParsedMarket {
   // Order matters — most specific first
   const ou = title.match(OVER_UNDER_RE)
-  if (ou) return { awayTeam: ou[1].trim(), homeTeam: ou[2].trim(), marketType: 'total', lineValue: parseFloat(ou[3]) }
+  if (ou) return { awayTeam: (ou[1] ?? '').trim(), homeTeam: (ou[2] ?? '').trim(), marketType: 'total', lineValue: parseFloat(ou[3] ?? '0') }
 
   const spread = title.match(SPREAD_RE)
-  if (spread) return { homeTeam: null, awayTeam: null, marketType: 'spread', lineValue: parseFloat(spread[2]) }
+  if (spread) return { homeTeam: null, awayTeam: null, marketType: 'spread', lineValue: parseFloat(spread[2] ?? '0') }
 
   const btts = title.match(BTTS_RE)
-  if (btts) return { awayTeam: btts[1].trim(), homeTeam: btts[2].trim(), marketType: 'btts', lineValue: null }
+  if (btts) return { awayTeam: (btts[1] ?? '').trim(), homeTeam: (btts[2] ?? '').trim(), marketType: 'btts', lineValue: null }
 
   const ml = title.match(MONEYLINE_RE)
-  if (ml) return { awayTeam: ml[1].trim(), homeTeam: ml[2].trim(), marketType: 'moneyline', lineValue: null }
+  if (ml) return { awayTeam: (ml[1] ?? '').trim(), homeTeam: (ml[2] ?? '').trim(), marketType: 'moneyline', lineValue: null }
 
   return { homeTeam: null, awayTeam: null, marketType: 'unknown', lineValue: null }
 }
@@ -136,8 +136,8 @@ export async function scanSportsMarkets(): Promise<SportsMarketRow[]> {
       markets.push({
         conditionId: m.conditionId,
         title: m.question,
-        yesTokenId: tokenIds[0],
-        noTokenId: tokenIds[1],
+        yesTokenId: tokenIds[0] ?? null,
+        noTokenId: tokenIds[1] ?? null,
         polymarketPrice: prices[0] ?? null,
         endDate: m.endDate ?? null,
         sportKey,
