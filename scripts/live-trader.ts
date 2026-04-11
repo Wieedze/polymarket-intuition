@@ -427,7 +427,7 @@ async function tryCopyWithSignal(alert: PositionAlert): Promise<boolean> {
     const maxPrice = Math.min(rawPrice + PRICE_BUFFER, MAX_ENTRY)
     const orderPrice = parseFloat(maxPrice.toFixed(2))
 
-    const liveBetAmount = Math.min(betAmount, getAvailableCash() * 0.30)
+    const liveBetAmount = parseFloat(Math.min(betAmount, getAvailableCash() * 0.30).toFixed(2))
     if (liveBetAmount < POLY_MIN_ORDER_SHARES * orderPrice) {
       return false
     }
