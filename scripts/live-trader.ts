@@ -49,6 +49,7 @@ import { evaluateExit, exitEmoji, type ExitConfig } from '../src/lib/exit-strate
 import { scoreSignal, shouldCopySignal, signalBetMultiplier, isContradictory, kellyBetFraction } from '../src/lib/signal-scorer'
 import { evaluateExpertTrust, getAllExpertTrust, getBankrollScale } from '../src/lib/expert-trust'
 import { placeOrder, getRealBalance, closePosition, checkOrderStatus, cancelOrder, getBestAsk, type RealOrder } from '../src/lib/real-trader'
+import { connectOrderbookWS, subscribeToken, unsubscribeToken, getWsBestAsk, getWsBestBid, isWsConnected, getSubscribedCount } from '../src/lib/orderbook-ws'
 
 const POLYMARKET_DATA_URL = process.env.POLYMARKET_DATA_URL ?? 'https://data-api.polymarket.com'
 
@@ -415,8 +416,9 @@ async function tryCopyWithSignal(alert: PositionAlert): Promise<boolean> {
     console.log(`  🏜️  DRY-RUN | ${scoreTag} ${side} @ ${(rawPrice * 100).toFixed(0)}¢ | $${betAmount.toFixed(2)}${consensusTag}${trustTag} | ${kellyTag} | ${stopTag} | ${alert.position.title.slice(0, 45)} ${domainTag}`)
     logBotEvent('live-dry-run', `${side} @ ${(entryPrice * 100).toFixed(0)}¢ $${betAmount.toFixed(2)} | ${alert.position.title}`, `Score: ${signal.score}/100`)
   } else {
-    // ── Fetch live best ask from CLOB orderbook ───────────────────
-    const bestAsk = await getBestAsk(tokenId)
+    // ── Fetch live best ask — WS (instant) with REST fallback ─────
+    const bestAsk = getWsBestAsk(tokenId) ?? await getBestAsk(tokenId)
+    const priceSource = getWsBestAsk(tokenId) ? 'WS' : 'REST'
     if (!bestAsk) {
       console.log(`  ⚠️  NO ORDERBOOK | ${alert.position.title.slice(0, 45)}`)
       return false
@@ -456,8 +458,8 @@ async function tryCopyWithSignal(alert: PositionAlert): Promise<boolean> {
     }
 
     const filledPrice = result.filledPrice ?? livePrice
-    console.log(`  💰 LIVE ${scoreTag} FILLED | ${side} @ ${(rawPrice * 100).toFixed(0)}¢→${(filledPrice * 100).toFixed(0)}¢ | $${liveBetAmount.toFixed(2)}${consensusTag}${trustTag} | ${kellyTag} | ${stopTag} | orderId:${result.orderId?.slice(0, 12)} | ${alert.position.title.slice(0, 40)} ${domainTag}`)
-    logBotEvent('live-copy', `FILLED ${side} @ ${(filledPrice * 100).toFixed(0)}¢ $${liveBetAmount.toFixed(2)} | ${alert.position.title}`, `Score: ${signal.score}/100 | ${kellyTag} | ask:${(livePrice * 100).toFixed(0)}¢`)
+    console.log(`  💰 LIVE ${scoreTag} FILLED [${priceSource}] | ${side} @ ${(rawPrice * 100).toFixed(0)}¢→${(filledPrice * 100).toFixed(0)}¢ | $${liveBetAmount.toFixed(2)}${consensusTag}${trustTag} | ${kellyTag} | ${stopTag} | orderId:${result.orderId?.slice(0, 12)} | ${alert.position.title.slice(0, 40)} ${domainTag}`)
+    logBotEvent('live-copy', `FILLED ${side} @ ${(filledPrice * 100).toFixed(0)}¢ $${liveBetAmount.toFixed(2)} | ${alert.position.title}`, `Score: ${signal.score}/100 | ${kellyTag} | ask(${priceSource}):${(livePrice * 100).toFixed(0)}¢`)
 
     // FOK = always filled if success — record paper trade immediately
     openPaperTrade({
@@ -470,6 +472,9 @@ async function tryCopyWithSignal(alert: PositionAlert): Promise<boolean> {
       copiedFrom: alert.wallet,
       copiedLabel: `[LIVE] ${alert.walletLabel ?? alert.wallet.slice(0, 10)}`,
     })
+
+    // Subscribe to WS for real-time exit price tracking
+    subscribeToken(tokenId)
   }
 
   return true
@@ -639,6 +644,7 @@ async function runExitStrategy(): Promise<Record<string, number>> {
         }
 
         resolvePaperTrade(trade.conditionId, exitPrice)
+        if (exitMeta) unsubscribeToken(exitMeta.tokenId)  // stop tracking closed position
         const pnl = sharesToSell * (exitPrice - trade.entryPrice)
         const prefix = DRY_RUN ? '🏜️ DRY-RUN ' : '💰 LIVE '
         console.log(`  ${prefix}${exitEmoji(decision.reason)} ${decision.reason.toUpperCase()} | ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)} | ${decision.message} | ${trade.title}`)
@@ -685,6 +691,7 @@ function printStats(): void {
   console.log(`  │ Cash:     $${cash.toFixed(2).padStart(10)}  (next bet: $${nextBet.toFixed(2)})`)
   console.log(`  │ Open:     ${open.length.toString().padStart(10)}  trades`)
   console.log(`  │ Win Rate: ${(winRate * 100).toFixed(0).padStart(9)}%  (${won.length}W / ${lost.length}L)`)
+  console.log(`  │ WS:      ${isWsConnected() ? '🟢 connected' : '🔴 disconnected'}  (${getSubscribedCount()} tokens)`)
   console.log(`  └─────────────────────────────────────┘`)
 
   const trusts = getAllExpertTrust()
@@ -941,6 +948,19 @@ async function main(): Promise<void> {
   }
 
   printStats()
+
+  // ── Connect orderbook websocket for real-time prices ───────────
+  connectOrderbookWS()
+
+  // Subscribe to tokens for any existing open positions
+  const openForWs = getOpenLiveTrades()
+  for (const trade of openForWs) {
+    const meta = await getTokenId(trade.conditionId, trade.side)
+    if (meta) subscribeToken(meta.tokenId)
+  }
+  if (openForWs.length > 0) {
+    console.log(`  [WS] Subscribed to ${openForWs.length} open position token(s)`)
+  }
 
   console.log('Starting first poll...\n')
   await pollOnce()
