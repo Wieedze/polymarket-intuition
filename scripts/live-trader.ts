@@ -55,8 +55,8 @@ const POLYMARKET_DATA_URL = process.env.POLYMARKET_DATA_URL ?? 'https://data-api
 const POLL_INTERVAL_MS = parseInt(process.env.POLL_INTERVAL_MS ?? '30000', 10)
 const BET_PCT = parseFloat(process.env.BET_PCT ?? '0.02')
 const MIN_ENTRY = parseFloat(process.env.MIN_ENTRY_PRICE ?? '0.15')
-const MAX_ENTRY = parseFloat(process.env.MAX_ENTRY_PRICE ?? '0.65')
-const BASE_MAX_OPEN = parseInt(process.env.MAX_OPEN_TRADES ?? '50', 10)
+const MAX_ENTRY = parseFloat(process.env.MAX_ENTRY_PRICE ?? '0.50')  // block 50¢+ — no edge
+const MAX_OPEN = parseInt(process.env.MAX_OPEN_TRADES ?? '100', 10)  // fixed cap
 const MIN_SIGNAL_SCORE = parseInt(process.env.MIN_SIGNAL_SCORE_LIVE ?? '65', 10)
 
 // Polymarket CLOB constraints (cannot change)
@@ -85,9 +85,7 @@ function getAvailableCash(): number {
 }
 
 function getMaxOpen(): number {
-  const equity = getCurrentEquity()
-  const scale = getBankrollScale()
-  return Math.max(Math.floor(equity / (200 * scale)), BASE_MAX_OPEN)
+  return MAX_OPEN
 }
 
 function getMaxBet(equity: number): number {
@@ -129,7 +127,7 @@ function getOpenLiveTrades(): PaperTrade[] {
 
 const EXIT_CONFIG: ExitConfig = {
   takeProfitPct: parseFloat(process.env.TAKE_PROFIT ?? '999'),
-  stopLossPct: parseFloat(process.env.STOP_LOSS ?? '0.25'),
+  stopLossPct: parseFloat(process.env.STOP_LOSS ?? '0.40'),
   trailingActivatePct: parseFloat(process.env.TRAILING_ACTIVATE ?? '999'),
   trailingStopPct: parseFloat(process.env.TRAILING_STOP ?? '0.10'),
   nearResolutionThreshold: parseFloat(process.env.NEAR_RESOLUTION ?? '0.85'),

@@ -32,13 +32,8 @@ const POLYMARKET_DATA_URL = process.env.POLYMARKET_DATA_URL ?? 'https://data-api
 const POLL_INTERVAL_MS = parseInt(process.env.POLL_INTERVAL_MS ?? '30000', 10)
 const BET_PCT = parseFloat(process.env.BET_PCT ?? '0.02')  // 2% of available cash per trade
 const MIN_ENTRY = parseFloat(process.env.MIN_ENTRY_PRICE ?? '0.15')
-const MAX_ENTRY = parseFloat(process.env.MAX_ENTRY_PRICE ?? '0.65')  // 50-65¢ allowed only with high signal (80+), hard block at 65¢
-const BASE_MAX_OPEN = parseInt(process.env.MAX_OPEN_TRADES ?? '50', 10)
-
-// ── Scaling horizontal ──────────────────────────────────────────
-// Scale by opening MORE positions, not bigger bets.
-// Keeps bets small → no market impact, no slippage spike.
-// Law of large numbers: more independent small bets = more stable edge.
+const MAX_ENTRY = parseFloat(process.env.MAX_ENTRY_PRICE ?? '0.50')  // block 50¢+ — no edge (data: -$15k on 1849 trades, -26pts edge)
+const MAX_OPEN = parseInt(process.env.MAX_OPEN_TRADES ?? '100', 10)  // fixed cap — dynamic scaling diluted edge (275 slots filled with noise)
 
 function getCurrentEquity(): number {
   const startBal = parseFloat(getPortfolioSetting('starting_balance', '10000'))
@@ -55,14 +50,6 @@ function getAvailableCash(): number {
     .filter((t) => t.status === 'open')
     .reduce((s, t) => s + t.simulatedUsdc, 0)
   return equity - totalInvested
-}
-
-// Max open scales with equity: 1 slot per $200×scale of equity
-// $10k(scale=1) → 50, $100(scale=0.01) → 50
-function getMaxOpen(): number {
-  const equity = getCurrentEquity()
-  const scale = getBankrollScale()
-  return Math.max(Math.floor(equity / (200 * scale)), BASE_MAX_OPEN)
 }
 
 // Bet size scales with bankroll — uses BANKROLL_SCALE for proportional sizing
@@ -94,7 +81,7 @@ function getDynamicBetSize(): number {
 // Exit strategy config (override via env vars)
 const EXIT_CONFIG: ExitConfig = {
   takeProfitPct: parseFloat(process.env.TAKE_PROFIT ?? '999'),
-  stopLossPct: parseFloat(process.env.STOP_LOSS ?? '0.25'),
+  stopLossPct: parseFloat(process.env.STOP_LOSS ?? '0.40'),
   trailingActivatePct: parseFloat(process.env.TRAILING_ACTIVATE ?? '999'),
   trailingStopPct: parseFloat(process.env.TRAILING_STOP ?? '0.10'),
   nearResolutionThreshold: parseFloat(process.env.NEAR_RESOLUTION ?? '0.85'),
@@ -175,7 +162,7 @@ function canCopy(alert: PositionAlert): boolean {
   if (paperTradeExistsForCondition(alert.position.conditionId)) return false
 
   const openTrades = getOpenPaperTrades()
-  if (openTrades.length >= getMaxOpen()) return false
+  if (openTrades.length >= MAX_OPEN) return false
 
   // Capital guard
   const equity = getCurrentEquity()
@@ -612,7 +599,7 @@ async function main(): Promise<void> {
   console.log(`  Equity:     $${eq.toFixed(0)}`)
   console.log(`  Bet sizing: ${(BET_PCT * 100).toFixed(0)}% of cash ($${getMinBet(eq).toFixed(0)}-$${getMaxBet(eq).toFixed(0)})`)
   console.log(`  Entry range: ${(MIN_ENTRY * 100).toFixed(0)}¢ - ${(MAX_ENTRY * 100).toFixed(0)}¢`)
-  console.log(`  Max open:   ${getMaxOpen()} (scales with equity)`)
+  console.log(`  Max open:   ${MAX_OPEN} (scales with equity)`)
   console.log(`  Take profit: +${(EXIT_CONFIG.takeProfitPct * 100).toFixed(0)}%`)
   console.log(`  Stop-loss:   -${(EXIT_CONFIG.stopLossPct * 100).toFixed(0)}%`)
   console.log(`  Trailing:    +${(EXIT_CONFIG.trailingActivatePct * 100).toFixed(0)}% → +${(EXIT_CONFIG.trailingStopPct * 100).toFixed(0)}%`)
