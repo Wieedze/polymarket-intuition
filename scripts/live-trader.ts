@@ -64,6 +64,7 @@ const POLY_MIN_ORDER_SHARES = 15   // minimum shares to place a buy order
 const POLY_MIN_SELL_SHARES = 5     // minimum shares to sell (exit)
 const DRY_RUN = process.env.DRY_RUN === 'true'
 const DAILY_LOSS_LIMIT_PCT = 0.50  // 50% of bankroll — catastrophe safety net
+const DRAWDOWN_LIMIT_PCT = parseFloat(process.env.DRAWDOWN_LIMIT ?? '0.20')  // 20% from peak — close all, protect gains
 
 // ── Scaling (mirrors auto-trader with BANKROLL_SCALE) ────────────
 
@@ -200,6 +201,42 @@ function checkDailyLossLimit(): boolean {
     console.log(`  🚨 DAILY LOSS LIMIT HIT | -$${dailyLoss.toFixed(2)} today (limit: -$${limitAmount.toFixed(2)}) | Bot paused until tomorrow`)
     logBotEvent('safety', `DAILY LOSS LIMIT -$${dailyLoss.toFixed(2)}`, `Limit: -$${limitAmount.toFixed(2)}`)
     return true  // limit hit
+  }
+  return false
+}
+
+// ── Drawdown circuit breaker ─────────────────────────────────────
+// Track High Water Mark (peak equity). If equity drops 20% from peak,
+// close all positions and stop trading. Protects gains on small accounts.
+// Institutional standard: Bridgewater 15-20%, prop desks 10-20%.
+
+let highWaterMark = 0
+
+function checkDrawdownBreaker(): boolean {
+  const equity = getCurrentEquity()
+  const openTrades = getOpenLiveTrades()
+  const unrealized = openTrades.reduce((s, t) => {
+    const cur = t.curPrice ?? t.entryPrice
+    const pnl = (t.sharesRemaining ?? t.shares) * (t.side === 'YES' ? cur - t.entryPrice : t.entryPrice - cur)
+    return s + pnl
+  }, 0)
+  const totalEquity = equity + unrealized
+
+  // Update HWM
+  if (totalEquity > highWaterMark) {
+    highWaterMark = totalEquity
+    setPortfolioSetting('live_hwm', highWaterMark.toFixed(2))
+  }
+
+  // Only check if we've had meaningful gains (at least +10% from start)
+  const startBal = parseFloat(getPortfolioSetting('starting_balance', '9'))
+  if (highWaterMark < startBal * 1.10) return false
+
+  const drawdown = (highWaterMark - totalEquity) / highWaterMark
+  if (drawdown >= DRAWDOWN_LIMIT_PCT) {
+    console.log(`  🚨 DRAWDOWN BREAKER | Equity $${totalEquity.toFixed(2)} is -${(drawdown * 100).toFixed(1)}% from peak $${highWaterMark.toFixed(2)} | Closing all positions`)
+    logBotEvent('safety', `DRAWDOWN BREAKER -${(drawdown * 100).toFixed(1)}%`, `Peak: $${highWaterMark.toFixed(2)}, Now: $${totalEquity.toFixed(2)}`)
+    return true
   }
   return false
 }
@@ -607,8 +644,9 @@ async function pollOnce(): Promise<void> {
   const wallets = getActiveWatchedWallets()
   const time = new Date().toISOString().slice(11, 19)
 
-  // Safety check: daily loss limit
+  // Safety checks
   if (checkDailyLossLimit()) return
+  if (checkDrawdownBreaker()) return
 
   if (!DRY_RUN) {
     const realBalance = await getRealBalance()
@@ -762,7 +800,10 @@ async function main(): Promise<void> {
     }
   }
 
+  // Load saved HWM or initialize from current equity
+  const savedHwm = parseFloat(getPortfolioSetting('live_hwm', '0'))
   const eq = getCurrentEquity()
+  highWaterMark = Math.max(savedHwm, eq)
 
   console.log('═══════════════════════════════════════════════')
   console.log(`  ${mode} LIVE TRADER`)
