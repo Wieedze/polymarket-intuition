@@ -37,7 +37,11 @@ import {
   updatePaperTradePrice,
   partialExitPaperTrade,
   logBotEvent,
+  savePendingOrder,
+  getPendingOrders,
+  removePendingOrder,
   type PaperTrade,
+  type PendingOrderRow,
 } from '../src/lib/db'
 import { indexWallet } from '../src/lib/indexer'
 import { pollWallet, type PositionAlert } from '../src/lib/position-tracker'
@@ -246,52 +250,50 @@ function checkDrawdownBreaker(): boolean {
 
 const tokenIdCache = new Map<string, string>()
 
-// ── GTC order tracking ──────────────────────────────────────────
-// Track pending GTC orders and verify fills each poll.
-// If an order hasn't filled after 5 minutes, cancel it and remove the paper trade.
+// ── GTC order tracking (persisted in DB) ────────────────────────
+// Track pending GTC orders in SQLite so they survive restarts.
+// Paper trade is ONLY created when order is confirmed FILLED.
 
-type PendingOrder = {
-  orderId: string
-  conditionId: string
-  side: string
-  placedAt: number  // timestamp ms
-}
-
-const pendingOrders: PendingOrder[] = []
 const GTC_TIMEOUT_MS = 30 * 1000  // 30 seconds — if not filled, price has moved
 
 async function checkPendingOrders(): Promise<void> {
-  if (pendingOrders.length === 0) return
+  const pending = getPendingOrders()
+  if (pending.length === 0) return
 
   const now = Date.now()
-  const toRemove: number[] = []
 
-  for (let i = 0; i < pendingOrders.length; i++) {
-    const po = pendingOrders[i]
+  for (const po of pending) {
     const status = await checkOrderStatus(po.orderId)
+    const placedMs = new Date(po.placedAt).getTime()
 
     if (status.status === 'filled') {
-      console.log(`  ✅ GTC FILLED | ${po.side} | orderId:${po.orderId.slice(0, 12)} | filled @ ${((status.filledPrice ?? 0) * 100).toFixed(0)}¢`)
-      toRemove.push(i)
-    } else if (status.status === 'cancelled' || (now - po.placedAt > GTC_TIMEOUT_MS && status.status === 'open')) {
-      // Timed out or cancelled — cancel order and remove paper trade
+      // Order FILLED — NOW we create the paper trade
+      const filledPrice = status.filledPrice ?? po.entryPrice
+      openPaperTrade({
+        conditionId: po.conditionId,
+        title: po.title,
+        domain: po.domain,
+        side: po.side,
+        entryPrice: filledPrice,
+        simulatedUsdc: po.simulatedUsdc,
+        copiedFrom: po.copiedFrom,
+        copiedLabel: po.copiedLabel,
+      })
+      removePendingOrder(po.orderId)
+      console.log(`  ✅ GTC FILLED | ${po.side} @ ${(filledPrice * 100).toFixed(0)}¢ | $${po.simulatedUsdc.toFixed(2)} | ${po.title.slice(0, 40)}`)
+      logBotEvent('live-filled', `FILLED ${po.side} @ ${(filledPrice * 100).toFixed(0)}¢ $${po.simulatedUsdc.toFixed(2)} | ${po.title}`, `orderId:${po.orderId.slice(0, 12)}`)
+    } else if (status.status === 'cancelled' || (now - placedMs > GTC_TIMEOUT_MS && status.status === 'open')) {
+      // Timed out or cancelled — cancel and discard (no paper trade was created)
       if (status.status === 'open') {
         const cancelled = await cancelOrder(po.orderId)
         console.log(`  ⏰ GTC TIMEOUT | ${po.side} | orderId:${po.orderId.slice(0, 12)} | cancelled: ${cancelled}`)
       } else {
         console.log(`  ❌ GTC CANCELLED | ${po.side} | orderId:${po.orderId.slice(0, 12)}`)
       }
-      // Remove the false paper trade
-      resolvePaperTrade(po.conditionId, 0)
-      logBotEvent('live-cancel', `GTC not filled — removed | ${po.side} | orderId:${po.orderId.slice(0, 12)}`, '')
-      toRemove.push(i)
+      removePendingOrder(po.orderId)
+      logBotEvent('live-cancel', `GTC not filled — discarded | ${po.side} | ${po.title.slice(0, 40)}`, `orderId:${po.orderId.slice(0, 12)}`)
     }
     // else: still open, within timeout — keep waiting
-  }
-
-  // Remove processed orders (reverse to keep indices valid)
-  for (const idx of toRemove.reverse()) {
-    pendingOrders.splice(idx, 1)
   }
 }
 
@@ -437,28 +439,34 @@ async function tryCopyWithSignal(alert: PositionAlert): Promise<boolean> {
     console.log(`  💰 LIVE ${scoreTag} ${fillStatus} | ${side} @ ${(rawPrice * 100).toFixed(0)}¢→${(entryPrice * 100).toFixed(0)}¢ | $${betAmount.toFixed(2)}${consensusTag}${trustTag} | ${kellyTag} | ${stopTag} | orderId:${result.orderId?.slice(0, 12)} | ${alert.position.title.slice(0, 40)} ${domainTag}`)
     logBotEvent('live-copy', `${fillStatus} ${side} @ ${(entryPrice * 100).toFixed(0)}¢ $${betAmount.toFixed(2)} | ${alert.position.title}`, `Score: ${signal.score}/100 | ${kellyTag}`)
 
-    // Track GTC pending orders for fill verification
-    if (!result.filledPrice && result.orderId) {
-      pendingOrders.push({
+    if (result.filledPrice) {
+      // Immediately filled — record paper trade now
+      openPaperTrade({
+        conditionId: alert.position.conditionId,
+        title: alert.position.title,
+        domain: domain?.domain ?? null,
+        side,
+        entryPrice: result.filledPrice,
+        simulatedUsdc: betAmount,
+        copiedFrom: alert.wallet,
+        copiedLabel: `[LIVE] ${alert.walletLabel ?? alert.wallet.slice(0, 10)}`,
+      })
+    } else if (result.orderId) {
+      // GTC pending — save to DB, paper trade created only when confirmed FILLED
+      savePendingOrder({
         orderId: result.orderId,
         conditionId: alert.position.conditionId,
+        title: alert.position.title,
+        domain: domain?.domain ?? null,
         side,
-        placedAt: Date.now(),
+        entryPrice,
+        simulatedUsdc: betAmount,
+        copiedFrom: alert.wallet,
+        copiedLabel: `[LIVE] ${alert.walletLabel ?? alert.wallet.slice(0, 10)}`,
+        placedAt: new Date().toISOString(),
       })
     }
   }
-
-  // Record as paper trade for tracking (labeled [LIVE])
-  openPaperTrade({
-    conditionId: alert.position.conditionId,
-    title: alert.position.title,
-    domain: domain?.domain ?? null,
-    side,
-    entryPrice,
-    simulatedUsdc: betAmount,
-    copiedFrom: alert.wallet,
-    copiedLabel: `[LIVE] ${alert.walletLabel ?? alert.wallet.slice(0, 10)}`,
-  })
 
   return true
 }

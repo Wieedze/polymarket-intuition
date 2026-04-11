@@ -294,6 +294,19 @@ function initTables(db: Database.Database): void {
       active INTEGER DEFAULT 1,
       fetched_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS pending_orders (
+      order_id TEXT PRIMARY KEY,
+      condition_id TEXT NOT NULL,
+      title TEXT,
+      domain TEXT,
+      side TEXT NOT NULL,
+      entry_price REAL NOT NULL,
+      simulated_usdc REAL NOT NULL,
+      copied_from TEXT,
+      copied_label TEXT,
+      placed_at TEXT NOT NULL
+    );
   `)
 
   // Migration: add peak_price column if missing
@@ -719,6 +732,56 @@ export function getPortfolioSetting(key: string, defaultValue: string): string {
 export function setPortfolioSetting(key: string, value: string): void {
   const db = getDb()
   db.prepare('INSERT OR REPLACE INTO paper_portfolio (key, value) VALUES (?, ?)').run(key, value)
+}
+
+// ── Pending orders (survive restarts) ────────────────────────────
+
+export type PendingOrderRow = {
+  orderId: string
+  conditionId: string
+  title: string
+  domain: string | null
+  side: string
+  entryPrice: number
+  simulatedUsdc: number
+  copiedFrom: string
+  copiedLabel: string | null
+  placedAt: string
+}
+
+export function savePendingOrder(order: PendingOrderRow): void {
+  const db = getDb()
+  db.prepare(
+    `INSERT OR REPLACE INTO pending_orders
+     (order_id, condition_id, title, domain, side, entry_price, simulated_usdc, copied_from, copied_label, placed_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    order.orderId, order.conditionId, order.title, order.domain,
+    order.side, order.entryPrice, order.simulatedUsdc,
+    order.copiedFrom, order.copiedLabel, order.placedAt
+  )
+}
+
+export function getPendingOrders(): PendingOrderRow[] {
+  const db = getDb()
+  const rows = db.prepare('SELECT * FROM pending_orders').all() as Array<Record<string, unknown>>
+  return rows.map((r) => ({
+    orderId: r.order_id as string,
+    conditionId: r.condition_id as string,
+    title: (r.title as string) ?? '',
+    domain: (r.domain as string) ?? null,
+    side: r.side as string,
+    entryPrice: r.entry_price as number,
+    simulatedUsdc: r.simulated_usdc as number,
+    copiedFrom: (r.copied_from as string) ?? '',
+    copiedLabel: (r.copied_label as string) ?? null,
+    placedAt: r.placed_at as string,
+  }))
+}
+
+export function removePendingOrder(orderId: string): void {
+  const db = getDb()
+  db.prepare('DELETE FROM pending_orders WHERE order_id = ?').run(orderId)
 }
 
 // Polymarket taker fee — charged on buy AND early sell, not on resolution redemption
