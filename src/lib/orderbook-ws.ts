@@ -161,7 +161,7 @@ export function isWsConnected(): boolean {
 
 function _connect(): void {
   try {
-    ws = new WebSocket(WS_URL)
+    ws = new WebSocket(MARKET_WS_URL)
 
     ws.on('open', () => {
       console.log(`  [WS] Connected to CLOB orderbook`)
