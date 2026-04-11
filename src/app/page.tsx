@@ -20,6 +20,22 @@ type ChartPoint = {
 type BotEvent = { id: number; type: string; message: string; detail: string | null; createdAt: string }
 type DomainInfo = { domain: string; pnl: number; trades: number; won: number; winRate: number }
 
+type WalletPosition = {
+  title: string
+  side: string
+  size: number
+  curPrice: number
+  value: number
+  pnl: number
+}
+
+type WalletEquity = {
+  usdc: number
+  positionsValue: number
+  totalEquity: number
+  positions: WalletPosition[]
+}
+
 type DashboardData = {
   balance: number
   startingBalance: number
@@ -77,13 +93,14 @@ function pnlStr(n: number): string { return `${n >= 0 ? '+' : '-'}$${Math.abs(n)
 
 export default function Dashboard(): React.ReactElement {
   const [data, setData] = useState<DashboardData | null>(null)
+  const [wallet, setWallet] = useState<WalletEquity | null>(null)
   const [loading, setLoading] = useState(true)
   const { tick } = useRefresh()
 
   useEffect(() => {
     function loadData(): void {
-      fetch('/api/snapshot')
-        .then(async (res) => {
+      Promise.all([
+        fetch('/api/snapshot').then(async (res) => {
           if (!res.ok) return null
           const snap = await res.json()
           const p = snap.portfolio
@@ -107,10 +124,15 @@ export default function Dashboard(): React.ReactElement {
             events: snap.events,
             domains: snap.byDomain,
           } as DashboardData
-        })
-        .then((d) => { if (d) setData(d) })
-        .catch(() => null)
-        .finally(() => setLoading(false))
+        }),
+        fetch('/api/wallet-equity').then(async (res) => {
+          if (!res.ok) return null
+          return await res.json() as WalletEquity
+        }).catch(() => null),
+      ]).then(([d, w]) => {
+        if (d) setData(d)
+        if (w) setWallet(w)
+      }).catch(() => null).finally(() => setLoading(false))
     }
     loadData()
   }, [tick])
@@ -176,9 +198,9 @@ export default function Dashboard(): React.ReactElement {
           {/* Top stats */}
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4 mb-8">
             <BigStat
-              label="Total Equity"
-              value={`$${data.totalEquity.toFixed(0)}`}
-              sub={`${(data.roi * 100).toFixed(1)}% over ${data.tradingDays.toFixed(0)}d`}
+              label="Live Equity"
+              value={wallet ? `$${wallet.totalEquity.toFixed(2)}` : `$${data.totalEquity.toFixed(0)}`}
+              sub={wallet ? `$${wallet.usdc.toFixed(0)} USDC + $${wallet.positionsValue.toFixed(0)} positions` : `${(data.roi * 100).toFixed(1)}% over ${data.tradingDays.toFixed(0)}d`}
               color={COLORS.teal}
             />
             <BigStat
@@ -197,15 +219,15 @@ export default function Dashboard(): React.ReactElement {
             />
             <BigStat
               label="Open Trades"
-              value={`${data.openTrades}`}
-              sub={`$${data.totalInvested.toFixed(0)} at risk`}
+              value={wallet ? `${wallet.positions.length}` : `${data.openTrades}`}
+              sub={wallet ? `$${wallet.positionsValue.toFixed(0)} on-chain` : `$${data.totalInvested.toFixed(0)} at risk`}
               color={COLORS.blue}
             />
             <BigStat
               label="Unrealized"
-              value={pnlStr(data.unrealizedPnl)}
-              sub="after 2% exit fee"
-              color={data.unrealizedPnl >= 0 ? COLORS.teal : COLORS.red}
+              value={wallet ? pnlStr(wallet.positions.reduce((s, p) => s + p.pnl, 0)) : pnlStr(data.unrealizedPnl)}
+              sub={wallet ? 'from wallet' : 'after 2% exit fee'}
+              color={(wallet ? wallet.positions.reduce((s, p) => s + p.pnl, 0) : data.unrealizedPnl) >= 0 ? COLORS.teal : COLORS.red}
             />
           </div>
 
