@@ -186,14 +186,13 @@ export function scoreSignal(params: {
   else if (wr >= 0.40) { winRateScore = 4 }
 
   // 4. Entry price quality (15 points max)
-  // Data (15d): 15-30¢ = +$76k (+9pts edge), 30-50¢ = -$14k (-8pts edge), 50-65¢ = -$15k (-26pts edge)
-  // Hard block above 50¢ — negative edge territory, no exceptions
+  // Entry price scoring — longshots have best edge, mid-range acceptable for proven experts
   let entryScore = 0
-  if (entryPrice > 0.50) {
+  if (entryPrice > 0.65) {
     return {
       score: 0, domainMatch: false, expertCalibration: 0,
       expertWinRate: 0, expertTrades: 0, betSizeSignal: 0,
-      expertImplicitEdge: 0, domain, reasons: [`Entry ${(entryPrice * 100).toFixed(0)}¢ blocked — no edge above 50¢`],
+      expertImplicitEdge: 0, domain, reasons: [`Entry ${(entryPrice * 100).toFixed(0)}¢ blocked — no edge above 65¢`],
     }
   } else if (entryPrice >= 0.15 && entryPrice <= 0.30) {
     entryScore = 15  // longshot sweet spot — best historical edge (+$76k, +9pts)
