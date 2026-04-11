@@ -17,7 +17,7 @@ export type SignalScore = {
 
 // ── Config ────────────────────────────────────────────────────────
 
-const MIN_SIGNAL_SCORE = 60  // minimum score to copy — only standard+ quality signals
+const MIN_SIGNAL_SCORE = 50  // minimum score to copy — aligned with PM2 config
 
 /**
  * Get a domain signal multiplier based on the expert's own track record in that domain.
