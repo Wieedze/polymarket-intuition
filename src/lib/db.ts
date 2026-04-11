@@ -946,8 +946,9 @@ export function partialExitPaperTrade(
 
 export function paperTradeExistsForCondition(conditionId: string): boolean {
   const db = getDb()
+  // Check ALL trades (open + resolved) to prevent re-trading the same market after exit
   const row = db.prepare(
-    "SELECT 1 FROM paper_trades WHERE condition_id = ? AND status = 'open'"
+    "SELECT 1 FROM paper_trades WHERE condition_id = ?"
   ).get(conditionId)
   return row !== undefined
 }
