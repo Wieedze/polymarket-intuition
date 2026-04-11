@@ -525,15 +525,35 @@ async function tryCopyWithSignal(alert: PositionAlert): Promise<boolean> {
   return true
 }
 
-// ── Price refresh (using our real positions) ─────────────────────
+// ── Price refresh (WS best bid + expert positions fallback) ──────
 
 async function refreshOpenPrices(): Promise<number> {
   const openTrades = getOpenLiveTrades()
   if (openTrades.length === 0) return 0
 
-  // Use expert positions for price data (same as auto-trader)
-  const wallets = [...new Set(openTrades.map((t) => t.copiedFrom))]
   let updated = 0
+
+  // 1. WS best bid — real-time, works for ALL trades (including on-chain-sync)
+  for (const trade of openTrades) {
+    const meta = await getTokenId(trade.conditionId, trade.side)
+    if (!meta) continue
+    const wsBid = getWsBestBid(meta.tokenId)
+    if (wsBid && wsBid > 0) {
+      updatePaperTradePrice(trade.conditionId, wsBid)
+      updated++
+    }
+  }
+
+  // 2. Expert positions fallback — for trades where WS has no data
+  const tradesWithoutPrice = openTrades.filter((t) => {
+    // Skip if WS already updated this trade
+    return !updated || t.copiedFrom === 'on-chain-sync'
+  })
+  const wallets = [...new Set(
+    tradesWithoutPrice
+      .filter((t) => t.copiedFrom !== 'on-chain-sync')
+      .map((t) => t.copiedFrom)
+  )]
 
   for (const wallet of wallets) {
     try {
