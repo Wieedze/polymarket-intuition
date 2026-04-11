@@ -163,10 +163,8 @@ export async function placeOrder(order: RealOrder): Promise<RealOrderResult> {
       ? OrderType.GTD
       : OrderType.GTC
 
-    const side = order.side === 'YES' ? Side.BUY : Side.BUY
-    // Note: on Polymarket, you always BUY the token you want
-    // YES token = buy YES shares | NO token = buy NO shares
-    // The tokenId determines YES vs NO, not the side
+    // Entry orders are always BUY — tokenId determines YES vs NO
+    const side = Side.BUY
 
     const result = await client.createAndPostOrder(
       {
