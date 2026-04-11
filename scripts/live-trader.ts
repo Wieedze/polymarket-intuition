@@ -416,19 +416,49 @@ async function tryCopyWithSignal(alert: PositionAlert): Promise<boolean> {
     console.log(`  🏜️  DRY-RUN | ${scoreTag} ${side} @ ${(rawPrice * 100).toFixed(0)}¢ | $${betAmount.toFixed(2)}${consensusTag}${trustTag} | ${kellyTag} | ${stopTag} | ${alert.position.title.slice(0, 45)} ${domainTag}`)
     logBotEvent('live-dry-run', `${side} @ ${(entryPrice * 100).toFixed(0)}¢ $${betAmount.toFixed(2)} | ${alert.position.title}`, `Score: ${signal.score}/100`)
   } else {
-    // ── Fetch live best ask — WS (instant) with REST fallback ─────
-    const bestAsk = getWsBestAsk(tokenId) ?? await getBestAsk(tokenId)
-    const priceSource = getWsBestAsk(tokenId) ? 'WS' : 'REST'
-    if (!bestAsk) {
-      console.log(`  ⚠️  NO ORDERBOOK | ${alert.position.title.slice(0, 45)}`)
-      return false
-    }
+    // ── Wait for liquidity via WS, then buy at best ask ────────────
+    // Subscribe to this token for real-time price updates
+    subscribeToken(tokenId)
 
-    // Use best ask price — this is the current market price to buy
-    // Cap at MAX_ENTRY to respect our edge filter
-    const livePrice = bestAsk
-    if (livePrice > MAX_ENTRY) {
-      console.log(`  ⏭️  SKIP (ask ${(livePrice * 100).toFixed(0)}¢ > ${(MAX_ENTRY * 100).toFixed(0)}¢ cap) | ${alert.position.title.slice(0, 45)}`)
+    // Check ask immediately, then wait up to 60s for liquidity to return
+    const WAIT_LIQUIDITY_MS = 60_000
+    const WAIT_CHECK_MS = 2_000  // check every 2s
+    const maxWaitUntil = Date.now() + WAIT_LIQUIDITY_MS
+
+    let livePrice: number | null = null
+    let priceSource = 'WS'
+
+    // First check: WS or REST
+    livePrice = getWsBestAsk(tokenId) ?? await getBestAsk(tokenId)
+    if (!livePrice) priceSource = 'REST'
+
+    if (livePrice && livePrice <= MAX_ENTRY) {
+      // Liquidity available immediately
+      priceSource = getWsBestAsk(tokenId) ? 'WS' : 'REST'
+    } else if (livePrice && livePrice > MAX_ENTRY) {
+      // Ask too high — wait for market maker to recharge
+      console.log(`  ⏳ WAIT | ask ${(livePrice * 100).toFixed(0)}¢ > ${(MAX_ENTRY * 100).toFixed(0)}¢ — waiting for liquidity | ${alert.position.title.slice(0, 35)}`)
+
+      livePrice = null  // reset, will be set when ask drops
+      while (Date.now() < maxWaitUntil) {
+        await new Promise(r => setTimeout(r, WAIT_CHECK_MS))
+        const wsAsk = getWsBestAsk(tokenId)
+        if (wsAsk && wsAsk <= MAX_ENTRY) {
+          livePrice = wsAsk
+          priceSource = 'WS'
+          console.log(`  ✅ LIQUIDITY | ask dropped to ${(wsAsk * 100).toFixed(0)}¢ after ${((Date.now() - (maxWaitUntil - WAIT_LIQUIDITY_MS)) / 1000).toFixed(0)}s | ${alert.position.title.slice(0, 35)}`)
+          break
+        }
+      }
+
+      if (!livePrice) {
+        console.log(`  ⏭️  TIMEOUT | no liquidity after ${(WAIT_LIQUIDITY_MS / 1000).toFixed(0)}s | ${alert.position.title.slice(0, 45)}`)
+        unsubscribeToken(tokenId)
+        return false
+      }
+    } else if (!livePrice) {
+      console.log(`  ⚠️  NO ORDERBOOK | ${alert.position.title.slice(0, 45)}`)
+      unsubscribeToken(tokenId)
       return false
     }
 
