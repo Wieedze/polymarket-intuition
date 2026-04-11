@@ -54,6 +54,9 @@ import { scoreSignal, signalBetMultiplier, isContradictory, kellyBetFraction } f
 import { evaluateExpertTrust, getAllExpertTrust, getBankrollScale } from '../src/lib/expert-trust'
 import { placeOrder, getRealBalance, closePosition, checkOrderStatus, cancelOrder, type RealOrder } from '../src/lib/real-trader'
 import { connectOrderbookWS, subscribeToken, unsubscribeToken, getWsBestBid, isWsConnected, getSubscribedCount, connectUserWS, subscribeUserMarket, isUserWsConnected } from '../src/lib/orderbook-ws'
+import { getNoVigConsensus } from '../src/lib/odds-api'
+import { detectSportKey, parseMarketTitle } from '../src/lib/sports-scanner'
+import { findGameMatch } from '../src/lib/team-matcher'
 
 const POLYMARKET_DATA_URL = process.env.POLYMARKET_DATA_URL ?? 'https://data-api.polymarket.com'
 
@@ -64,7 +67,8 @@ const BET_PCT = parseFloat(process.env.BET_PCT ?? '0.02')
 const MIN_ENTRY = parseFloat(process.env.MIN_ENTRY_PRICE ?? '0.05')
 const MAX_ENTRY = parseFloat(process.env.MAX_ENTRY_PRICE ?? '0.65')  // signal-scorer blocks >65¢ with score=0
 const MAX_OPEN = parseInt(process.env.MAX_OPEN_TRADES ?? '100', 10)  // fixed cap
-const MIN_SIGNAL_SCORE = parseInt(process.env.MIN_SIGNAL_SCORE_LIVE ?? '50', 10)  // 50¢ cap already filters, no need for double filter
+const MIN_SIGNAL_SCORE = parseInt(process.env.MIN_SIGNAL_SCORE_LIVE ?? '50', 10)
+const ODDS_API_KEY = process.env.ODDS_API_KEY ?? ''
 
 // Polymarket CLOB constraints (cannot change)
 const POLY_MIN_ORDER_SHARES = 15   // minimum shares to place a buy order
@@ -373,15 +377,63 @@ async function tryCopyWithSignal(alert: PositionAlert): Promise<boolean> {
     return false
   }
 
+  // Sports odds lookup — adds bonus points to signal score, never blocks
+  let bookmakerEdgeBonus = 0
+  let bookmakerNoVigProb: number | null = null
+
+  if (ODDS_API_KEY) {
+    const titleClass = keywordClassify(alert.position.title)
+    if (titleClass?.domain === 'pm-domain/sports') {
+      const sportKey = detectSportKey(alert.position.title)
+      if (sportKey) {
+        try {
+          const parsed = parseMarketTitle(alert.position.title)
+          const noVigGames = await getNoVigConsensus(sportKey, ODDS_API_KEY)
+          const matched = findGameMatch(parsed.homeTeam, parsed.awayTeam, noVigGames)
+          if (matched) {
+            const oddsKey = parsed.marketType === 'total' ? 'totals'
+              : parsed.marketType === 'spread' ? 'spreads' : 'h2h'
+            const oddsMarket = matched.markets.find((m) => m.type === oddsKey)
+            if (oddsMarket && oddsMarket.outcomes.length >= 2) {
+              const side = alert.position.outcomeIndex === 0 ? 'YES' : 'NO'
+              // For h2h: match away team name to find the right outcome
+              const lastWord = matched.matchInfo.awayTeam.toLowerCase().split(' ').pop() ?? ''
+              const awayOutcome = oddsMarket.outcomes.find((o) => o.name.toLowerCase().includes(lastWord))
+              if (awayOutcome) {
+                const yesProb = awayOutcome.noVigProb
+                const price = alert.position.curPrice
+                const prob = side === 'YES' ? yesProb : 1 - yesProb
+                const polyPrice = side === 'YES' ? price : 1 - price
+                const edge = prob - polyPrice
+                bookmakerNoVigProb = prob
+
+                bookmakerEdgeBonus = edge >= 0.15 ? 25
+                  : edge >= 0.10 ? 18
+                  : edge >= 0.07 ? 12
+                  : edge >= 0.04 ? 6
+                  : 0
+              }
+            }
+          }
+        } catch {
+          // Odds lookup failure = 0 bonus, non-blocking
+        }
+      }
+    }
+  }
+
   const signal = scoreSignal({
     expertWallet: alert.wallet,
     marketTitle: alert.position.title,
     entryPrice: alert.position.curPrice,
     positionSize: alert.position.size,
+    bookmakerEdgeBonus,
+    bookmakerNoVigProb: bookmakerNoVigProb ?? undefined,
   })
 
   if (signal.score < MIN_SIGNAL_SCORE) {
-    console.log(`  ⏭️  SKIP (${signal.score}/${MIN_SIGNAL_SCORE}) | ${signal.reasons[0]} | ${alert.position.title.slice(0, 50)}`)
+    const oddsTag = bookmakerEdgeBonus > 0 ? ` | book:+${bookmakerEdgeBonus}pts` : ''
+    console.log(`  ⏭️  SKIP (${signal.score}/${MIN_SIGNAL_SCORE}) | ${signal.reasons[0]}${oddsTag} | ${alert.position.title.slice(0, 50)}`)
     return false
   }
 
@@ -441,9 +493,10 @@ async function tryCopyWithSignal(alert: PositionAlert): Promise<boolean> {
   const scoreTag = signal.score >= 80 ? '🔥' : signal.score >= 60 ? '✅' : '⚠️'
   const stopTag = `stop:-${(EXIT_CONFIG.stopLossPct * 100).toFixed(0)}%`
   const domainTag = domain ? `[${domain.domain.replace('pm-domain/', '')}]` : ''
+  const oddsTag = signal.bookmakerEdgeBonus > 0 ? ` | 📊book:${((signal.bookmakerNoVigProb ?? 0) * 100).toFixed(0)}%(+${signal.bookmakerEdgeBonus}pts)` : ''
 
   if (DRY_RUN) {
-    console.log(`  🏜️  DRY-RUN | ${scoreTag} ${side} @ ${(rawPrice * 100).toFixed(0)}¢ | $${betAmount.toFixed(2)}${consensusTag}${trustTag} | ${kellyTag} | ${stopTag} | ${alert.position.title.slice(0, 45)} ${domainTag}`)
+    console.log(`  🏜️  DRY-RUN | ${scoreTag} ${side} @ ${(rawPrice * 100).toFixed(0)}¢ | $${betAmount.toFixed(2)}${consensusTag}${trustTag} | ${kellyTag} | ${stopTag}${oddsTag} | ${alert.position.title.slice(0, 45)} ${domainTag}`)
     logBotEvent('live-dry-run', `${side} @ ${(entryPrice * 100).toFixed(0)}¢ $${betAmount.toFixed(2)} | ${alert.position.title}`, `Score: ${signal.score}/100`)
   } else {
     // ── Place GTC order at expert price + buffer ─────────────────────
@@ -482,7 +535,7 @@ async function tryCopyWithSignal(alert: PositionAlert): Promise<boolean> {
 
     if (result.filledPrice) {
       // Filled immediately — record paper trade
-      console.log(`  💰 LIVE ${scoreTag} FILLED | ${side} @ ${(rawPrice * 100).toFixed(0)}¢→${(result.filledPrice * 100).toFixed(0)}¢ | $${liveBetAmount.toFixed(2)}${consensusTag}${trustTag} | ${kellyTag} | ${stopTag} | orderId:${result.orderId?.slice(0, 12)} | ${alert.position.title.slice(0, 40)} ${domainTag}`)
+      console.log(`  💰 LIVE ${scoreTag} FILLED | ${side} @ ${(rawPrice * 100).toFixed(0)}¢→${(result.filledPrice * 100).toFixed(0)}¢ | $${liveBetAmount.toFixed(2)}${consensusTag}${trustTag} | ${kellyTag} | ${stopTag}${oddsTag} | ${alert.position.title.slice(0, 40)} ${domainTag}`)
       logBotEvent('live-copy', `FILLED ${side} @ ${(result.filledPrice * 100).toFixed(0)}¢ $${liveBetAmount.toFixed(2)} | ${alert.position.title}`, `Score: ${signal.score}/100 | ${kellyTag}`)
 
       openPaperTrade({

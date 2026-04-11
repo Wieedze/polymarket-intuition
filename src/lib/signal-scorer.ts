@@ -13,6 +13,8 @@ export type SignalScore = {
   betSizeSignal: number   // how big is this bet vs expert's usual
   domain: string | null
   reasons: string[]       // human-readable reasons
+  bookmakerEdgeBonus: number       // 0 if not sports or no match
+  bookmakerNoVigProb: number | null // bookmaker fair prob for logging
 }
 
 // ── Config ────────────────────────────────────────────────────────
@@ -78,8 +80,12 @@ export function scoreSignal(params: {
   marketTitle: string
   entryPrice: number
   positionSize: number   // shares held by expert
+  bookmakerEdgeBonus?: number     // pre-computed odds bonus, 0 if not sports
+  bookmakerNoVigProb?: number     // bookmaker fair prob for logging
 }): SignalScore {
   const { expertWallet, marketTitle, entryPrice, positionSize } = params
+  const oddsBonus = params.bookmakerEdgeBonus ?? 0
+  const oddsProb = params.bookmakerNoVigProb ?? null
 
   const classification = keywordClassify(marketTitle)
   const domain = classification?.domain ?? null
@@ -93,6 +99,7 @@ export function scoreSignal(params: {
         score: 0, domainMatch: false, expertCalibration: 0,
         expertWinRate: 0, expertTrades: 0, betSizeSignal: 0,
         expertImplicitEdge: 0, domain, reasons: ['Noise market filtered'],
+        bookmakerEdgeBonus: 0, bookmakerNoVigProb: null,
       }
     }
   }
@@ -103,6 +110,7 @@ export function scoreSignal(params: {
       score: 0, domainMatch: false, expertCalibration: 0,
       expertWinRate: 0, expertTrades: 0, betSizeSignal: 0,
       expertImplicitEdge: 0, domain, reasons: [`Domain ${domain} blocked — negative edge`],
+      bookmakerEdgeBonus: 0, bookmakerNoVigProb: null,
     }
   }
 
@@ -113,6 +121,7 @@ export function scoreSignal(params: {
       score: 0, domainMatch: false, expertCalibration: 0,
       expertWinRate: 0, expertTrades: 0, betSizeSignal: 0,
       expertImplicitEdge: 0, domain, reasons: ['Unknown domain — skipped'],
+      bookmakerEdgeBonus: 0, bookmakerNoVigProb: null,
     }
   }
 
@@ -124,6 +133,7 @@ export function scoreSignal(params: {
       score: 0, domainMatch: false, expertCalibration: 0,
       expertWinRate: 0, expertTrades: 0, betSizeSignal: 0,
       expertImplicitEdge: 0, domain, reasons: ['No historical data for this expert'],
+      bookmakerEdgeBonus: 0, bookmakerNoVigProb: null,
     }
   }
 
@@ -193,6 +203,7 @@ export function scoreSignal(params: {
       score: 0, domainMatch: false, expertCalibration: 0,
       expertWinRate: 0, expertTrades: 0, betSizeSignal: 0,
       expertImplicitEdge: 0, domain, reasons: [`Entry ${(entryPrice * 100).toFixed(0)}¢ blocked — no edge above 65¢`],
+      bookmakerEdgeBonus: 0, bookmakerNoVigProb: null,
     }
   } else if (entryPrice >= 0.15 && entryPrice <= 0.30) {
     entryScore = 15  // longshot sweet spot — best historical edge (+$76k, +9pts)
@@ -217,10 +228,16 @@ export function scoreSignal(params: {
   const rawScore = domainScore + calibrationScore + implicitEdgeScore + winRateScore + entryScore + betSizeSignal
 
   // Apply domain performance multiplier (boost profitable domains, penalize losing ones)
-  const totalScore = Math.round(rawScore * domainMultiplier)
+  const expertScore = Math.round(rawScore * domainMultiplier)
+
+  // Add bookmaker odds bonus (sports only, additive — never blocks, only helps)
+  const totalScore = Math.min(expertScore + oddsBonus, 100)
 
   if (domainMultiplier !== 1.0) {
     reasons.push(domainMultiplier > 1 ? `Domain boost ${domainMultiplier}x` : `Domain penalty ${domainMultiplier}x`)
+  }
+  if (oddsBonus > 0 && oddsProb != null) {
+    reasons.push(`Book: ${(oddsProb * 100).toFixed(0)}% (+${oddsBonus}pts)`)
   }
 
   return {
@@ -233,6 +250,8 @@ export function scoreSignal(params: {
     betSizeSignal,
     domain,
     reasons,
+    bookmakerEdgeBonus: oddsBonus,
+    bookmakerNoVigProb: oddsProb,
   }
 }
 
