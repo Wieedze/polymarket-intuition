@@ -52,9 +52,11 @@ module.exports = {
         DB_PATH: '/opt/polymarket-intuition/data/sports.db',
         SHARED_DB_PATH: '/opt/polymarket-intuition/data/polymarket.db',
         STARTING_BALANCE: '50',
-        POLL_INTERVAL_MS: '300000',     // 5 min
-        SCAN_INTERVAL_MS: '3600000',    // 1h market rescan
+        POLL_INTERVAL_MS: '7200000',    // 2h — free tier budget (500 req/month)
+        SCAN_INTERVAL_MS: '7200000',    // 2h market rescan
         MAX_OPEN_TRADES: '20',
+        MAX_SPORTS: '2',                // limit to 2 sports (free tier)
+        ALLOWED_SPORTS: 'baseball_mlb,icehockey_nhl',  // MLB + NHL (most liquid now)
         MIN_SIGNAL_SCORE_SPORTS: '50',
         DRY_RUN: 'true',               // start in dry-run
         STOP_LOSS: '0.40',

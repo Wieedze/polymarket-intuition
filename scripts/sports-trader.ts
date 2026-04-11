@@ -58,6 +58,8 @@ const SCAN_INTERVAL_MS = parseInt(process.env.SCAN_INTERVAL_MS ?? '3600000', 10)
 const ODDS_API_KEY = process.env.ODDS_API_KEY ?? ''
 const MIN_SIGNAL_SCORE = parseInt(process.env.MIN_SIGNAL_SCORE_SPORTS ?? '50', 10)
 const MAX_OPEN = parseInt(process.env.MAX_OPEN_TRADES ?? '20', 10)
+const MAX_SPORTS = parseInt(process.env.MAX_SPORTS ?? '10', 10)
+const ALLOWED_SPORTS = process.env.ALLOWED_SPORTS?.split(',').filter(Boolean) ?? []  // empty = all
 const DRY_RUN = process.env.DRY_RUN !== 'false'
 const MAX_ENTRY = parseFloat(process.env.MAX_ENTRY_PRICE ?? '0.65')
 const GTC_TIMEOUT_MS = 5 * 60 * 1000  // 5 min timeout for pending GTC orders
@@ -381,9 +383,17 @@ async function scanMarkets(): Promise<void> {
 
   try {
     const discovered = await scanSportsMarkets()
-    activeSportKeys = getActiveSportKeys(discovered)
+    let detectedKeys = getActiveSportKeys(discovered)
 
-    console.log(`  Found ${discovered.length} sports markets | Sports: ${activeSportKeys.join(', ') || 'none'}`)
+    // Filter by allowed sports (if configured)
+    if (ALLOWED_SPORTS.length > 0) {
+      detectedKeys = detectedKeys.filter((k) => ALLOWED_SPORTS.includes(k))
+    }
+
+    // Cap to MAX_SPORTS
+    activeSportKeys = detectedKeys.slice(0, MAX_SPORTS)
+
+    console.log(`  Found ${discovered.length} sports markets | Active: ${activeSportKeys.join(', ') || 'none'}`)
 
     // Subscribe WS for all active markets
     for (const market of discovered) {
@@ -539,6 +549,8 @@ async function main(): Promise<void> {
   console.log(`  Poll:        ${POLL_INTERVAL_MS / 1000}s`)
   console.log(`  Scan:        ${SCAN_INTERVAL_MS / 60000}min`)
   console.log(`  Max open:    ${MAX_OPEN}`)
+  console.log(`  Max sports:  ${MAX_SPORTS}`)
+  console.log(`  Sports:      ${ALLOWED_SPORTS.length > 0 ? ALLOWED_SPORTS.join(', ') : 'all'}`)
   console.log(`  Min score:   ${MIN_SIGNAL_SCORE}`)
   console.log(`  Stop-loss:   -${(EXIT_CONFIG.stopLossPct * 100).toFixed(0)}%`)
   console.log(`  Stale exit:  ${EXIT_CONFIG.staleDays}d`)
