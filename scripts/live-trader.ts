@@ -844,7 +844,10 @@ async function main(): Promise<void> {
         const existingTrades = getOpenPaperTrades()
         let synced = 0
         for (const p of openPositions) {
+          // Skip if already tracked (open) OR was previously closed (don't re-sync sold positions)
+          const allTrades = getLivePaperTrades()
           const alreadyTracked = existingTrades.some(t => t.conditionId === p.conditionId)
+            || allTrades.some(t => t.conditionId === p.conditionId && t.status !== 'open')
           if (!alreadyTracked) {
             const side = p.outcomeIndex === 0 ? 'YES' : 'NO'
             // Cache the token ID for exit orders

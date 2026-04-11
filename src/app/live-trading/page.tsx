@@ -18,11 +18,16 @@ type ChartPoint = {
   winRate: number
 }
 type BotEvent = { id: number; type: string; message: string; detail: string | null; createdAt: string }
-type DomainInfo = { domain: string; pnl: number; trades: number; won: number; winRate: number }
+type DomainInfo = { domain: string; pnl: number; trades: number; won: number; winRate: number; avgPnl: number }
+type ExpertInfo = { expert: string; trades: number; won: number; winRate: number; pnl: number; avgPnl: number }
 type TradeInfo = {
   title: string; side: string; entryPrice: number; curPrice: number
   unrealized: number; expert: string; domain: string
 }
+type SideInfo = { trades: number; won: number; winRate: number; pnl: number }
+type EntryInfo = { label: string; trades: number; won: number; winRate: number; expectedWinRate: number; implicitEdge: number; pnl: number }
+type ExpertTrustInfo = { expert: string; phase: string; status: string; trustLevel: number; resolvedTrades: number; winRate: number; pnl: number; reason: string }
+type GateInfo = { value: number; threshold: number; ok: boolean }
 
 type LiveData = {
   balance: number
@@ -39,13 +44,21 @@ type LiveData = {
   losses: number
   openTrades: number
   totalTrades: number
+  closedTrades: number
   roi: number
   chartData: ChartPoint[]
   events: BotEvent[]
   domains: DomainInfo[]
+  experts: ExpertInfo[]
   topOpen: TradeInfo[]
   bestTrades: Array<{ title: string; side: string; entryPrice: number; pnl: number; expert: string; domain: string }>
   worstTrades: Array<{ title: string; side: string; entryPrice: number; pnl: number; expert: string; domain: string }>
+  bySide: { yes: SideInfo; no: SideInfo }
+  byEntry: EntryInfo[]
+  costs: { preCostPnl: number; totalFees: number; totalSlippage: number; feePct: number; slippagePct: number; totalDeployed: number }
+  gates: { profitFactor: GateInfo; maxConsecutiveLosses: GateInfo; avgPnlPerTrade: GateInfo; minResolvedTrades: GateInfo }
+  stats: { profitFactor: number; maxConsecutiveLosses: number; avgPnlPerTrade: number; maxDrawdown: number; significance: string; winRateCI: { lower: number; upper: number }; grossWins: number; grossLosses: number }
+  expertTrust: ExpertTrustInfo[]
 }
 
 const COLORS = {
@@ -60,8 +73,8 @@ const COLORS = {
   blue: '#28AEF3',
   textMuted: '#87888C',
   textLight: '#D2D2D2',
-  live: '#3B82F6',        // electric blue — live trading identity
-  liveGlow: '#60A5FA',    // lighter blue for accents
+  live: '#3B82F6',
+  liveGlow: '#60A5FA',
 }
 
 const DOMAIN_PIE_COLORS: Record<string, string> = {
@@ -100,13 +113,21 @@ export default function LiveTrading(): React.ReactElement {
             losses: p.losses,
             openTrades: p.openTrades,
             totalTrades: p.totalTrades,
+            closedTrades: p.closedTrades ?? 0,
             roi: p.roi,
             chartData: snap.chartData,
             events: snap.events,
             domains: snap.byDomain,
+            experts: snap.byExpert ?? [],
             topOpen: snap.topOpen ?? [],
             bestTrades: snap.bestTrades ?? [],
             worstTrades: snap.worstTrades ?? [],
+            bySide: snap.bySide ?? { yes: { trades: 0, won: 0, winRate: 0, pnl: 0 }, no: { trades: 0, won: 0, winRate: 0, pnl: 0 } },
+            byEntry: snap.byEntry ?? [],
+            costs: snap.costs ?? { preCostPnl: 0, totalFees: 0, totalSlippage: 0, feePct: 0, slippagePct: 0, totalDeployed: 0 },
+            gates: snap.gates ?? {},
+            stats: snap.stats ?? {},
+            expertTrust: snap.expertTrust ?? [],
           } as LiveData
         })
         .then((d) => { if (d) setData(d) })
@@ -130,12 +151,6 @@ export default function LiveTrading(): React.ReactElement {
         <p className="text-sm mb-4" style={{ color: COLORS.textMuted }}>
           No live trades yet. Start the live trader to see data here.
         </p>
-        <div className="p-4 rounded-xl text-left text-xs font-mono" style={{ background: COLORS.surface, color: COLORS.textMuted }}>
-          <div># Dry run (no real orders):</div>
-          <div style={{ color: COLORS.teal }}>DRY_RUN=true STARTING_BALANCE=100 npx tsx scripts/live-trader.ts</div>
-          <div className="mt-2"># Real money:</div>
-          <div style={{ color: COLORS.live }}>STARTING_BALANCE=100 npx tsx scripts/live-trader.ts</div>
-        </div>
       </div>
     </div>
   )
@@ -198,15 +213,13 @@ export default function LiveTrading(): React.ReactElement {
             <BigStat
               label="Live Equity"
               value={`$${data.totalEquity.toFixed(2)}`}
-              sub={`${(data.roi * 100).toFixed(1)}% ROI`}
-              color={COLORS.teal}
+              sub={`${data.roi >= 0 ? '+' : ''}${(data.roi * 100).toFixed(1)}% ROI`}
+              color={data.totalEquity >= data.startingBalance ? COLORS.teal : COLORS.red}
             />
             <BigStat
               label="Realized P&L"
               value={pnlStr(data.realizedPnl)}
-              sub={data.partialExitsPnl !== 0
-                ? `incl. ${pnlStr(data.partialExitsPnl)} partials`
-                : `avg hold ${data.avgHoldDays < 1 ? `${(data.avgHoldDays * 24).toFixed(0)}h` : `${data.avgHoldDays.toFixed(1)}d`}`}
+              sub={`avg hold ${data.avgHoldDays < 1 ? `${(data.avgHoldDays * 24).toFixed(0)}h` : `${data.avgHoldDays.toFixed(1)}d`}`}
               color={data.realizedPnl >= 0 ? COLORS.green : COLORS.red}
             />
             <BigStat
@@ -229,14 +242,95 @@ export default function LiveTrading(): React.ReactElement {
             />
           </div>
 
+          {/* Cost waterfall + Edge quality */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+            {/* Cost waterfall */}
+            <div className="rounded-xl p-5" style={{ background: COLORS.card }}>
+              <h2 className="text-sm font-medium mb-4" style={{ color: COLORS.textMuted }}>P&L BREAKDOWN</h2>
+              <div className="flex items-center gap-3 text-xs">
+                <div className="text-center p-3 rounded-lg" style={{ background: COLORS.surface }}>
+                  <div style={{ color: COLORS.textMuted }}>Alpha before costs</div>
+                  <div className="text-lg font-bold mt-1" style={{ color: data.costs.preCostPnl >= 0 ? COLORS.teal : COLORS.red }}>
+                    {pnlStr(data.costs.preCostPnl)}
+                  </div>
+                </div>
+                <span style={{ color: COLORS.textMuted }}>-</span>
+                <div className="text-center p-3 rounded-lg" style={{ background: COLORS.surface, border: `1px solid ${COLORS.amber}40` }}>
+                  <div style={{ color: COLORS.textMuted }}>Fees (2% taker)</div>
+                  <div className="text-lg font-bold mt-1" style={{ color: COLORS.amber }}>
+                    -${data.costs.totalFees.toFixed(2)}
+                  </div>
+                  <div className="text-[10px]" style={{ color: COLORS.textMuted }}>{(data.costs.feePct * 100).toFixed(1)}% of deployed</div>
+                </div>
+                <span style={{ color: COLORS.textMuted }}>-</span>
+                <div className="text-center p-3 rounded-lg" style={{ background: COLORS.surface, border: `1px solid ${COLORS.amber}40` }}>
+                  <div style={{ color: COLORS.textMuted }}>Slippage (est.)</div>
+                  <div className="text-lg font-bold mt-1" style={{ color: COLORS.amber }}>
+                    -${data.costs.totalSlippage.toFixed(2)}
+                  </div>
+                  <div className="text-[10px]" style={{ color: COLORS.textMuted }}>{(data.costs.slippagePct * 100).toFixed(1)}% of deployed</div>
+                </div>
+                <span style={{ color: COLORS.textMuted }}>=</span>
+                <div className="text-center p-3 rounded-lg" style={{ background: COLORS.surface, border: `1px solid ${COLORS.live}40` }}>
+                  <div style={{ color: COLORS.textMuted }}>Net realized P&L</div>
+                  <div className="text-lg font-bold mt-1" style={{ color: data.realizedPnl >= 0 ? COLORS.teal : COLORS.red }}>
+                    {pnlStr(data.realizedPnl)}
+                  </div>
+                  <div className="text-[10px]" style={{ color: COLORS.textMuted }}>costs already deducted</div>
+                </div>
+              </div>
+            </div>
+
+            {/* Edge quality + Risk */}
+            <div className="rounded-xl p-5" style={{ background: COLORS.card }}>
+              <h2 className="text-sm font-medium mb-4" style={{ color: COLORS.textMuted }}>EDGE & RISK</h2>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <div className="text-xs" style={{ color: COLORS.textMuted }}>Profit Factor</div>
+                  <div className="text-xl font-bold" style={{ color: data.stats.profitFactor >= 1.3 ? COLORS.green : COLORS.amber }}>
+                    {data.stats.profitFactor?.toFixed(2) ?? '--'}
+                  </div>
+                  <div className="text-[10px]" style={{ color: data.gates?.profitFactor?.ok ? COLORS.green : COLORS.red }}>
+                    {data.gates?.profitFactor?.ok ? '✅' : '❌'} need ≥ 1.30
+                  </div>
+                </div>
+                <div>
+                  <div className="text-xs" style={{ color: COLORS.textMuted }}>Max Drawdown</div>
+                  <div className="text-xl font-bold" style={{ color: data.stats.maxDrawdown > 0.20 ? COLORS.red : COLORS.teal }}>
+                    -{(data.stats.maxDrawdown * 100).toFixed(1)}%
+                  </div>
+                  <div className="text-[10px]" style={{ color: COLORS.textMuted }}>from peak equity</div>
+                </div>
+                <div>
+                  <div className="text-xs" style={{ color: COLORS.textMuted }}>Avg P&L / trade</div>
+                  <div className="text-xl font-bold" style={{ color: data.stats.avgPnlPerTrade >= 0 ? COLORS.green : COLORS.red }}>
+                    {pnlStr(data.stats.avgPnlPerTrade ?? 0)}
+                  </div>
+                  <div className="text-[10px]" style={{ color: data.gates?.avgPnlPerTrade?.ok ? COLORS.green : COLORS.red }}>
+                    {data.gates?.avgPnlPerTrade?.ok ? '✅' : '❌'} need {'>'}  +$5
+                  </div>
+                </div>
+                <div>
+                  <div className="text-xs" style={{ color: COLORS.textMuted }}>Max Consec. Losses</div>
+                  <div className="text-xl font-bold" style={{ color: data.stats.maxConsecutiveLosses <= 15 ? COLORS.teal : COLORS.red }}>
+                    {data.stats.maxConsecutiveLosses ?? '--'}
+                  </div>
+                  <div className="text-[10px]" style={{ color: data.gates?.maxConsecutiveLosses?.ok ? COLORS.green : COLORS.red }}>
+                    {data.gates?.maxConsecutiveLosses?.ok ? '✅' : '❌'} need ≤ 15
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
           {/* Charts */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
             {/* Equity curve */}
             <div className="lg:col-span-2 rounded-xl p-5" style={{ background: COLORS.card }}>
               <div className="flex items-center justify-between mb-1">
                 <h2 className="text-sm font-medium" style={{ color: COLORS.textMuted }}>Live Equity Curve</h2>
-                <span className="text-lg font-bold" style={{ color: data.realizedPnl >= 0 ? COLORS.teal : COLORS.red }}>
-                  ${data.balance.toFixed(2)}
+                <span className="text-lg font-bold" style={{ color: data.totalEquity >= data.startingBalance ? COLORS.teal : COLORS.red }}>
+                  ${data.totalEquity.toFixed(2)}
                 </span>
               </div>
               <p className="text-xs mb-3" style={{ color: COLORS.textMuted }}>Real money portfolio (started at ${data.startingBalance.toFixed(0)})</p>
@@ -327,6 +421,141 @@ export default function LiveTrading(): React.ReactElement {
                     <Line type="monotone" dataKey="winRate" stroke={COLORS.amber} strokeWidth={2} dot={{ r: 3, fill: COLORS.amber }} />
                   </LineChart>
                 </ResponsiveContainer>
+              </div>
+            </div>
+          )}
+
+          {/* YES vs NO + Entry Price Edge */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+            {/* YES vs NO */}
+            <div className="rounded-xl p-5" style={{ background: COLORS.card }}>
+              <h2 className="text-sm font-medium mb-4" style={{ color: COLORS.textMuted }}>YES VS NO</h2>
+              <div className="space-y-3">
+                <div className="flex items-center justify-between text-sm">
+                  <span className="font-bold" style={{ color: COLORS.green }}>YES</span>
+                  <span style={{ color: COLORS.textMuted }}>{data.bySide.yes.trades} trades &nbsp; WR {(data.bySide.yes.winRate * 100).toFixed(0)}%</span>
+                  <span className="font-bold" style={{ color: data.bySide.yes.pnl >= 0 ? COLORS.green : COLORS.red }}>{pnlStr(data.bySide.yes.pnl)}</span>
+                </div>
+                <div className="flex items-center justify-between text-sm">
+                  <span className="font-bold" style={{ color: COLORS.red }}>NO</span>
+                  <span style={{ color: COLORS.textMuted }}>{data.bySide.no.trades} trades &nbsp; WR {(data.bySide.no.winRate * 100).toFixed(0)}%</span>
+                  <span className="font-bold" style={{ color: data.bySide.no.pnl >= 0 ? COLORS.green : COLORS.red }}>{pnlStr(data.bySide.no.pnl)}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Entry price edge */}
+            <div className="rounded-xl p-5" style={{ background: COLORS.card }}>
+              <h2 className="text-sm font-medium mb-4" style={{ color: COLORS.textMuted }}>ENTRY PRICE EDGE</h2>
+              {data.byEntry.length > 0 ? (
+                <div className="space-y-3">
+                  {data.byEntry.map((b) => (
+                    <div key={b.label} className="flex items-center justify-between text-xs">
+                      <div className="flex-1">
+                        <div style={{ color: COLORS.textLight }}>{b.label}</div>
+                        <div style={{ color: COLORS.textMuted }}>
+                          Expected: {(b.expectedWinRate * 100).toFixed(0)}% / Actual: {(b.winRate * 100).toFixed(0)}%
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <div className="font-bold" style={{ color: b.pnl >= 0 ? COLORS.green : COLORS.red }}>{pnlStr(b.pnl)}</div>
+                        <div style={{ color: b.implicitEdge >= 0 ? COLORS.green : COLORS.red }}>
+                          {b.implicitEdge >= 0 ? '+' : ''}{(b.implicitEdge * 100).toFixed(0)}pts edge / {b.trades}t
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-sm py-4 text-center" style={{ color: COLORS.textMuted }}>Not enough data</div>
+              )}
+            </div>
+          </div>
+
+          {/* Performance by Domain + Expert */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+            {/* By Domain */}
+            <div className="rounded-xl p-5" style={{ background: COLORS.card }}>
+              <h2 className="text-sm font-medium mb-4" style={{ color: COLORS.textMuted }}>PERFORMANCE BY DOMAIN</h2>
+              <table className="w-full text-xs">
+                <thead>
+                  <tr style={{ color: COLORS.textMuted }}>
+                    <th className="text-left pb-2">Domain</th>
+                    <th className="text-right pb-2">Trades</th>
+                    <th className="text-right pb-2">WR</th>
+                    <th className="text-right pb-2">P&L</th>
+                    <th className="text-right pb-2">Avg</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.domains.map((d) => (
+                    <tr key={d.domain} className="border-t" style={{ borderColor: COLORS.surface }}>
+                      <td className="py-1.5 capitalize" style={{ color: COLORS.textLight }}>{d.domain}</td>
+                      <td className="py-1.5 text-right" style={{ color: COLORS.textMuted }}>{d.trades}</td>
+                      <td className="py-1.5 text-right" style={{ color: COLORS.textMuted }}>{(d.winRate * 100).toFixed(0)}%</td>
+                      <td className="py-1.5 text-right font-medium" style={{ color: d.pnl >= 0 ? COLORS.green : COLORS.red }}>{pnlStr(d.pnl)}</td>
+                      <td className="py-1.5 text-right" style={{ color: d.avgPnl >= 0 ? COLORS.teal : COLORS.red }}>{pnlStr(d.avgPnl)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* By Expert */}
+            <div className="rounded-xl p-5" style={{ background: COLORS.card }}>
+              <h2 className="text-sm font-medium mb-4" style={{ color: COLORS.textMuted }}>PERFORMANCE BY EXPERT</h2>
+              <table className="w-full text-xs">
+                <thead>
+                  <tr style={{ color: COLORS.textMuted }}>
+                    <th className="text-left pb-2">Expert</th>
+                    <th className="text-right pb-2">Trades</th>
+                    <th className="text-right pb-2">WR</th>
+                    <th className="text-right pb-2">P&L</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.experts.slice(0, 15).map((e) => (
+                    <tr key={e.expert} className="border-t" style={{ borderColor: COLORS.surface }}>
+                      <td className="py-1.5 truncate max-w-[150px]" style={{ color: COLORS.textLight }}>{e.expert}</td>
+                      <td className="py-1.5 text-right" style={{ color: COLORS.textMuted }}>{e.trades}</td>
+                      <td className="py-1.5 text-right" style={{ color: COLORS.textMuted }}>{(e.winRate * 100).toFixed(0)}%</td>
+                      <td className="py-1.5 text-right font-medium" style={{ color: e.pnl >= 0 ? COLORS.green : COLORS.red }}>{pnlStr(e.pnl)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Expert Trust Levels */}
+          {data.expertTrust.length > 0 && (
+            <div className="rounded-xl p-5 mb-8" style={{ background: COLORS.card }}>
+              <h2 className="text-sm font-medium mb-4" style={{ color: COLORS.textMuted }}>EXPERT TRUST LEVELS</h2>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                {data.expertTrust.slice(0, 12).map((t) => {
+                  const statusColor = t.status === 'active' ? COLORS.green
+                    : t.status === 'reduced' ? COLORS.amber
+                    : COLORS.red
+                  return (
+                    <div key={t.expert} className="p-3 rounded-lg text-xs" style={{ background: COLORS.surface }}>
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="font-medium truncate" style={{ color: COLORS.textLight }}>{t.expert}</span>
+                        <span className="px-1.5 py-0.5 rounded text-[10px] font-bold" style={{ background: `${statusColor}20`, color: statusColor }}>
+                          {t.status}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between" style={{ color: COLORS.textMuted }}>
+                        <span>{t.phase} / {t.resolvedTrades}t / WR {(t.winRate * 100).toFixed(0)}%</span>
+                        <span style={{ color: t.pnl >= 0 ? COLORS.green : COLORS.red }}>{pnlStr(t.pnl)}</span>
+                      </div>
+                      <div className="mt-1">
+                        <div className="h-1.5 rounded-full" style={{ background: COLORS.card }}>
+                          <div className="h-full rounded-full" style={{ width: `${Math.min(t.trustLevel * 100, 100)}%`, background: statusColor }} />
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })}
               </div>
             </div>
           )}
