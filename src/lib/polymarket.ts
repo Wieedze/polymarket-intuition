@@ -234,8 +234,10 @@ export async function fetchMarketMetadata(conditionId: string): Promise<MarketMe
 
     if (!clobMarket || !clobMarket.tokens) return null
 
-    const yesToken = clobMarket.tokens.find(t => t.outcome === 'Yes')
-    const noToken = clobMarket.tokens.find(t => t.outcome === 'No')
+    // Yes/No markets: find by outcome name
+    // Head-to-head markets (Pirates vs Cubs): use index 0/1
+    const yesToken = clobMarket.tokens.find(t => t.outcome === 'Yes') ?? clobMarket.tokens[0]
+    const noToken = clobMarket.tokens.find(t => t.outcome === 'No') ?? clobMarket.tokens[1]
     if (!yesToken || !noToken) return null
 
     const meta: MarketMetadata = {
