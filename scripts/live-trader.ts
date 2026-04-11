@@ -20,7 +20,7 @@
  * Optional .env:
  *   DRY_RUN=true                  # log everything but skip real orders
  *   MAX_LIVE_CAPITAL=70           # max % of bankroll deployed (default: 70%)
- *   MIN_SIGNAL_SCORE_LIVE=65      # signal threshold (default: 65)
+ *   MIN_SIGNAL_SCORE_LIVE=65      # signal threshold (default: 50)
  *   POLL_INTERVAL_MS=30000        # poll interval (default: 30s)
  */
 
@@ -47,7 +47,7 @@ import { pollWallet, type PositionAlert } from '../src/lib/position-tracker'
 import { keywordClassify } from '../src/lib/classifier'
 import { fetchAllPages, fetchMarketMetadata } from '../src/lib/polymarket'
 import { evaluateExit, exitEmoji, type ExitConfig } from '../src/lib/exit-strategy'
-import { scoreSignal, shouldCopySignal, signalBetMultiplier, isContradictory, kellyBetFraction } from '../src/lib/signal-scorer'
+import { scoreSignal, signalBetMultiplier, isContradictory, kellyBetFraction } from '../src/lib/signal-scorer'
 import { evaluateExpertTrust, getAllExpertTrust, getBankrollScale } from '../src/lib/expert-trust'
 import { placeOrder, getRealBalance, closePosition, checkOrderStatus, cancelOrder, type RealOrder } from '../src/lib/real-trader'
 import { connectOrderbookWS, subscribeToken, unsubscribeToken, getWsBestBid, isWsConnected, getSubscribedCount, connectUserWS, subscribeUserMarket, isUserWsConnected } from '../src/lib/orderbook-ws'
@@ -347,7 +347,7 @@ async function tryCopyWithSignal(alert: PositionAlert): Promise<boolean> {
     positionSize: alert.position.size,
   })
 
-  if (signal.score < MIN_SIGNAL_SCORE || !shouldCopySignal(signal)) {
+  if (signal.score < MIN_SIGNAL_SCORE) {
     if (signal.score > 20) {
       console.log(`  ⏭️  SKIP (${signal.score}/${MIN_SIGNAL_SCORE}) | ${signal.reasons[0]} | ${alert.position.title}`)
     }
