@@ -36,7 +36,7 @@ module.exports = {
         SHARED_DB_PATH: '/opt/polymarket-intuition/data/polymarket.db',
         STARTING_BALANCE: '9',
         POLL_INTERVAL_MS: '60000',     // 1 min — faster than paper for live
-        MIN_SIGNAL_SCORE_LIVE: '65',   // stricter than paper
+        MIN_SIGNAL_SCORE_LIVE: '50',   // aligned with code default
         DRY_RUN: 'false',             // REAL orders
       },
       restart_delay: 15000,
