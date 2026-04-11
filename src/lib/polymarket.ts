@@ -199,11 +199,8 @@ export async function fetchMarketMetadata(conditionId: string): Promise<MarketMe
   // Gamma API's condition_id param doesn't filter properly — always returns GTA VI markets.
 
   try {
-    // ── CLOB API: exact conditionId match ──────────────────────────
-    const clobRes = await fetch(`https://clob.polymarket.com/markets/${conditionId}`)
-    if (!clobRes.ok) return null
-
-    const clobMarket = await clobRes.json() as {
+    // ── CLOB API: try without neg_risk, then with ─────────────────
+    type ClobMarketResponse = {
       condition_id?: string
       question?: string
       tokens?: Array<{ token_id: string; outcome: string }>
@@ -214,7 +211,28 @@ export async function fetchMarketMetadata(conditionId: string): Promise<MarketMe
       error?: string
     }
 
-    if (clobMarket.error || !clobMarket.tokens || clobMarket.tokens.length < 2) return null
+    let clobMarket: ClobMarketResponse | null = null
+
+    const clobRes = await fetch(`https://clob.polymarket.com/markets/${conditionId}`)
+    if (clobRes.ok) {
+      const data = await clobRes.json() as ClobMarketResponse
+      if (!data.error && data.tokens && data.tokens.length >= 2) {
+        clobMarket = data
+      }
+    }
+
+    // Sports markets need ?neg_risk=true
+    if (!clobMarket) {
+      const negRes = await fetch(`https://clob.polymarket.com/markets/${conditionId}?neg_risk=true`)
+      if (negRes.ok) {
+        const data = await negRes.json() as ClobMarketResponse
+        if (!data.error && data.tokens && data.tokens.length >= 2) {
+          clobMarket = data
+        }
+      }
+    }
+
+    if (!clobMarket || !clobMarket.tokens) return null
 
     const yesToken = clobMarket.tokens.find(t => t.outcome === 'Yes')
     const noToken = clobMarket.tokens.find(t => t.outcome === 'No')
