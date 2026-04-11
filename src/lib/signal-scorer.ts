@@ -200,6 +200,9 @@ export function scoreSignal(params: {
   } else if (entryPrice > 0.30 && entryPrice <= 0.50) {
     entryScore = 10  // value zone — was profitable before scaling, needs quality filter
     reasons.push(`Value entry: ${(entryPrice * 100).toFixed(0)}¢`)
+  } else if (entryPrice >= 0.05 && entryPrice < 0.15) {
+    entryScore = 12  // deep longshot — huge asymmetry (risk 5-15¢, gain 85-95¢)
+    reasons.push(`Deep longshot: ${(entryPrice * 100).toFixed(0)}¢`)
   } else {
     reasons.push(`Extreme longshot: ${(entryPrice * 100).toFixed(0)}¢`)
   }

@@ -32,7 +32,7 @@ const POLYMARKET_DATA_URL = process.env.POLYMARKET_DATA_URL ?? 'https://data-api
 
 const POLL_INTERVAL_MS = parseInt(process.env.POLL_INTERVAL_MS ?? '30000', 10)
 const BET_PCT = parseFloat(process.env.BET_PCT ?? '0.02')  // 2% of available cash per trade
-const MIN_ENTRY = parseFloat(process.env.MIN_ENTRY_PRICE ?? '0.15')
+const MIN_ENTRY = parseFloat(process.env.MIN_ENTRY_PRICE ?? '0.05')
 const MAX_ENTRY = parseFloat(process.env.MAX_ENTRY_PRICE ?? '0.50')  // block 50¢+ — no edge (data: -$15k on 1849 trades, -26pts edge)
 const MAX_OPEN = parseInt(process.env.MAX_OPEN_TRADES ?? '100', 10)  // fixed cap — dynamic scaling diluted edge (275 slots filled with noise)
 

@@ -61,7 +61,7 @@ const POLYMARKET_DATA_URL = process.env.POLYMARKET_DATA_URL ?? 'https://data-api
 
 const POLL_INTERVAL_MS = parseInt(process.env.POLL_INTERVAL_MS ?? '15000', 10)  // 15s — faster detection for FOK fills
 const BET_PCT = parseFloat(process.env.BET_PCT ?? '0.02')
-const MIN_ENTRY = parseFloat(process.env.MIN_ENTRY_PRICE ?? '0.15')
+const MIN_ENTRY = parseFloat(process.env.MIN_ENTRY_PRICE ?? '0.05')
 const MAX_ENTRY = parseFloat(process.env.MAX_ENTRY_PRICE ?? '0.50')  // block 50¢+ — no edge
 const MAX_OPEN = parseInt(process.env.MAX_OPEN_TRADES ?? '100', 10)  // fixed cap
 const MIN_SIGNAL_SCORE = parseInt(process.env.MIN_SIGNAL_SCORE_LIVE ?? '50', 10)  // 50¢ cap already filters, no need for double filter
@@ -264,37 +264,61 @@ async function checkPendingOrders(): Promise<void> {
   if (pending.length === 0) return
 
   const now = Date.now()
+  const SELL_TIMEOUT_MS = 10 * 60_000  // 10 min for sells (longer than buys)
 
   for (const po of pending) {
     const status = await checkOrderStatus(po.orderId)
     const placedMs = new Date(po.placedAt).getTime()
+    const timeoutMs = po.orderType === 'SELL' ? SELL_TIMEOUT_MS : GTC_TIMEOUT_MS
 
     if (status.status === 'filled') {
-      // Order FILLED — NOW we create the paper trade
-      const filledPrice = status.filledPrice ?? po.entryPrice
-      openPaperTrade({
-        conditionId: po.conditionId,
-        title: po.title,
-        domain: po.domain,
-        side: po.side,
-        entryPrice: filledPrice,
-        simulatedUsdc: po.simulatedUsdc,
-        copiedFrom: po.copiedFrom,
-        copiedLabel: po.copiedLabel,
-      })
-      removePendingOrder(po.orderId)
-      console.log(`  ✅ GTC FILLED | ${po.side} @ ${(filledPrice * 100).toFixed(0)}¢ | $${po.simulatedUsdc.toFixed(2)} | ${po.title.slice(0, 40)}`)
-      logBotEvent('live-filled', `FILLED ${po.side} @ ${(filledPrice * 100).toFixed(0)}¢ $${po.simulatedUsdc.toFixed(2)} | ${po.title}`, `orderId:${po.orderId.slice(0, 12)}`)
-    } else if (status.status === 'cancelled' || (now - placedMs > GTC_TIMEOUT_MS && status.status === 'open')) {
-      // Timed out or cancelled — cancel and discard (no paper trade was created)
+      if (po.orderType === 'BUY') {
+        // BUY FILLED — create the paper trade
+        const filledPrice = status.filledPrice ?? po.entryPrice
+        openPaperTrade({
+          conditionId: po.conditionId,
+          title: po.title,
+          domain: po.domain,
+          side: po.side,
+          entryPrice: filledPrice,
+          simulatedUsdc: po.simulatedUsdc,
+          copiedFrom: po.copiedFrom,
+          copiedLabel: po.copiedLabel,
+        })
+        removePendingOrder(po.orderId)
+        console.log(`  ✅ BUY FILLED | ${po.side} @ ${(filledPrice * 100).toFixed(0)}¢ | $${po.simulatedUsdc.toFixed(2)} | ${po.title.slice(0, 40)}`)
+        logBotEvent('live-filled', `BUY FILLED ${po.side} @ ${(filledPrice * 100).toFixed(0)}¢ $${po.simulatedUsdc.toFixed(2)} | ${po.title}`, `orderId:${po.orderId.slice(0, 12)}`)
+      } else {
+        // SELL FILLED — NOW we resolve/partial the paper trade
+        const filledPrice = status.filledPrice ?? po.exitPrice ?? po.entryPrice
+        if (po.partialFraction) {
+          partialExitPaperTrade(po.conditionId, po.partialFraction, filledPrice)
+          console.log(`  ✅ SELL FILLED (partial) | ${po.exitReason} | ${(po.partialFraction * 100).toFixed(0)}% @ ${(filledPrice * 100).toFixed(0)}¢ | ${po.title.slice(0, 40)}`)
+        } else {
+          resolvePaperTrade(po.conditionId, filledPrice)
+          // Unsubscribe from WS
+          const meta = await getTokenId(po.conditionId, po.side)
+          if (meta) unsubscribeToken(meta.tokenId)
+          const pnl = (po.simulatedUsdc / po.entryPrice) * (filledPrice - po.entryPrice)
+          console.log(`  ✅ SELL FILLED | ${po.exitReason} | ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)} @ ${(filledPrice * 100).toFixed(0)}¢ | ${po.title.slice(0, 40)}`)
+        }
+        removePendingOrder(po.orderId)
+        logBotEvent('live-sell-filled', `SELL FILLED ${po.exitReason} @ ${(filledPrice * 100).toFixed(0)}¢ | ${po.title}`, `orderId:${po.orderId.slice(0, 12)}`)
+      }
+    } else if (status.status === 'cancelled' || (now - placedMs > timeoutMs && status.status === 'open')) {
       if (status.status === 'open') {
         const cancelled = await cancelOrder(po.orderId)
-        console.log(`  ⏰ GTC TIMEOUT | ${po.side} | orderId:${po.orderId.slice(0, 12)} | cancelled: ${cancelled}`)
+        if (po.orderType === 'SELL') {
+          // Sell timeout — cancel order, will retry next exit cycle at fresh price
+          console.log(`  ⏰ SELL TIMEOUT | ${po.exitReason} | orderId:${po.orderId.slice(0, 12)} | cancelled: ${cancelled} — will retry | ${po.title.slice(0, 40)}`)
+        } else {
+          console.log(`  ⏰ BUY TIMEOUT | ${po.side} | orderId:${po.orderId.slice(0, 12)} | cancelled: ${cancelled}`)
+        }
       } else {
-        console.log(`  ❌ GTC CANCELLED | ${po.side} | orderId:${po.orderId.slice(0, 12)}`)
+        console.log(`  ❌ ${po.orderType} CANCELLED | ${po.side} | orderId:${po.orderId.slice(0, 12)}`)
       }
       removePendingOrder(po.orderId)
-      logBotEvent('live-cancel', `GTC not filled — discarded | ${po.side} | ${po.title.slice(0, 40)}`, `orderId:${po.orderId.slice(0, 12)}`)
+      logBotEvent('live-cancel', `${po.orderType} not filled — ${po.orderType === 'SELL' ? 'will retry' : 'discarded'} | ${po.title.slice(0, 40)}`, `orderId:${po.orderId.slice(0, 12)}`)
     }
     // else: still open, within timeout — keep waiting
   }
@@ -483,6 +507,10 @@ async function tryCopyWithSignal(alert: PositionAlert): Promise<boolean> {
         copiedFrom: alert.wallet,
         copiedLabel: `[LIVE] ${alert.walletLabel ?? alert.wallet.slice(0, 10)}`,
         placedAt: new Date().toISOString(),
+        orderType: 'BUY',
+        exitPrice: null,
+        partialFraction: null,
+        exitReason: null,
       })
 
       // Subscribe User WS to this market for fill notifications
@@ -589,7 +617,16 @@ async function runExitStrategy(): Promise<Record<string, number>> {
     }
   }
 
+  // Skip trades that already have a pending SELL order
+  const pendingOrders = getPendingOrders()
+  const pendingSellConditions = new Set(
+    pendingOrders.filter((po) => po.orderType === 'SELL').map((po) => po.conditionId)
+  )
+
   for (const trade of openTrades) {
+    // Don't place another sell if one is already pending
+    if (pendingSellConditions.has(trade.conditionId)) continue
+
     let expertStillHolding: boolean | null = null
     if (EXIT_CONFIG.followExpertExit && trade.copiedFrom !== 'on-chain-sync') {
       const expertKeys = expertPositions.get(trade.copiedFrom)
@@ -612,28 +649,46 @@ async function runExitStrategy(): Promise<Record<string, number>> {
       if ((decision.reason === 'partial-exit-100' || decision.reason === 'partial-exit-150') && decision.partialFraction) {
         // Partial exit — sell a fraction
         const sharesRemaining = trade.sharesRemaining ?? trade.shares
-        let sharesToSell = sharesRemaining * decision.partialFraction
+        const sharesToSell = sharesRemaining * decision.partialFraction
 
         // Polymarket minimum sell: 5 shares
         if (sharesToSell < POLY_MIN_SELL_SHARES) {
-          // Can't do partial — too few shares. Skip and wait for full exit.
           console.log(`  ⏭️  PARTIAL SKIP | ${sharesToSell.toFixed(1)} shares < ${POLY_MIN_SELL_SHARES} min | ${trade.title.slice(0, 40)}`)
           continue
         }
 
-        if (!DRY_RUN && exitMeta) {
+        if (DRY_RUN) {
+          partialExitPaperTrade(trade.conditionId, decision.partialFraction, exitPrice)
+          const pnl = sharesToSell * (exitPrice - trade.entryPrice)
+          console.log(`  🏜️ DRY-RUN ${exitEmoji(decision.reason)} ${decision.reason.toUpperCase()} | ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)} | ${(decision.partialFraction * 100).toFixed(0)}% sold @ ${(exitPrice * 100).toFixed(0)}¢ | ${trade.title}`)
+        } else if (exitMeta) {
           const result = await closePosition(exitMeta.tokenId, sharesToSell, exitPrice, exitMeta.negRisk)
           if (!result.success) {
             console.log(`  ⚠️  PARTIAL EXIT FAILED | ${result.error} | ${trade.title.slice(0, 40)}`)
             continue
           }
+          // Save as pending SELL — only resolve when fill confirmed
+          if (result.orderId) {
+            savePendingOrder({
+              orderId: result.orderId,
+              conditionId: trade.conditionId,
+              title: trade.title,
+              domain: trade.domain ?? null,
+              side: trade.side,
+              entryPrice: trade.entryPrice,
+              simulatedUsdc: trade.simulatedUsdc,
+              copiedFrom: trade.copiedFrom,
+              copiedLabel: trade.copiedLabel,
+              placedAt: new Date().toISOString(),
+              orderType: 'SELL',
+              exitPrice,
+              partialFraction: decision.partialFraction,
+              exitReason: decision.reason,
+            })
+            console.log(`  📋 SELL PLACED | ${decision.reason} | ${sharesToSell.toFixed(1)} shares @ ${(exitPrice * 100).toFixed(0)}¢ | orderId:${result.orderId.slice(0, 12)} | ${trade.title.slice(0, 40)}`)
+            logBotEvent('live-sell-pending', `${decision.reason} | ${sharesToSell.toFixed(1)} shares @ ${(exitPrice * 100).toFixed(0)}¢ | ${trade.title}`, `orderId:${result.orderId.slice(0, 12)}`)
+          }
         }
-
-        partialExitPaperTrade(trade.conditionId, decision.partialFraction, exitPrice)
-        const pnl = sharesToSell * (exitPrice - trade.entryPrice)
-        const prefix = DRY_RUN ? '🏜️ DRY-RUN ' : '💰 LIVE '
-        console.log(`  ${prefix}${exitEmoji(decision.reason)} ${decision.reason.toUpperCase()} | ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)} | ${(decision.partialFraction * 100).toFixed(0)}% sold @ ${(exitPrice * 100).toFixed(0)}¢ | ${trade.title}`)
-        logBotEvent('live-exit', `${decision.reason} | ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)} | ${trade.title}`, decision.message)
       } else {
         // Full exit
         const sharesToSell = trade.sharesRemaining ?? trade.shares
@@ -641,27 +696,45 @@ async function runExitStrategy(): Promise<Record<string, number>> {
         // Polymarket minimum sell: 5 shares
         if (!DRY_RUN && sharesToSell < POLY_MIN_SELL_SHARES) {
           console.log(`  ⚠️  EXIT TOO SMALL | ${sharesToSell.toFixed(1)} shares < ${POLY_MIN_SELL_SHARES} min — position stuck | ${trade.title.slice(0, 40)}`)
-          // Still mark as resolved in DB so it doesn't retry every poll
           resolvePaperTrade(trade.conditionId, exitPrice)
           logBotEvent('live-exit', `EXIT TOO SMALL (${sharesToSell.toFixed(1)} shares) — tokens stuck on-chain | ${trade.title}`, decision.message)
           counts[decision.reason] = (counts[decision.reason] ?? 0) + 1
           continue
         }
 
-        if (!DRY_RUN && exitMeta) {
+        if (DRY_RUN) {
+          resolvePaperTrade(trade.conditionId, exitPrice)
+          if (exitMeta) unsubscribeToken(exitMeta.tokenId)
+          const pnl = sharesToSell * (exitPrice - trade.entryPrice)
+          console.log(`  🏜️ DRY-RUN ${exitEmoji(decision.reason)} ${decision.reason.toUpperCase()} | ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)} | ${decision.message} | ${trade.title}`)
+        } else if (exitMeta) {
           const result = await closePosition(exitMeta.tokenId, sharesToSell, exitPrice, exitMeta.negRisk)
           if (!result.success) {
             console.log(`  ⚠️  EXIT FAILED | ${result.error} | ${trade.title.slice(0, 40)}`)
             continue
           }
+          // Save as pending SELL — only resolve when fill confirmed
+          if (result.orderId) {
+            savePendingOrder({
+              orderId: result.orderId,
+              conditionId: trade.conditionId,
+              title: trade.title,
+              domain: trade.domain ?? null,
+              side: trade.side,
+              entryPrice: trade.entryPrice,
+              simulatedUsdc: trade.simulatedUsdc,
+              copiedFrom: trade.copiedFrom,
+              copiedLabel: trade.copiedLabel,
+              placedAt: new Date().toISOString(),
+              orderType: 'SELL',
+              exitPrice,
+              partialFraction: null,
+              exitReason: decision.reason,
+            })
+            console.log(`  📋 SELL PLACED | ${decision.reason} | ${sharesToSell.toFixed(1)} shares @ ${(exitPrice * 100).toFixed(0)}¢ | orderId:${result.orderId.slice(0, 12)} | ${trade.title.slice(0, 40)}`)
+            logBotEvent('live-sell-pending', `${decision.reason} | ${sharesToSell.toFixed(1)} shares @ ${(exitPrice * 100).toFixed(0)}¢ | ${trade.title}`, `orderId:${result.orderId.slice(0, 12)}`)
+          }
         }
-
-        resolvePaperTrade(trade.conditionId, exitPrice)
-        if (exitMeta) unsubscribeToken(exitMeta.tokenId)  // stop tracking closed position
-        const pnl = sharesToSell * (exitPrice - trade.entryPrice)
-        const prefix = DRY_RUN ? '🏜️ DRY-RUN ' : '💰 LIVE '
-        console.log(`  ${prefix}${exitEmoji(decision.reason)} ${decision.reason.toUpperCase()} | ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)} | ${decision.message} | ${trade.title}`)
-        logBotEvent('live-exit', `${decision.reason} | ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)} | ${trade.title}`, decision.message)
       }
       counts[decision.reason] = (counts[decision.reason] ?? 0) + 1
     } catch (err) {

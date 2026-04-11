@@ -306,7 +306,11 @@ function initTables(db: Database.Database): void {
       simulated_usdc REAL NOT NULL,
       copied_from TEXT,
       copied_label TEXT,
-      placed_at TEXT NOT NULL
+      placed_at TEXT NOT NULL,
+      order_type TEXT NOT NULL DEFAULT 'BUY',
+      exit_price REAL,
+      partial_fraction REAL,
+      exit_reason TEXT
     );
   `)
 
@@ -338,6 +342,20 @@ function initTables(db: Database.Database): void {
   // Migration: copyability score as dedicated column in watched_wallets
   try {
     db.exec('ALTER TABLE watched_wallets ADD COLUMN copyability_score REAL')
+  } catch {}
+
+  // Migration: pending_orders sell support
+  try {
+    db.exec("ALTER TABLE pending_orders ADD COLUMN order_type TEXT NOT NULL DEFAULT 'BUY'")
+  } catch {}
+  try {
+    db.exec('ALTER TABLE pending_orders ADD COLUMN exit_price REAL')
+  } catch {}
+  try {
+    db.exec('ALTER TABLE pending_orders ADD COLUMN partial_fraction REAL')
+  } catch {}
+  try {
+    db.exec('ALTER TABLE pending_orders ADD COLUMN exit_reason TEXT')
   } catch {}
 }
 
@@ -689,18 +707,23 @@ export type PendingOrderRow = {
   copiedFrom: string
   copiedLabel: string | null
   placedAt: string
+  orderType: 'BUY' | 'SELL'
+  exitPrice: number | null
+  partialFraction: number | null
+  exitReason: string | null
 }
 
 export function savePendingOrder(order: PendingOrderRow): void {
   const db = getDb()
   db.prepare(
     `INSERT OR REPLACE INTO pending_orders
-     (order_id, condition_id, title, domain, side, entry_price, simulated_usdc, copied_from, copied_label, placed_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+     (order_id, condition_id, title, domain, side, entry_price, simulated_usdc, copied_from, copied_label, placed_at, order_type, exit_price, partial_fraction, exit_reason)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     order.orderId, order.conditionId, order.title, order.domain,
     order.side, order.entryPrice, order.simulatedUsdc,
-    order.copiedFrom, order.copiedLabel, order.placedAt
+    order.copiedFrom, order.copiedLabel, order.placedAt,
+    order.orderType, order.exitPrice, order.partialFraction, order.exitReason
   )
 }
 
@@ -718,6 +741,10 @@ export function getPendingOrders(): PendingOrderRow[] {
     copiedFrom: (r.copied_from as string) ?? '',
     copiedLabel: (r.copied_label as string) ?? null,
     placedAt: r.placed_at as string,
+    orderType: (r.order_type as 'BUY' | 'SELL') ?? 'BUY',
+    exitPrice: (r.exit_price as number) ?? null,
+    partialFraction: (r.partial_fraction as number) ?? null,
+    exitReason: (r.exit_reason as string) ?? null,
   }))
 }
 
