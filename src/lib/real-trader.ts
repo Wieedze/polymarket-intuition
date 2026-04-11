@@ -206,6 +206,78 @@ export async function placeOrder(order: RealOrder): Promise<RealOrderResult> {
 }
 
 /**
+ * Check if a GTC order has been filled, is still open, or was cancelled.
+ * Returns 'filled' | 'open' | 'cancelled' | 'unknown'
+ */
+export async function checkOrderStatus(orderId: string): Promise<{
+  status: 'filled' | 'open' | 'cancelled' | 'unknown'
+  filledSize?: number
+  filledPrice?: number
+}> {
+  try {
+    const client = await getClient()
+    const order = await client.getOrder(orderId) as Record<string, unknown>
+
+    if (!order) return { status: 'unknown' }
+
+    const st = order.status as string ?? ''
+    if (st === 'MATCHED' || st === 'matched') {
+      return {
+        status: 'filled',
+        filledSize: Number(order.size_matched ?? order.original_size ?? 0),
+        filledPrice: Number(order.price ?? 0),
+      }
+    }
+    if (st === 'LIVE' || st === 'live') return { status: 'open' }
+    if (st === 'CANCELLED' || st === 'cancelled') return { status: 'cancelled' }
+
+    return { status: 'unknown' }
+  } catch {
+    return { status: 'unknown' }
+  }
+}
+
+/**
+ * Cancel an open GTC order.
+ */
+export async function cancelOrder(orderId: string): Promise<boolean> {
+  try {
+    const client = await getClient()
+    await client.cancelOrder(orderId)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Get all open orders (unfilled GTC orders in the orderbook).
+ */
+export async function getOpenOrders(): Promise<Array<{
+  orderId: string
+  tokenId: string
+  side: string
+  price: number
+  size: number
+  status: string
+}>> {
+  try {
+    const client = await getClient()
+    const orders = await client.getOpenOrders() as Array<Record<string, unknown>>
+    return (orders ?? []).map((o) => ({
+      orderId: (o.id ?? o.order_id ?? '') as string,
+      tokenId: (o.asset_id ?? o.token_id ?? '') as string,
+      side: (o.side ?? '') as string,
+      price: Number(o.price ?? 0),
+      size: Number(o.original_size ?? o.size ?? 0),
+      status: (o.status ?? '') as string,
+    }))
+  } catch {
+    return []
+  }
+}
+
+/**
  * Get real open positions for our trading wallet.
  */
 export async function getRealPositions(): Promise<RealPosition[]> {

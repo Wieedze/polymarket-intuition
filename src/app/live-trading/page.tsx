@@ -249,10 +249,11 @@ export default function LiveTrading(): React.ReactElement {
               <h2 className="text-sm font-medium mb-4" style={{ color: COLORS.textMuted }}>P&L BREAKDOWN</h2>
               <div className="flex items-center gap-3 text-xs">
                 <div className="text-center p-3 rounded-lg" style={{ background: COLORS.surface }}>
-                  <div style={{ color: COLORS.textMuted }}>Alpha before costs</div>
+                  <div style={{ color: COLORS.textMuted }}>Gross P&L</div>
                   <div className="text-lg font-bold mt-1" style={{ color: data.costs.preCostPnl >= 0 ? COLORS.teal : COLORS.red }}>
                     {pnlStr(data.costs.preCostPnl)}
                   </div>
+                  <div className="text-[10px]" style={{ color: COLORS.textMuted }}>before fees</div>
                 </div>
                 <span style={{ color: COLORS.textMuted }}>-</span>
                 <div className="text-center p-3 rounded-lg" style={{ background: COLORS.surface, border: `1px solid ${COLORS.amber}40` }}>
@@ -262,21 +263,13 @@ export default function LiveTrading(): React.ReactElement {
                   </div>
                   <div className="text-[10px]" style={{ color: COLORS.textMuted }}>{(data.costs.feePct * 100).toFixed(1)}% of deployed</div>
                 </div>
-                <span style={{ color: COLORS.textMuted }}>-</span>
-                <div className="text-center p-3 rounded-lg" style={{ background: COLORS.surface, border: `1px solid ${COLORS.amber}40` }}>
-                  <div style={{ color: COLORS.textMuted }}>Slippage (est.)</div>
-                  <div className="text-lg font-bold mt-1" style={{ color: COLORS.amber }}>
-                    -${data.costs.totalSlippage.toFixed(2)}
-                  </div>
-                  <div className="text-[10px]" style={{ color: COLORS.textMuted }}>{(data.costs.slippagePct * 100).toFixed(1)}% of deployed</div>
-                </div>
                 <span style={{ color: COLORS.textMuted }}>=</span>
                 <div className="text-center p-3 rounded-lg" style={{ background: COLORS.surface, border: `1px solid ${COLORS.live}40` }}>
                   <div style={{ color: COLORS.textMuted }}>Net realized P&L</div>
                   <div className="text-lg font-bold mt-1" style={{ color: data.realizedPnl >= 0 ? COLORS.teal : COLORS.red }}>
                     {pnlStr(data.realizedPnl)}
                   </div>
-                  <div className="text-[10px]" style={{ color: COLORS.textMuted }}>costs already deducted</div>
+                  <div className="text-[10px]" style={{ color: COLORS.textMuted }}>real execution price</div>
                 </div>
               </div>
             </div>

@@ -46,7 +46,7 @@ import { fetchAllPages, fetchMarketMetadata } from '../src/lib/polymarket'
 import { evaluateExit, exitEmoji, type ExitConfig } from '../src/lib/exit-strategy'
 import { scoreSignal, shouldCopySignal, signalBetMultiplier, isContradictory, kellyBetFraction } from '../src/lib/signal-scorer'
 import { evaluateExpertTrust, getAllExpertTrust, getBankrollScale } from '../src/lib/expert-trust'
-import { placeOrder, getRealBalance, getRealPositions, closePosition, type RealOrder } from '../src/lib/real-trader'
+import { placeOrder, getRealBalance, getRealPositions, closePosition, checkOrderStatus, cancelOrder, type RealOrder } from '../src/lib/real-trader'
 
 const POLYMARKET_DATA_URL = process.env.POLYMARKET_DATA_URL ?? 'https://data-api.polymarket.com'
 
@@ -246,6 +246,55 @@ function checkDrawdownBreaker(): boolean {
 
 const tokenIdCache = new Map<string, string>()
 
+// ── GTC order tracking ──────────────────────────────────────────
+// Track pending GTC orders and verify fills each poll.
+// If an order hasn't filled after 5 minutes, cancel it and remove the paper trade.
+
+type PendingOrder = {
+  orderId: string
+  conditionId: string
+  side: string
+  placedAt: number  // timestamp ms
+}
+
+const pendingOrders: PendingOrder[] = []
+const GTC_TIMEOUT_MS = 5 * 60 * 1000  // 5 minutes
+
+async function checkPendingOrders(): Promise<void> {
+  if (pendingOrders.length === 0) return
+
+  const now = Date.now()
+  const toRemove: number[] = []
+
+  for (let i = 0; i < pendingOrders.length; i++) {
+    const po = pendingOrders[i]
+    const status = await checkOrderStatus(po.orderId)
+
+    if (status.status === 'filled') {
+      console.log(`  ✅ GTC FILLED | ${po.side} | orderId:${po.orderId.slice(0, 12)} | filled @ ${((status.filledPrice ?? 0) * 100).toFixed(0)}¢`)
+      toRemove.push(i)
+    } else if (status.status === 'cancelled' || (now - po.placedAt > GTC_TIMEOUT_MS && status.status === 'open')) {
+      // Timed out or cancelled — cancel order and remove paper trade
+      if (status.status === 'open') {
+        const cancelled = await cancelOrder(po.orderId)
+        console.log(`  ⏰ GTC TIMEOUT | ${po.side} | orderId:${po.orderId.slice(0, 12)} | cancelled: ${cancelled}`)
+      } else {
+        console.log(`  ❌ GTC CANCELLED | ${po.side} | orderId:${po.orderId.slice(0, 12)}`)
+      }
+      // Remove the false paper trade
+      resolvePaperTrade(po.conditionId, 0)
+      logBotEvent('live-cancel', `GTC not filled — removed | ${po.side} | orderId:${po.orderId.slice(0, 12)}`, '')
+      toRemove.push(i)
+    }
+    // else: still open, within timeout — keep waiting
+  }
+
+  // Remove processed orders (reverse to keep indices valid)
+  for (const idx of toRemove.reverse()) {
+    pendingOrders.splice(idx, 1)
+  }
+}
+
 function cacheTokenId(conditionId: string, side: string, tokenId: string): void {
   tokenIdCache.set(`${conditionId}-${side}`, tokenId)
 }
@@ -396,6 +445,16 @@ async function tryCopyWithSignal(alert: PositionAlert): Promise<boolean> {
     const fillStatus = result.filledPrice ? 'FILLED' : 'PLACED (GTC pending)'
     console.log(`  💰 LIVE ${scoreTag} ${fillStatus} | ${side} @ ${(rawPrice * 100).toFixed(0)}¢→${(entryPrice * 100).toFixed(0)}¢ | $${betAmount.toFixed(2)}${consensusTag}${trustTag} | ${kellyTag} | ${stopTag} | orderId:${result.orderId?.slice(0, 12)} | ${alert.position.title.slice(0, 40)} ${domainTag}`)
     logBotEvent('live-copy', `${fillStatus} ${side} @ ${(entryPrice * 100).toFixed(0)}¢ $${betAmount.toFixed(2)} | ${alert.position.title}`, `Score: ${signal.score}/100 | ${kellyTag}`)
+
+    // Track GTC pending orders for fill verification
+    if (!result.filledPrice && result.orderId) {
+      pendingOrders.push({
+        orderId: result.orderId,
+        conditionId: alert.position.conditionId,
+        side,
+        placedAt: Date.now(),
+      })
+    }
   }
 
   // Record as paper trade for tracking (labeled [LIVE])
@@ -647,6 +706,9 @@ async function pollOnce(): Promise<void> {
   // Safety checks
   if (checkDailyLossLimit()) return
   if (checkDrawdownBreaker()) return
+
+  // Verify pending GTC orders (fill check / timeout cancel)
+  if (!DRY_RUN) await checkPendingOrders()
 
   if (!DRY_RUN) {
     const realBalance = await getRealBalance()
