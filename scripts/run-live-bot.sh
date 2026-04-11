@@ -15,5 +15,6 @@ else
   exit 1
 fi
 
-# Run live trader
-exec node_modules/.bin/tsx scripts/live-trader.ts
+# Run bot (defaults to live-trader, override with BOT_SCRIPT env)
+SCRIPT="${BOT_SCRIPT:-scripts/live-trader.ts}"
+exec node_modules/.bin/tsx "$SCRIPT"

@@ -43,5 +43,26 @@ module.exports = {
       max_restarts: 50,
       autorestart: true,
     },
+    {
+      name: 'sports-trader',
+      interpreter: '/bin/bash',
+      script: 'scripts/run-live-bot.sh',
+      cwd: '/opt/polymarket-intuition',
+      env: {
+        DB_PATH: '/opt/polymarket-intuition/data/sports.db',
+        SHARED_DB_PATH: '/opt/polymarket-intuition/data/polymarket.db',
+        STARTING_BALANCE: '50',
+        POLL_INTERVAL_MS: '300000',     // 5 min
+        SCAN_INTERVAL_MS: '3600000',    // 1h market rescan
+        MAX_OPEN_TRADES: '20',
+        MIN_SIGNAL_SCORE_SPORTS: '50',
+        DRY_RUN: 'true',               // start in dry-run
+        STOP_LOSS: '0.40',
+        BOT_SCRIPT: 'scripts/sports-trader.ts',
+      },
+      restart_delay: 15000,
+      max_restarts: 50,
+      autorestart: true,
+    },
   ],
 }
