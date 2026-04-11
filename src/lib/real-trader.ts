@@ -142,9 +142,9 @@ export async function placeOrder(order: RealOrder): Promise<RealOrderResult> {
 
     const { OrderType, Side } = await import('@polymarket/clob-client')
 
-    // Calculate size in shares
+    // Calculate size in shares (round to 2 decimals — CLOB requirement)
     // sizeUsdc = shares × price → shares = sizeUsdc / price
-    const size = order.sizeUsdc / order.price
+    const size = parseFloat((order.sizeUsdc / order.price).toFixed(2))
 
     // Get tick size for this market (minimum 0.01 for most markets)
     const marketInfo = await client.getMarket(order.conditionId) as Record<string, unknown>
