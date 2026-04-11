@@ -258,7 +258,7 @@ type PendingOrder = {
 }
 
 const pendingOrders: PendingOrder[] = []
-const GTC_TIMEOUT_MS = 5 * 60 * 1000  // 5 minutes
+const GTC_TIMEOUT_MS = 30 * 1000  // 30 seconds — if not filled, price has moved
 
 async function checkPendingOrders(): Promise<void> {
   if (pendingOrders.length === 0) return
@@ -355,16 +355,12 @@ async function tryCopyWithSignal(alert: PositionAlert): Promise<boolean> {
   const domain = keywordClassify(alert.position.title)
   const side = alert.position.outcomeIndex === 0 ? 'YES' : 'NO'
 
-  // ── Slippage (same as auto-trader) ─────────────────────────────
+  // ── Entry price (live = real orderbook, no simulated slippage) ──
   const rawPrice = alert.position.curPrice
-  const baseSlippage = rawPrice < 0.20 ? 0.06
-    : rawPrice < 0.30 ? 0.05
-    : rawPrice < 0.50 ? 0.03
-    : 0.02
+  const entryPrice = rawPrice  // GTC at market price — orderbook handles real execution
 
-  // ── Kelly-based sizing (same as auto-trader) ───────────────────
-  const entryPriceEst = Math.min(rawPrice * (1 + baseSlippage), 0.95)
-  const kellyFraction = kellyBetFraction(trust.winRate, entryPriceEst)
+  // ── Kelly-based sizing ─────────────────────────────────────────
+  const kellyFraction = kellyBetFraction(trust.winRate, entryPrice)
   const currentBankroll = getCurrentEquity()
 
   const minBet = getMinBet(currentBankroll)
@@ -377,11 +373,6 @@ async function tryCopyWithSignal(alert: PositionAlert): Promise<boolean> {
   const consensusMulti = getConsensusMultiplier(alert.position.conditionId)
   const trustMulti = trust.trustLevel
   let betAmount = Math.min(baseBet * signalMulti * consensusMulti * trustMulti, maxBet)
-
-  // Final entry price with size-adjusted slippage
-  const sizeImpact = (betAmount / 100) * 0.005
-  const slippage = baseSlippage + sizeImpact
-  const entryPrice = Math.min(rawPrice * (1 + slippage), 0.95)
 
   // Polymarket minimum: order must have >= 15 shares
   // shares = betAmount / entryPrice, so betAmount must be >= 15 * entryPrice
