@@ -1,34 +1,37 @@
 # /check-profile [address]
 
-Mode lecture seule. Aucune écriture on-chain.
+Affiche le profil complet d'un wallet expert. Mode lecture seule.
 
 ## Usage
 ```
 /check-profile 0xf2f6af4f27ec2dcf4072095ab804016e14cd5817
 ```
 
-## Ce qu'il affiche
+## Etapes
 
-1. Trades Polymarket bruts (count + P&L total)
-2. Attestations existantes dans le graphe Intuition
-3. Scores Trust MCP (composite, agentrank)
-4. Preview du profil tel qu'il apparaîtra sur la page
+1. Lire `wallet_stats` depuis la DB pour le wallet $ARGUMENTS
+2. Lire `watched_wallets` pour le label et copyability_score
+3. Compter les trades resolus dans `trades` table
+4. Calculer le trust via `evaluateExpertTrust(address)`
+5. Afficher un resume complet
 
 ## Output attendu
 ```
-👤 Wallet: 0xf2f6...
+--- Expert: sovereign2013 (0xf2f6...) ---
 
-📊 POLYMARKET
-  Trades résolus : 312
-  P&L total      : +$47,230
+Copyability: 86%  |  Trust: active (0.92x)  |  Phase: proven
 
-🔗 INTUITION
-  Attestations L1 : 287
-  Attestations L2 : 3 domaines
+Domaines (par trades):
+  sports      → WR 62% | calib 0.81 | edge +0.09 | 47 trades
+  politics    → WR 58% | calib 0.74 | edge +0.05 | 23 trades
+  economics   → WR 55% | calib 0.68 | edge +0.02 | 12 trades
 
-📈 TRUST SCORES
-  ai-tech   → composite: 0.84 | rank: #12
-  politics  → composite: 0.71 | rank: #34
+Total: 312 trades resolus | PnL: +$230
 
-🔗 /profile/0xf2f6...
+Watched: oui (actif) | Last polled: 2026-04-11T15:30:00
 ```
+
+## Regles
+- Ne rien ecrire en DB, lecture seule
+- Si le wallet n'est pas dans watched_wallets, indiquer "non surveille"
+- Afficher les domaines tries par nombre de trades decroissant

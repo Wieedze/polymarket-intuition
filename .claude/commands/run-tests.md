@@ -1,18 +1,21 @@
 # /run-tests
 
-Lance tous les tests Vitest du projet.
+Lance les tests Vitest + verification TypeScript.
 
-## Commande
+## Commandes
 ```bash
-npm run test
+npx vitest run
+npx tsc --noEmit
 ```
 
 ## Ordre d'importance des tests
-1. `tests/lib/classifier.test.ts` — le plus critique, > 90% précision requise
-2. `tests/lib/scorer.test.ts`
-3. `tests/lib/polymarket.test.ts`
-4. `tests/lib/trust-mcp.test.ts`
+1. `tests/lib/classifier.test.ts` — classification domaines
+2. `tests/lib/signal-scorer.test.ts` — scoring + thresholds
+3. `tests/lib/scorer.test.ts` — metriques stats
+4. `tests/lib/indexer.test.ts` — pipeline indexation
+5. `tests/lib/polymarket.test.ts` — client API
 
-## Critère de passage
-Tous les tests passent. Zéro test skippé.
-Si un test échoue → corriger avant de passer à la phase suivante.
+## Critere de passage
+- Tous les tests passent, zero skip
+- `tsc --noEmit` zero erreur
+- Si un test echoue : diagnostiquer et corriger avant de continuer
