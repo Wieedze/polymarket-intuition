@@ -1,9 +1,11 @@
 /**
- * Live Trader — Real money execution on Polymarket
+ * Live Trader — Signal Consumer + Order Executor + Exit Manager
  *
- * Full mirror of auto-trader.ts with real order execution.
- * Every signal, sizing, exit, and risk decision is identical to paper trading,
- * but orders are placed on the real Polymarket CLOB.
+ * Reads pre-scored signals from the signals table (produced by expert-scanner),
+ * places GTC orders on the real Polymarket CLOB, and manages exits.
+ *
+ * Does NOT scan wallets or score signals — that is done by expert-scanner.ts.
+ * This process is purely a consumer: read signal → size bet → place order → manage exits.
  *
  * Paper trades are recorded in parallel (labeled [LIVE]) for comparison.
  *
@@ -25,7 +27,6 @@
  */
 
 import {
-  getActiveWatchedWallets,
   getOpenPaperTrades,
   openPaperTrade,
   paperTradeExistsForCondition,
@@ -40,23 +41,20 @@ import {
   savePendingOrder,
   getPendingOrders,
   removePendingOrder,
-  type PaperTrade,
-  getWalletStats,
-  updateWalletCopyability,
+  getPendingSignals,
+  markSignalTaken,
+  markSignalRejected,
+  expireOldSignals,
+  type Position,
+  type SignalRow,
 } from '../src/lib/db'
-import { indexWallet } from '../src/lib/indexer'
-import { calculateCopyabilityFromStats } from '../src/lib/scorer'
-import { pollWallet, type PositionAlert } from '../src/lib/position-tracker'
 import { keywordClassify } from '../src/lib/classifier'
 import { fetchAllPages, fetchMarketMetadata } from '../src/lib/polymarket'
 import { evaluateExit, exitEmoji, type ExitConfig } from '../src/lib/exit-strategy'
-import { scoreSignal, signalBetMultiplier, isContradictory, kellyBetFraction } from '../src/lib/signal-scorer'
-import { evaluateExpertTrust, getAllExpertTrust, getBankrollScale } from '../src/lib/expert-trust'
+import { isContradictory, kellyBetFraction } from '../src/lib/signal-scorer'
+import { getAllExpertTrust, getBankrollScale } from '../src/lib/expert-trust'
 import { placeOrder, getRealBalance, getRealPositions, closePosition, checkOrderStatus, cancelOrder, redeemAllResolved, type RealOrder, type RealPosition } from '../src/lib/real-trader'
 import { connectOrderbookWS, subscribeToken, unsubscribeToken, getWsBestBid, isWsConnected, getSubscribedCount, connectUserWS, subscribeUserMarket, isUserWsConnected } from '../src/lib/orderbook-ws'
-import { getNoVigConsensus } from '../src/lib/odds-api'
-import { detectSportKey, parseMarketTitle } from '../src/lib/sports-scanner'
-import { findGameMatch } from '../src/lib/team-matcher'
 
 const POLYMARKET_DATA_URL = process.env.POLYMARKET_DATA_URL ?? 'https://data-api.polymarket.com'
 
@@ -127,15 +125,15 @@ function getDynamicBetSize(): number {
 }
 
 // ── Live paper trades filter ─────────────────────────────────────
-// Live trades are stored as paper_trades with copiedLabel starting with "[LIVE]"
+// Live trades are stored as paper_trades with sourceLabel starting with "[LIVE]"
 // This keeps them separate from pure paper trades.
 
-function getLivePaperTrades(): PaperTrade[] {
-  return getAllPaperTrades().filter((t) => t.copiedLabel?.startsWith('[LIVE]'))
+function getLivePaperTrades(): Position[] {
+  return getAllPaperTrades().filter((t) => t.sourceLabel?.startsWith('[LIVE]'))
 }
 
-function getOpenLiveTrades(): PaperTrade[] {
-  return getOpenPaperTrades().filter((t) => t.copiedLabel?.startsWith('[LIVE]'))
+function getOpenLiveTrades(): Position[] {
+  return getOpenPaperTrades().filter((t) => t.sourceLabel?.startsWith('[LIVE]'))
 }
 
 // ── Exit strategy config (same as auto-trader) ───────────────────
@@ -153,44 +151,7 @@ const EXIT_CONFIG: ExitConfig = {
   partialExitAt150Pct: parseFloat(process.env.PARTIAL_EXIT_150 ?? '0.30'),
 }
 
-// ── Consensus tracking (same as auto-trader) ─────────────────────
-
-type ConsensusEntry = {
-  conditionId: string
-  title: string
-  side: string
-  price: number
-  experts: Array<{ wallet: string; label: string | null; size: number }>
-}
-
-const consensusMap = new Map<string, ConsensusEntry>()
-
-function trackConsensus(alert: PositionAlert): void {
-  if (alert.type !== 'NEW_POSITION') return
-  const key = alert.position.conditionId
-  const side = alert.position.outcomeIndex === 0 ? 'YES' : 'NO'
-  const existing = consensusMap.get(key)
-  if (existing) {
-    if (existing.side === side) {
-      existing.experts.push({ wallet: alert.wallet, label: alert.walletLabel, size: alert.position.size })
-    }
-  } else {
-    consensusMap.set(key, {
-      conditionId: key, title: alert.position.title, side, price: alert.position.curPrice,
-      experts: [{ wallet: alert.wallet, label: alert.walletLabel, size: alert.position.size }],
-    })
-  }
-}
-
-function getConsensusMultiplier(conditionId: string): number {
-  const entry = consensusMap.get(conditionId)
-  if (!entry) return 1
-  const n = entry.experts.length
-  if (n >= 5) return 0.3
-  if (n >= 3) return 0.5
-  if (n >= 2) return 0.7
-  return 1
-}
+// ── (consensus tracking removed — handled by expert-scanner) ────
 
 // ── Daily loss tracking ──────────────────────────────────────────
 
@@ -276,13 +237,13 @@ async function checkPendingOrders(): Promise<void> {
           domain: po.domain,
           side: po.side,
           entryPrice: filledPrice,
-          simulatedUsdc: po.simulatedUsdc,
-          copiedFrom: po.copiedFrom,
-          copiedLabel: po.copiedLabel,
+          sizeUsdc: po.sizeUsdc,
+          sourceRef: po.sourceRef,
+          sourceLabel: po.sourceLabel,
         })
         removePendingOrder(po.orderId)
-        console.log(`  ✅ BUY FILLED | ${po.side} @ ${(filledPrice * 100).toFixed(0)}¢ | $${po.simulatedUsdc.toFixed(2)} | ${po.title.slice(0, 40)}`)
-        logBotEvent('live-filled', `BUY FILLED ${po.side} @ ${(filledPrice * 100).toFixed(0)}¢ $${po.simulatedUsdc.toFixed(2)} | ${po.title}`, `orderId:${po.orderId.slice(0, 12)}`)
+        console.log(`  ✅ BUY FILLED | ${po.side} @ ${(filledPrice * 100).toFixed(0)}¢ | $${po.sizeUsdc.toFixed(2)} | ${po.title.slice(0, 40)}`)
+        logBotEvent('live-filled', `BUY FILLED ${po.side} @ ${(filledPrice * 100).toFixed(0)}¢ $${po.sizeUsdc.toFixed(2)} | ${po.title}`, `orderId:${po.orderId.slice(0, 12)}`)
       } else {
         // SELL FILLED — NOW we resolve/partial the paper trade
         const filledPrice = status.filledPrice ?? po.exitPrice ?? po.entryPrice
@@ -294,7 +255,7 @@ async function checkPendingOrders(): Promise<void> {
           // Unsubscribe from WS
           const meta = await getTokenId(po.conditionId, po.side)
           if (meta) unsubscribeToken(meta.tokenId)
-          const pnl = (po.simulatedUsdc / po.entryPrice) * (filledPrice - po.entryPrice)
+          const pnl = (po.sizeUsdc / po.entryPrice) * (filledPrice - po.entryPrice)
           console.log(`  ✅ SELL FILLED | ${po.exitReason} | ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)} @ ${(filledPrice * 100).toFixed(0)}¢ | ${po.title.slice(0, 40)}`)
         }
         removePendingOrder(po.orderId)
@@ -335,221 +296,146 @@ async function getTokenId(conditionId: string, side: string): Promise<{ tokenId:
   return { tokenId, negRisk: metadata.negRisk }
 }
 
-// ── Entry logic (mirrors auto-trader exactly) ────────────────────
+// ── Signal consumer (reads from signals table, places orders) ────
 
-function canCopy(alert: PositionAlert): boolean {
-  if (alert.type !== 'NEW_POSITION') return false
+async function processSignals(): Promise<number> {
+  const signals = getPendingSignals(MIN_SIGNAL_SCORE)
+  if (signals.length === 0) return 0
 
-  const price = alert.position.curPrice
-  if (price < MIN_ENTRY || price > MAX_ENTRY) {
-    console.log(`  ⏭️  PRICE ${(price * 100).toFixed(0)}¢ out of ${(MIN_ENTRY * 100).toFixed(0)}-${(MAX_ENTRY * 100).toFixed(0)}¢ | ${alert.position.title.slice(0, 40)}`)
-    return false
-  }
-  if (paperTradeExistsForCondition(alert.position.conditionId)) {
-    console.log(`  ⏭️  ALREADY TRADED | ${alert.position.title.slice(0, 40)}`)
-    return false
-  }
-  // Check pending orders too — prevent duplicate GTC orders for same market
-  const pendingOrders = getPendingOrders()
-  if (pendingOrders.some(po => po.conditionId === alert.position.conditionId)) {
-    console.log(`  ⏭️  PENDING ORDER | ${alert.position.title.slice(0, 40)}`)
-    return false
-  }
+  let placed = 0
 
-  const openTrades = getOpenLiveTrades()
-  if (openTrades.length >= getMaxOpen()) return false
-
-  const equity = getCurrentEquity()
-  const totalInvested = openTrades.reduce((s, t) => s + t.simulatedUsdc, 0)
-  const betSize = getDynamicBetSize()
-  if (totalInvested + betSize > equity * getMaxCapitalPct()) return false
-
-  return true
-}
-
-async function tryCopyWithSignal(alert: PositionAlert): Promise<boolean> {
-  const trust = evaluateExpertTrust(alert.wallet, alert.walletLabel)
-  if (trust.status === 'paused') {
-    console.log(`  ⛔ PAUSED | ${alert.walletLabel ?? alert.wallet.slice(0, 10)} | ${trust.reason}`)
-    return false
-  }
-
-  // Sports odds lookup — adds bonus points to signal score, never blocks
-  let bookmakerEdgeBonus = 0
-  let bookmakerNoVigProb: number | null = null
-
-  if (ODDS_API_KEY) {
-    const titleClass = keywordClassify(alert.position.title)
-    if (titleClass?.domain === 'pm-domain/sports') {
-      const sportKey = detectSportKey(alert.position.title)
-      if (sportKey) {
-        try {
-          const parsed = parseMarketTitle(alert.position.title)
-          const noVigGames = await getNoVigConsensus(sportKey, ODDS_API_KEY)
-          const matched = findGameMatch(parsed.homeTeam, parsed.awayTeam, noVigGames)
-          if (matched) {
-            const oddsKey = parsed.marketType === 'total' ? 'totals'
-              : parsed.marketType === 'spread' ? 'spreads' : 'h2h'
-            const oddsMarket = matched.markets.find((m) => m.type === oddsKey)
-            if (oddsMarket && oddsMarket.outcomes.length >= 2) {
-              const side = alert.position.outcomeIndex === 0 ? 'YES' : 'NO'
-              // For h2h: match away team name to find the right outcome
-              const lastWord = matched.matchInfo.awayTeam.toLowerCase().split(' ').pop() ?? ''
-              const awayOutcome = oddsMarket.outcomes.find((o) => o.name.toLowerCase().includes(lastWord))
-              if (awayOutcome) {
-                const yesProb = awayOutcome.noVigProb
-                const price = alert.position.curPrice
-                const prob = side === 'YES' ? yesProb : 1 - yesProb
-                const polyPrice = side === 'YES' ? price : 1 - price
-                const edge = prob - polyPrice
-                bookmakerNoVigProb = prob
-
-                bookmakerEdgeBonus = edge >= 0.15 ? 25
-                  : edge >= 0.10 ? 18
-                  : edge >= 0.07 ? 12
-                  : edge >= 0.04 ? 6
-                  : 0
-              }
-            }
-          }
-        } catch {
-          // Odds lookup failure = 0 bonus, non-blocking
-        }
-      }
+  for (const signal of signals) {
+    // Skip if already have a position for this market
+    if (paperTradeExistsForCondition(signal.conditionId)) {
+      markSignalRejected(signal.id, 'position-exists')
+      continue
     }
-  }
 
-  const signal = scoreSignal({
-    expertWallet: alert.wallet,
-    marketTitle: alert.position.title,
-    entryPrice: alert.position.curPrice,
-    positionSize: alert.position.size,
-    bookmakerEdgeBonus,
-    bookmakerNoVigProb: bookmakerNoVigProb ?? undefined,
-  })
-
-  if (signal.score < MIN_SIGNAL_SCORE) {
-    // Only log non-zero scores (blocked domains/unknown = score 0, too noisy)
-    if (signal.score > 0) {
-      const oddsTag = bookmakerEdgeBonus > 0 ? ` | book:+${bookmakerEdgeBonus}pts` : ''
-      console.log(`  ⏭️  SKIP (${signal.score}/${MIN_SIGNAL_SCORE}) | ${signal.reasons[0]}${oddsTag} | ${alert.position.title.slice(0, 50)}`)
+    // Skip if contradictory (holding opposite side)
+    const openTrades = getOpenLiveTrades()
+    if (isContradictory(signal.conditionId, signal.side, openTrades)) {
+      markSignalRejected(signal.id, 'contradictory')
+      continue
     }
-    return false
-  }
 
-  const domain = keywordClassify(alert.position.title)
-  const side = alert.position.outcomeIndex === 0 ? 'YES' : 'NO'
+    // Skip if too many open trades
+    if (openTrades.length >= MAX_OPEN) {
+      markSignalRejected(signal.id, 'max-open')
+      break
+    }
 
-  // ── Entry price (live = real orderbook, no simulated slippage) ──
-  const rawPrice = alert.position.curPrice
-  const entryPrice = rawPrice  // GTC at market price — orderbook handles real execution
+    // Skip if already pending order for this condition
+    const pendingOrders = getPendingOrders()
+    if (pendingOrders.some(po => po.conditionId === signal.conditionId)) {
+      markSignalRejected(signal.id, 'pending-order')
+      continue
+    }
 
-  // ── Kelly-based sizing ─────────────────────────────────────────
-  const kellyFraction = kellyBetFraction(trust.winRate, entryPrice)
-  const currentBankroll = getCurrentEquity()
+    // Kelly-based sizing using on-chain equity
+    const currentBankroll = getCurrentEquity()
+    const availCash = getAvailableCash()
+    const kellyFraction = signal.kellyFraction ?? 0
+    const minBet = getMinBet(currentBankroll)
+    const maxBet = getMaxBet(currentBankroll)
 
-  const minBet = getMinBet(currentBankroll)
-  const maxBet = getMaxBet(currentBankroll)
-  const baseBet = kellyFraction > 0
-    ? Math.min(Math.max(currentBankroll * kellyFraction, minBet), maxBet)
-    : minBet
+    const baseBet = kellyFraction > 0
+      ? Math.min(Math.max(currentBankroll * kellyFraction, minBet), maxBet)
+      : minBet
 
-  const signalMulti = signalBetMultiplier(signal)
-  const consensusMulti = getConsensusMultiplier(alert.position.conditionId)
-  const trustMulti = trust.trustLevel
-  let betAmount = Math.min(baseBet * signalMulti * consensusMulti * trustMulti, maxBet)
+    // Consensus multiplier (from signal metadata)
+    const consensusCount = signal.consensusCount ?? 1
+    const consensusMulti = consensusCount >= 5 ? 0.3
+      : consensusCount >= 3 ? 0.5
+      : consensusCount >= 2 ? 0.7
+      : 1
 
-  // Polymarket minimum: order must have >= 15 shares
-  // shares = betAmount / entryPrice, so betAmount must be >= 15 * entryPrice
-  const minBetForShares = POLY_MIN_ORDER_SHARES * entryPrice
-  if (betAmount < minBetForShares) {
-    betAmount = minBetForShares  // bump up to meet minimum
-  }
-  if (betAmount > getAvailableCash() * 0.95) {
-    // Not enough cash for minimum order
-    return false
-  }
+    const signalMulti = signal.signalScore >= 80 ? 1.5 : 1.0
+    const trustMulti = signal.expertTrustLevel ?? 1.0
+    let betAmount = Math.min(baseBet * signalMulti * consensusMulti * trustMulti, maxBet)
 
+    // Polymarket minimum shares
+    const minBetForShares = POLY_MIN_ORDER_SHARES * signal.entryPrice
+    if (betAmount < minBetForShares) betAmount = minBetForShares
+    if (betAmount > availCash * 0.95) {
+      markSignalRejected(signal.id, 'insufficient-cash')
+      continue
+    }
 
-  // ── Fetch token ID for real order ──────────────────────────────
-  const metadata = await fetchMarketMetadata(alert.position.conditionId)
-  if (!metadata) {
-    console.log(`  ⚠️  NO METADATA | ${alert.position.title.slice(0, 45)}`)
-    return false
-  }
-  if (!metadata.active) {
-    console.log(`  ⚠️  MARKET CLOSED | ${alert.position.title.slice(0, 45)}`)
-    return false
-  }
-  const tokenId = side === 'YES' ? metadata.yesTokenId : metadata.noTokenId
-  cacheTokenId(alert.position.conditionId, side, tokenId, metadata.negRisk)
+    // Capital limit check
+    const totalInvested = openTrades.reduce((s, t) => s + t.sizeUsdc, 0)
+    if (totalInvested + betAmount > currentBankroll * getMaxCapitalPct()) {
+      markSignalRejected(signal.id, 'capital-limit')
+      continue
+    }
 
-  // ── Place real order (or dry-run log) ──────────────────────────
-  const consensusEntry = consensusMap.get(alert.position.conditionId)
-  const expertCount = consensusEntry?.experts.length ?? 1
-  const consensusTag = expertCount > 1 ? ` 🤝${expertCount}x(${consensusMulti}x)` : ''
-  const kellyTag = kellyFraction > 0 ? `kelly:${(kellyFraction * 100).toFixed(1)}%` : 'kelly:0→min'
-  const trustTag = trust.status === 'reduced' ? ' ⚡reduced' : ''
-  const scoreTag = signal.score >= 80 ? '🔥' : signal.score >= 60 ? '✅' : '⚠️'
-  const stopTag = `stop:-${(EXIT_CONFIG.stopLossPct * 100).toFixed(0)}%`
-  const domainTag = domain ? `[${domain.domain.replace('pm-domain/', '')}]` : ''
-  const oddsTag = signal.bookmakerEdgeBonus > 0 ? ` | 📊book:${((signal.bookmakerNoVigProb ?? 0) * 100).toFixed(0)}%(+${signal.bookmakerEdgeBonus}pts)` : ''
+    const tokenId = signal.side === 'YES' ? signal.yesTokenId : signal.noTokenId
+    if (!tokenId) {
+      markSignalRejected(signal.id, 'no-token-id')
+      continue
+    }
 
-  if (DRY_RUN) {
-    console.log(`  🏜️  DRY-RUN | ${scoreTag} ${side} @ ${(rawPrice * 100).toFixed(0)}¢ | $${betAmount.toFixed(2)}${consensusTag}${trustTag} | ${kellyTag} | ${stopTag}${oddsTag} | ${alert.position.title.slice(0, 45)} ${domainTag}`)
-    logBotEvent('live-dry-run', `${side} @ ${(entryPrice * 100).toFixed(0)}¢ $${betAmount.toFixed(2)} | ${alert.position.title}`, `Score: ${signal.score}/100`)
-  } else {
-    // ── Place GTC order at expert price + buffer ─────────────────────
-    // The order sits in the orderbook until filled or timeout.
-    // User WS notifies us instantly when filled — no polling needed.
+    // Determine source label based on signal source
+    const sourceLabel = signal.source === 'expert-copy'
+      ? `[LIVE] ${signal.expertLabel ?? signal.expertWallet?.slice(0, 10) ?? 'unknown'}`
+      : `[SPORTS] ${signal.sportKey ?? 'unknown'}`
+
+    if (DRY_RUN) {
+      const scoreTag = signal.signalScore >= 80 ? '🔥' : signal.signalScore >= 60 ? '✅' : '⚠️'
+      console.log(`  🏜️  DRY-RUN | ${scoreTag} ${signal.side} @ ${(signal.entryPrice * 100).toFixed(0)}¢ | $${betAmount.toFixed(2)} | score:${signal.signalScore} | ${signal.title.slice(0, 45)}`)
+      markSignalTaken(signal.id)
+      logBotEvent('live-dry-run', `${signal.side} @ ${(signal.entryPrice * 100).toFixed(0)}¢ $${betAmount.toFixed(2)} | ${signal.title}`, `Score: ${signal.signalScore}/100 | source: ${signal.source}`)
+      placed++
+      continue
+    }
+
+    // Place GTC order
     subscribeToken(tokenId)
-
-    // Price: expert's entry price + 5¢ buffer (max MAX_ENTRY)
     const PRICE_BUFFER = 0.05
-    const maxPrice = Math.min(rawPrice + PRICE_BUFFER, MAX_ENTRY)
-    const orderPrice = parseFloat(maxPrice.toFixed(2))
+    const MAX_ENTRY_PRICE = parseFloat(process.env.MAX_ENTRY_PRICE ?? '0.50')
+    const orderPrice = parseFloat(Math.min(signal.entryPrice + PRICE_BUFFER, MAX_ENTRY_PRICE).toFixed(2))
+    const liveBetAmount = parseFloat(Math.min(betAmount, availCash * 0.30).toFixed(2))
 
-    const liveBetAmount = parseFloat(Math.min(betAmount, getAvailableCash() * 0.30).toFixed(2))
     if (liveBetAmount < POLY_MIN_ORDER_SHARES * orderPrice) {
-      return false
+      markSignalRejected(signal.id, 'below-min-shares')
+      continue
     }
 
     const order: RealOrder = {
-      conditionId: alert.position.conditionId,
+      conditionId: signal.conditionId,
       tokenId,
-      title: alert.position.title,
-      side: side as 'YES' | 'NO',
+      title: signal.title,
+      side: signal.side as 'YES' | 'NO',
       price: orderPrice,
       sizeUsdc: liveBetAmount,
-      orderType: 'GTC',  // stays in orderbook until filled or cancelled
-      negRisk: metadata.negRisk,
+      orderType: 'GTC',
+      negRisk: signal.negRisk,
     }
 
     const result = await placeOrder(order)
 
     if (!result.success) {
-      console.log(`  ❌ ORDER FAILED | ${result.error} | ${alert.position.title.slice(0, 45)}`)
-      logBotEvent('live-error', `FAILED ${side} @ ${(orderPrice * 100).toFixed(0)}¢ | ${alert.position.title}`, result.error ?? '')
-      return false
+      console.log(`  ❌ ORDER FAILED | ${result.error} | ${signal.title.slice(0, 45)}`)
+      markSignalRejected(signal.id, `order-failed: ${result.error ?? 'unknown'}`)
+      logBotEvent('live-error', `FAILED ${signal.side} @ ${(orderPrice * 100).toFixed(0)}¢ | ${signal.title}`, result.error ?? '')
+      continue
     }
 
-    // ALL orders go through pending flow — no immediate paper trade
-    // checkPendingOrders() or WS callback will create the paper trade after on-chain verification
     if (result.orderId) {
+      const scoreTag = signal.signalScore >= 80 ? '🔥' : signal.signalScore >= 60 ? '✅' : '⚠️'
       const status = result.filledPrice ? 'FILLED' : 'PLACED'
-      console.log(`  📋 LIVE ${scoreTag} GTC ${status} | ${side} @ ${(orderPrice * 100).toFixed(0)}¢ | $${liveBetAmount.toFixed(2)}${consensusTag}${trustTag} | ${kellyTag} | orderId:${result.orderId.slice(0, 12)} | ${alert.position.title.slice(0, 40)} ${domainTag}`)
-      logBotEvent('live-gtc', `GTC ${side} @ ${(orderPrice * 100).toFixed(0)}¢ $${liveBetAmount.toFixed(2)} | ${alert.position.title}`, `Score: ${signal.score}/100 | timeout: 5min`)
+      console.log(`  📋 LIVE ${scoreTag} GTC ${status} | ${signal.side} @ ${(orderPrice * 100).toFixed(0)}¢ | $${liveBetAmount.toFixed(2)} | score:${signal.signalScore} | src:${signal.source} | ${signal.title.slice(0, 40)}`)
+      logBotEvent('live-gtc', `GTC ${signal.side} @ ${(orderPrice * 100).toFixed(0)}¢ $${liveBetAmount.toFixed(2)} | ${signal.title}`, `Score: ${signal.signalScore}/100 | source: ${signal.source}`)
 
       savePendingOrder({
         orderId: result.orderId,
-        conditionId: alert.position.conditionId,
-        title: alert.position.title,
-        domain: domain?.domain ?? null,
-        side,
+        conditionId: signal.conditionId,
+        title: signal.title,
+        domain: signal.domain,
+        side: signal.side,
         entryPrice: orderPrice,
-        simulatedUsdc: liveBetAmount,
-        copiedFrom: alert.wallet,
-        copiedLabel: `[LIVE] ${alert.walletLabel ?? alert.wallet.slice(0, 10)}`,
+        sizeUsdc: liveBetAmount,
+        sourceRef: signal.source === 'expert-copy' ? (signal.expertWallet ?? 'expert') : 'sports-arb',
+        sourceLabel,
         placedAt: new Date().toISOString(),
         orderType: 'BUY',
         exitPrice: null,
@@ -557,11 +443,17 @@ async function tryCopyWithSignal(alert: PositionAlert): Promise<boolean> {
         exitReason: null,
       })
 
-      subscribeUserMarket(alert.position.conditionId)
+      cacheTokenId(signal.conditionId, signal.side, tokenId, signal.negRisk)
+      subscribeUserMarket(signal.conditionId)
+      markSignalTaken(signal.id)
+      placed++
     }
   }
 
-  return true
+  // Expire old signals
+  expireOldSignals(60)
+
+  return placed
 }
 
 // ── Price refresh (WS best bid + expert positions fallback) ──────
@@ -586,12 +478,12 @@ async function refreshOpenPrices(): Promise<number> {
   // 2. Expert positions fallback — for trades where WS has no data
   const tradesWithoutPrice = openTrades.filter((t) => {
     // Skip if WS already updated this trade
-    return !updated || t.copiedFrom === 'on-chain-sync'
+    return !updated || t.sourceRef === 'on-chain-sync'
   })
   const wallets = [...new Set(
     tradesWithoutPrice
-      .filter((t) => t.copiedFrom !== 'on-chain-sync')
-      .map((t) => t.copiedFrom)
+      .filter((t) => t.sourceRef !== 'on-chain-sync')
+      .map((t) => t.sourceRef)
   )]
 
   for (const wallet of wallets) {
@@ -681,7 +573,7 @@ async function runExitStrategy(): Promise<Record<string, number>> {
   // Check if experts still hold their positions
   const expertPositions = new Map<string, Set<string>>()
   if (EXIT_CONFIG.followExpertExit) {
-    const wallets = [...new Set(openTrades.map((t) => t.copiedFrom))]
+    const wallets = [...new Set(openTrades.map((t) => t.sourceRef))]
     for (const w of wallets) {
       const snapshot = getPositionSnapshot(w)
       expertPositions.set(w, new Set(snapshot.keys()))
@@ -699,8 +591,8 @@ async function runExitStrategy(): Promise<Record<string, number>> {
     if (pendingSellConditions.has(trade.conditionId)) continue
 
     let expertStillHolding: boolean | null = null
-    if (EXIT_CONFIG.followExpertExit && trade.copiedFrom !== 'on-chain-sync') {
-      const expertKeys = expertPositions.get(trade.copiedFrom)
+    if (EXIT_CONFIG.followExpertExit && trade.sourceRef !== 'on-chain-sync') {
+      const expertKeys = expertPositions.get(trade.sourceRef)
       if (expertKeys) {
         const key0 = `${trade.conditionId}-0`
         const key1 = `${trade.conditionId}-1`
@@ -747,9 +639,9 @@ async function runExitStrategy(): Promise<Record<string, number>> {
               domain: trade.domain ?? null,
               side: trade.side,
               entryPrice: trade.entryPrice,
-              simulatedUsdc: trade.simulatedUsdc,
-              copiedFrom: trade.copiedFrom,
-              copiedLabel: trade.copiedLabel,
+              sizeUsdc: trade.sizeUsdc,
+              sourceRef: trade.sourceRef,
+              sourceLabel: trade.sourceLabel,
               placedAt: new Date().toISOString(),
               orderType: 'SELL',
               exitPrice,
@@ -793,9 +685,9 @@ async function runExitStrategy(): Promise<Record<string, number>> {
               domain: trade.domain ?? null,
               side: trade.side,
               entryPrice: trade.entryPrice,
-              simulatedUsdc: trade.simulatedUsdc,
-              copiedFrom: trade.copiedFrom,
-              copiedLabel: trade.copiedLabel,
+              sizeUsdc: trade.sizeUsdc,
+              sourceRef: trade.sourceRef,
+              sourceLabel: trade.sourceLabel,
               placedAt: new Date().toISOString(),
               orderType: 'SELL',
               exitPrice,
@@ -828,7 +720,7 @@ function printStats(): void {
     if (t.curPrice == null) return s
     const sharesNow = t.sharesRemaining ?? t.shares
     const fraction = sharesNow / t.shares
-    return s + sharesNow * t.curPrice * (1 - 0.02) - t.simulatedUsdc * fraction
+    return s + sharesNow * t.curPrice * (1 - 0.02) - t.sizeUsdc * fraction
   }, 0)
   const startBal = parseFloat(getPortfolioSetting('starting_balance', '9'))
   const balance = startBal + realizedPnl
@@ -836,7 +728,7 @@ function printStats(): void {
     ? won.length / (won.length + lost.length)
     : 0
 
-  const totalInvested = open.reduce((s, t) => s + t.simulatedUsdc, 0)
+  const totalInvested = open.reduce((s, t) => s + t.sizeUsdc, 0)
   const cash = startBal + realizedPnl - totalInvested
   const nextBet = getDynamicBetSize()
 
@@ -867,100 +759,34 @@ function printStats(): void {
 // ── Main loop ────────────────────────────────────────────────────
 
 async function pollOnce(): Promise<void> {
-  const wallets = getActiveWatchedWallets()
   const time = new Date().toISOString().slice(11, 19)
 
   // Safety checks
   if (checkDailyLossLimit()) return
   if (checkDrawdownBreaker()) return
 
-  // Verify pending GTC orders (fill check / timeout cancel)
+  // Check pending GTC orders (BUY fills + SELL fills)
   if (!DRY_RUN) await checkPendingOrders()
 
+  // On-chain state (source of truth)
   if (!DRY_RUN) {
     const [realBalance, realPositions] = await Promise.all([getRealBalance(), getRealPositions()])
     setOnChainState(realBalance, realPositions)
-    console.log(`[${time}] 🔴 LIVE | On-chain: $${realBalance.toFixed(2)} | ${realPositions.length} positions | Polling ${wallets.length} wallets...`)
+    console.log(`[${time}] 🔴 LIVE | On-chain: $${realBalance.toFixed(2)} | ${realPositions.length} positions`)
   } else {
-    console.log(`[${time}] 🏜️ DRY-RUN | Polling ${wallets.length} wallets...`)
+    console.log(`[${time}] 🏜️ DRY-RUN`)
   }
 
-  // ── Phase 1: Collect signals & build consensus ──
-  consensusMap.clear()
-  const allNewAlerts: PositionAlert[] = []
-  const copyScoreMap = new Map<string, number>()
-  for (const w of wallets) {
-    if (w.copyabilityScore != null) copyScoreMap.set(w.wallet, w.copyabilityScore)
-  }
+  // ── Phase 1: Process signals from scanners ──
+  const placed = await processSignals()
 
-  for (const { wallet, label } of wallets) {
-    try {
-      const alerts = await pollWallet(wallet, label)
-      for (const alert of alerts) {
-        if (alert.type === 'NEW_POSITION') {
-          trackConsensus(alert)
-          allNewAlerts.push(alert)
-        }
-      }
-    } catch {
-      // Skip
-    }
-    await new Promise((r) => setTimeout(r, 800))
-  }
-
-  // Log new positions
-  for (const alert of allNewAlerts) {
-    const side = alert.position.outcomeIndex === 0 ? 'YES' : 'NO'
-    const consensus = consensusMap.get(alert.position.conditionId)
-    const expertCount = consensus?.experts.length ?? 1
-    const consensusTag = expertCount > 1 ? ` [${expertCount} experts]` : ''
-    const copyScore = copyScoreMap.get(alert.wallet)
-    const copyTag = copyScore != null ? ` (copy:${(copyScore * 100).toFixed(0)}%)` : ''
-    console.log(`  🔔 NEW | ${alert.walletLabel ?? alert.wallet.slice(0, 10)}${copyTag} | ${side} @ ${(alert.position.curPrice * 100).toFixed(0)}¢${consensusTag} | ${alert.position.title}`)
-  }
-
-  // Log consensus
-  for (const [, entry] of consensusMap) {
-    if (entry.experts.length >= 2) {
-      const names = entry.experts.map((e) => e.label?.split(' ')[0] ?? e.wallet.slice(0, 8)).join(', ')
-      console.log(`  🤝 CONSENSUS ${entry.experts.length}x | ${entry.side} @ ${(entry.price * 100).toFixed(0)}¢ | ${entry.title} | by: ${names}`)
-    }
-  }
-
-  // ── Phase 2: Copy with signal-based sizing (parallel liquidity wait) ──
-  let copied = 0
-  const copiedConditions = new Set<string>()
-
-  // Filter eligible alerts first, then launch all copies in parallel
-  const eligibleAlerts: PositionAlert[] = []
-  for (const alert of allNewAlerts) {
-    if (copiedConditions.has(alert.position.conditionId)) continue
-    const side = alert.position.outcomeIndex === 0 ? 'YES' : 'NO'
-    const openTrades = getOpenPaperTrades()
-    if (isContradictory(alert.position.conditionId, side, openTrades)) {
-      console.log(`  ⚠️  CONTRA | Already holding opposite side | ${alert.position.title}`)
-      continue
-    }
-    if (canCopy(alert)) {
-      eligibleAlerts.push(alert)
-      copiedConditions.add(alert.position.conditionId)  // prevent duplicates
-    }
-  }
-
-  // Launch all copy attempts in parallel (each waits for its own liquidity)
-  if (eligibleAlerts.length > 0) {
-    const results = await Promise.allSettled(
-      eligibleAlerts.map(alert => tryCopyWithSignal(alert))
-    )
-    copied = results.filter(r => r.status === 'fulfilled' && r.value).length
-  }
-
-  // ── Phase 3: Manage existing positions ──
+  // ── Phase 2: Manage existing positions (exits) ──
   const pricesUpdated = await refreshOpenPrices()
   const exits = await runExitStrategy()
   const totalExits = Object.values(exits).reduce((s, n) => s + n, 0)
   const exitSummary = Object.entries(exits).map(([k, v]) => `${v} ${k}`).join(', ')
-  // ── Phase 4: Redeem on-chain FIRST, then resolve DB ──
+
+  // ── Phase 3: Redeem on-chain FIRST, then resolve DB ──
   const redeemedConditionIds = new Set<string>()
   if (!DRY_RUN) {
     const redeemed = await redeemAllResolved()
@@ -1006,9 +832,9 @@ async function pollOnce(): Promise<void> {
         domain: keywordClassify(pos.title)?.domain ?? null,
         side,
         entryPrice: pos.avgPrice,
-        simulatedUsdc: pos.size * pos.avgPrice,
-        copiedFrom: 'on-chain-sync',
-        copiedLabel: '[LIVE] synced from on-chain',
+        sizeUsdc: pos.size * pos.avgPrice,
+        sourceRef: 'on-chain-sync',
+        sourceLabel: '[LIVE] synced from on-chain',
       })
       updatePaperTradePrice(pos.conditionId, pos.curPrice)
       console.log(`  📥 SYNCED FROM CHAIN | ${side} ${pos.size.toFixed(1)} shares @ ${(pos.avgPrice * 100).toFixed(0)}¢ → ${(pos.curPrice * 100).toFixed(0)}¢ | ${pos.title.slice(0, 50)}`)
@@ -1021,48 +847,13 @@ async function pollOnce(): Promise<void> {
   }
 
   // ── Summary ──
-  const parts = [`${allNewAlerts.length} new`, `${copied} copied`]
-  const consensusCount = [...consensusMap.values()].filter((e) => e.experts.length >= 2).length
-  if (consensusCount > 0) parts.push(`${consensusCount} consensus`)
+  const parts = [`${placed} placed`]
   if (totalExits > 0) parts.push(`${totalExits} exits (${exitSummary})`)
   if (resolved > 0) parts.push(`${resolved} resolved`)
   parts.push(`${pricesUpdated} prices`)
   console.log(`  → ${parts.join(' | ')}`)
 
   printStats()
-}
-
-// ── 24h Re-index ─────────────────────────────────────────────────
-
-async function reindexAllWallets(): Promise<void> {
-  const wallets = getActiveWatchedWallets()
-  const time = new Date().toISOString().slice(11, 19)
-  console.log(`\n[${time}] 📊 DAILY RE-INDEX — ${wallets.length} wallets`)
-
-  let indexed = 0
-  let errors = 0
-
-  for (const { wallet, label } of wallets) {
-    try {
-      const result = await indexWallet(wallet)
-      indexed += result.tradesIndexed
-      if (result.errors.length > 0) errors++
-
-      // Recalculate copyability from fresh wallet_stats
-      const stats = getWalletStats(wallet)
-      const newScore = calculateCopyabilityFromStats(stats)
-      if (newScore > 0) updateWalletCopyability(wallet, newScore)
-
-      if (result.tradesIndexed > 0) {
-        console.log(`  ✓ ${(label ?? wallet.slice(0, 12)).padEnd(24)} +${result.tradesIndexed} trades (copy:${(newScore * 100).toFixed(0)}%)`)
-      }
-    } catch {
-      errors++
-    }
-    await new Promise((r) => setTimeout(r, 1000))
-  }
-
-  console.log(`  → Re-index done: ${indexed} new trades, ${errors} errors\n`)
 }
 
 // ── Main ─────────────────────────────────────────────────────────
@@ -1077,12 +868,6 @@ async function main(): Promise<void> {
       console.error('   Run: npx tsx scripts/init-polymarket-creds.ts')
       process.exit(1)
     }
-  }
-
-  const wallets = getActiveWatchedWallets()
-  if (wallets.length === 0) {
-    console.error('❌ No watched wallets. Run bulk-index first.')
-    process.exit(1)
   }
 
   // Init portfolio settings — use STARTING_BALANCE env var or default to $9
@@ -1114,7 +899,7 @@ async function main(): Promise<void> {
   console.log('═══════════════════════════════════════════════')
   console.log(`  Bankroll:    $${startBal} (scale: ${scale.toFixed(3)})`)
   console.log(`  Equity:      $${eq.toFixed(2)}`)
-  console.log(`  Wallets:     ${wallets.length}`)
+  console.log(`  Source:      signals table (from scanners)`)
   console.log(`  Bet sizing:  ${(BET_PCT * 100).toFixed(0)}% of cash ($${getMinBet(eq).toFixed(2)}-$${getMaxBet(eq).toFixed(2)})`)
   console.log(`  Entry range: ${(MIN_ENTRY * 100).toFixed(0)}¢ - ${(MAX_ENTRY * 100).toFixed(0)}¢`)
   console.log(`  Min signal:  ${MIN_SIGNAL_SCORE}/100`)
@@ -1193,12 +978,12 @@ async function main(): Promise<void> {
             domain: po.domain,
             side: po.side,
             entryPrice: confirmedPrice,
-            simulatedUsdc: po.simulatedUsdc,
-            copiedFrom: po.copiedFrom,
-            copiedLabel: po.copiedLabel,
+            sizeUsdc: po.sizeUsdc,
+            sourceRef: po.sourceRef,
+            sourceLabel: po.sourceLabel,
           })
           subscribeToken(tokenIdCache.get(`${po.conditionId}-${po.side}`)?.tokenId ?? '')
-          console.log(`  💰 BUY FILLED (verified) | ${po.side} @ ${(confirmedPrice * 100).toFixed(0)}¢ | $${po.simulatedUsdc.toFixed(2)} | ${po.title.slice(0, 40)}`)
+          console.log(`  💰 BUY FILLED (verified) | ${po.side} @ ${(confirmedPrice * 100).toFixed(0)}¢ | $${po.sizeUsdc.toFixed(2)} | ${po.title.slice(0, 40)}`)
         } else {
           const exitPrice = verified.filledPrice ?? po.exitPrice ?? confirmedPrice
           if (po.partialFraction) {
@@ -1237,13 +1022,6 @@ async function main(): Promise<void> {
     })
   }, POLL_INTERVAL_MS)
 
-  // Re-index every 24h
-  const REINDEX_INTERVAL_MS = 24 * 60 * 60 * 1000
-  setInterval(() => {
-    reindexAllWallets().catch((err) => {
-      console.error(`Re-index error: ${err instanceof Error ? err.message : String(err)}`)
-    })
-  }, REINDEX_INTERVAL_MS)
 }
 
 main().catch(console.error)

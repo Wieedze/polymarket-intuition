@@ -1,18 +1,18 @@
 import { NextResponse } from 'next/server'
 
 export const dynamic = 'force-dynamic'
-import { getAllPaperTrades, getPortfolioSetting, getRecentBotEvents, getAllPaperTradesFromDb, getPortfolioSettingFromDb, getRecentBotEventsFromDb, type PaperTrade } from '@/lib/db'
+import { getAllPositions, getPortfolioSetting, getRecentBotEvents, getAllPositionsFromDb, getPortfolioSettingFromDb, getRecentBotEventsFromDb, type Position } from '@/lib/db'
 import path from 'path'
 import { getAllExpertTrustFromTrades } from '@/lib/expert-trust'
 
 // ── Helpers (pure functions, no DB) ─────────────────────────────────
 
-function pnlOf(trades: PaperTrade[]): number {
+function pnlOf(trades: Position[]): number {
   return trades.reduce((s, t) => s + (t.pnl ?? 0), 0)
 }
 
-function groupBy(trades: PaperTrade[], key: (t: PaperTrade) => string): Record<string, PaperTrade[]> {
-  const map: Record<string, PaperTrade[]> = {}
+function groupBy(trades: Position[], key: (t: Position) => string): Record<string, Position[]> {
+  const map: Record<string, Position[]> = {}
   for (const t of trades) {
     const k = key(t)
     if (!map[k]) map[k] = []
@@ -21,7 +21,7 @@ function groupBy(trades: PaperTrade[], key: (t: PaperTrade) => string): Record<s
   return map
 }
 
-function profitFactor(trades: PaperTrade[]): number {
+function profitFactor(trades: Position[]): number {
   let wins = 0, losses = 0
   for (const t of trades) {
     if ((t.pnl ?? 0) > 0) wins += t.pnl ?? 0
@@ -31,7 +31,7 @@ function profitFactor(trades: PaperTrade[]): number {
   return wins / losses
 }
 
-function maxConsecutiveLosses(trades: PaperTrade[]): number {
+function maxConsecutiveLosses(trades: Position[]): number {
   const sorted = [...trades].sort((a, b) =>
     (a.resolvedAt ?? a.openedAt).localeCompare(b.resolvedAt ?? b.openedAt)
   )
@@ -70,8 +70,8 @@ export async function GET(request: Request): Promise<NextResponse> {
     const liveDbPath = path.join(process.cwd(), 'data', 'live.db')
 
     const all = isLive
-      ? getAllPaperTradesFromDb(liveDbPath)
-      : getAllPaperTrades()
+      ? getAllPositionsFromDb(liveDbPath)
+      : getAllPositions()
     const open = all.filter((t) => t.status === 'open')
     const closed = all.filter((t) => t.status !== 'open')
     const won = closed.filter((t) => t.status === 'won')
@@ -93,7 +93,7 @@ export async function GET(request: Request): Promise<NextResponse> {
 
     const totalInvested = open.reduce((s, t) => {
       const fraction = t.sharesRemaining != null && t.shares > 0 ? t.sharesRemaining / t.shares : 1
-      return s + t.simulatedUsdc * fraction
+      return s + t.sizeUsdc * fraction
     }, 0)
 
     const totalRedeemable = open.reduce((s, t) => {
@@ -106,7 +106,7 @@ export async function GET(request: Request): Promise<NextResponse> {
       if (t.curPrice == null) return s
       const sharesNow = t.sharesRemaining ?? t.shares
       const fraction = t.shares > 0 ? sharesNow / t.shares : 1
-      return s + sharesNow * t.curPrice * (1 - FEE) - t.simulatedUsdc * fraction
+      return s + sharesNow * t.curPrice * (1 - FEE) - t.sizeUsdc * fraction
     }, 0)
 
     const availableCash = startBal + realizedPnl - totalInvested
@@ -200,7 +200,7 @@ export async function GET(request: Request): Promise<NextResponse> {
 
     // ── By expert ───────────────────────────────────────────────────
 
-    const byExpertMap = groupBy(closed, (t) => t.copiedLabel ?? t.copiedFrom.slice(0, 12))
+    const byExpertMap = groupBy(closed, (t) => t.sourceLabel ?? t.sourceRef.slice(0, 12))
     const byExpert = Object.entries(byExpertMap)
       .map(([expert, trades]) => {
         const w = trades.filter((t) => t.status === 'won').length
@@ -260,8 +260,8 @@ export async function GET(request: Request): Promise<NextResponse> {
 
     // ── By bet size ─────────────────────────────────────────────────
 
-    const smallBets = closed.filter((t) => t.simulatedUsdc <= 100)
-    const bigBets = closed.filter((t) => t.simulatedUsdc > 100)
+    const smallBets = closed.filter((t) => t.sizeUsdc <= 100)
+    const bigBets = closed.filter((t) => t.sizeUsdc > 100)
     const byBetSize = {
       standard: {
         trades: smallBets.length,
@@ -279,24 +279,24 @@ export async function GET(request: Request): Promise<NextResponse> {
 
     // ── Trading costs ───────────────────────────────────────────────
 
-    const closedEntryFees = closed.reduce((s, t) => s + t.simulatedUsdc * FEE, 0)
+    const closedEntryFees = closed.reduce((s, t) => s + t.sizeUsdc * FEE, 0)
     const closedExitFees = closed.reduce((s, t) => {
       if (t.exitPrice == null) return s
       const sharesAtExit = t.sharesRemaining ?? t.shares  // account for partial exits
       return s + sharesAtExit * t.exitPrice * FEE
     }, 0)
-    const closedSlippage = closed.reduce((s, t) => s + estimateSlippage(t.entryPrice, t.simulatedUsdc) * t.simulatedUsdc, 0)
-    const totalEntryFees = all.reduce((s, t) => s + t.simulatedUsdc * FEE, 0)
+    const closedSlippage = closed.reduce((s, t) => s + estimateSlippage(t.entryPrice, t.sizeUsdc) * t.sizeUsdc, 0)
+    const totalEntryFees = all.reduce((s, t) => s + t.sizeUsdc * FEE, 0)
     const totalExitFees = closedExitFees
     const totalFees = totalEntryFees + totalExitFees
-    const totalSlippage = all.reduce((s, t) => s + estimateSlippage(t.entryPrice, t.simulatedUsdc) * t.simulatedUsdc, 0)
+    const totalSlippage = all.reduce((s, t) => s + estimateSlippage(t.entryPrice, t.sizeUsdc) * t.sizeUsdc, 0)
     const totalCost = totalFees + totalSlippage
-    const totalDeployed = all.reduce((s, t) => s + t.simulatedUsdc, 0)
+    const totalDeployed = all.reduce((s, t) => s + t.sizeUsdc, 0)
 
     const partialFees = open.reduce((s, t) =>
       s + t.partialExits.reduce((ps, e) => ps + Math.abs(e.pnl) * FEE, 0), 0)
     const partialSlippage = open.reduce((s, t) =>
-      s + t.partialExits.reduce((ps, e) => ps + estimateSlippage(t.entryPrice, t.simulatedUsdc) * t.simulatedUsdc * e.pct, 0), 0)
+      s + t.partialExits.reduce((ps, e) => ps + estimateSlippage(t.entryPrice, t.sizeUsdc) * t.sizeUsdc * e.pct, 0), 0)
     const preCostPnl = realizedPnl + closedEntryFees + closedExitFees + closedSlippage + partialFees + partialSlippage
 
     const costs = {
@@ -310,9 +310,9 @@ export async function GET(request: Request): Promise<NextResponse> {
 
     // ── Best / worst / top open ─────────────────────────────────────
 
-    const mapTradeSummary = (t: PaperTrade): { title: string; side: string; entryPrice: number; pnl: number; expert: string; domain: string } => ({
+    const mapTradeSummary = (t: Position): { title: string; side: string; entryPrice: number; pnl: number; expert: string; domain: string } => ({
       title: t.title, side: t.side, entryPrice: t.entryPrice, pnl: t.pnl ?? 0,
-      expert: t.copiedLabel ?? t.copiedFrom.slice(0, 10), domain: t.domain?.replace('pm-domain/', '') ?? '?',
+      expert: t.sourceLabel ?? t.sourceRef.slice(0, 10), domain: t.domain?.replace('pm-domain/', '') ?? '?',
     })
     const bestTrades = [...closed].sort((a, b) => (b.pnl ?? 0) - (a.pnl ?? 0)).slice(0, 5).map(mapTradeSummary)
     const worstTrades = [...closed].sort((a, b) => (a.pnl ?? 0) - (b.pnl ?? 0)).slice(0, 5).map(mapTradeSummary)
@@ -322,12 +322,12 @@ export async function GET(request: Request): Promise<NextResponse> {
         const sharesNow = t.sharesRemaining ?? t.shares
         const fraction = t.shares > 0 ? sharesNow / t.shares : 1
         const unrealized = t.curPrice != null
-          ? sharesNow * t.curPrice * (1 - FEE) - t.simulatedUsdc * fraction
+          ? sharesNow * t.curPrice * (1 - FEE) - t.sizeUsdc * fraction
           : 0
         return {
           title: t.title, side: t.side, entryPrice: t.entryPrice,
           curPrice: t.curPrice ?? t.entryPrice, unrealized,
-          expert: t.copiedLabel ?? t.copiedFrom.slice(0, 10),
+          expert: t.sourceLabel ?? t.sourceRef.slice(0, 10),
           domain: t.domain?.replace('pm-domain/', '') ?? '?',
         }
       })
@@ -342,7 +342,7 @@ export async function GET(request: Request): Promise<NextResponse> {
     const wrCI = wilsonCI(won.length, closed.length)
 
     // Analytics equity curve (with drawdown)
-    const ecByDay = new Map<string, PaperTrade[]>()
+    const ecByDay = new Map<string, Position[]>()
     for (const t of closed) {
       const day = (t.resolvedAt ?? t.openedAt).slice(0, 10)
       const arr = ecByDay.get(day) ?? []
@@ -401,7 +401,7 @@ export async function GET(request: Request): Promise<NextResponse> {
     // ── Concentration risk ────────────────────────────────────────────
     const openByMarket = open.reduce((map, t) => {
       const key = t.conditionId
-      map.set(key, (map.get(key) ?? 0) + t.simulatedUsdc)
+      map.set(key, (map.get(key) ?? 0) + t.sizeUsdc)
       return map
     }, new Map<string, number>())
     const topConcentration = totalInvested > 0

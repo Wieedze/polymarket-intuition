@@ -1,14 +1,14 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import {
-  getOpenPaperTrades,
-  getAllPaperTrades,
-  openPaperTrade,
-  resolvePaperTrade,
-  updatePaperTradePrice,
+  getOpenPositions,
+  getAllPositions,
+  openPosition,
+  resolvePosition,
+  updatePositionPrice,
   paperTradeExistsForCondition,
   getPortfolioSetting,
   setPortfolioSetting,
-  type PaperTrade,
+  type Position,
 } from '@/lib/db'
 import { keywordClassify } from '@/lib/classifier'
 import { fetchAllPages } from '@/lib/polymarket'
@@ -42,8 +42,8 @@ function applySlippage(entryPrice: number): number {
 // E.g. swisstony opens 8 NBA bets tonight — we take max 3.
 function countOpenCorrelatedBets(wallet: string, domain: string | null): number {
   if (!domain) return 0
-  return getOpenPaperTrades()
-    .filter((t) => t.copiedFrom === wallet && t.domain === domain)
+  return getOpenPositions()
+    .filter((t) => t.sourceRef === wallet && t.domain === domain)
     .length
 }
 
@@ -94,7 +94,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     }
 
     // Default: return portfolio overview
-    const allTrades = getAllPaperTrades()
+    const allTrades = getAllPositions()
     const openTrades = allTrades.filter((t) => t.status === 'open')
     const closedTrades = allTrades.filter((t) => t.status !== 'open')
 
@@ -110,7 +110,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     // Remaining cost basis (partial exits return capital proportionally)
     const totalInvested = openTrades.reduce((s, t) => {
       const fraction = t.sharesRemaining != null && t.shares > 0 ? t.sharesRemaining / t.shares : 1
-      return s + t.simulatedUsdc * fraction
+      return s + t.sizeUsdc * fraction
     }, 0)
 
     // True unrealized: proceeds if sold now (after 2% exit fee) minus remaining cost basis
@@ -118,7 +118,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       if (t.curPrice == null) return s
       const sharesNow = t.sharesRemaining ?? t.shares
       const fraction = t.shares > 0 ? sharesNow / t.shares : 1
-      return s + sharesNow * t.curPrice * (1 - FEE) - t.simulatedUsdc * fraction
+      return s + sharesNow * t.curPrice * (1 - FEE) - t.sizeUsdc * fraction
     }, 0)
 
     const currentBalance = startingBalance + realizedPnl
@@ -186,10 +186,10 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       const title = body.title as string
       const side = body.side as string
       const rawEntryPrice = body.entryPrice as number
-      const copiedFrom = body.copiedFrom as string
-      const copiedLabel = (body.copiedLabel as string) ?? null
+      const sourceRef = body.sourceRef as string
+      const sourceLabel = (body.sourceLabel as string) ?? null
 
-      if (!conditionId || !title || !side || !rawEntryPrice || !copiedFrom) {
+      if (!conditionId || !title || !side || !rawEntryPrice || !sourceRef) {
         return NextResponse.json({ error: 'Missing fields' }, { status: 400 })
       }
 
@@ -203,7 +203,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
       // ── Correlation guard ──────────────────────────────────────
       // Prevent copying more than MAX_CORRELATED_BETS from same wallet × domain
-      const correlatedOpen = countOpenCorrelatedBets(copiedFrom, domainName)
+      const correlatedOpen = countOpenCorrelatedBets(sourceRef, domainName)
       if (correlatedOpen >= MAX_CORRELATED_BETS) {
         return NextResponse.json({
           error: `Correlation limit: already ${correlatedOpen} open bets on ${domainName} from this expert`,
@@ -218,17 +218,17 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       // ── Kelly-based dynamic sizing ─────────────────────────────
       const flatBetSize = parseFloat(getPortfolioSetting('bet_size_usdc', '100'))
       const bankroll = parseFloat(getPortfolioSetting('starting_balance', '10000'))
-      const simulatedUsdc = computeDynamicBetSize(bankroll, flatBetSize, copiedFrom, entryPrice)
+      const sizeUsdc = computeDynamicBetSize(bankroll, flatBetSize, sourceRef, entryPrice)
 
-      const trade = openPaperTrade({
+      const trade = openPosition({
         conditionId,
         title,
         domain: domainName,
         side,
         entryPrice,        // slippage-adjusted entry
-        simulatedUsdc,     // kelly-sized bet
-        copiedFrom,
-        copiedLabel,
+        sizeUsdc,     // kelly-sized bet
+        sourceRef,
+        sourceLabel,
       })
 
       return NextResponse.json({
@@ -236,7 +236,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         meta: {
           rawEntryPrice,
           slippageApplied: +(entryPrice - rawEntryPrice).toFixed(2),
-          simulatedUsdc,
+          sizeUsdc,
           correlatedOpen,
         },
       })
@@ -248,7 +248,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       if (!conditionId || exitPrice == null) {
         return NextResponse.json({ error: 'Missing conditionId or exitPrice' }, { status: 400 })
       }
-      resolvePaperTrade(conditionId, exitPrice)
+      resolvePosition(conditionId, exitPrice)
       return NextResponse.json({ ok: true })
     }
 
@@ -262,13 +262,13 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 // ── Helpers ───────────────────────────────────────────────────────
 
 async function refreshPrices(): Promise<NextResponse> {
-  const openTrades = getOpenPaperTrades()
+  const openTrades = getOpenPositions()
   if (openTrades.length === 0) {
     return NextResponse.json({ refreshed: 0 })
   }
 
   // Get unique wallets that we copied from
-  const wallets = [...new Set(openTrades.map((t) => t.copiedFrom))]
+  const wallets = [...new Set(openTrades.map((t) => t.sourceRef))]
   let updated = 0
 
   for (const wallet of wallets) {
@@ -280,7 +280,7 @@ async function refreshPrices(): Promise<NextResponse> {
       for (const pos of positions) {
         const matching = openTrades.filter((t) => t.conditionId === pos.conditionId)
         for (const trade of matching) {
-          updatePaperTradePrice(trade.conditionId, pos.curPrice)
+          updatePositionPrice(trade.conditionId, pos.curPrice)
           updated++
         }
       }
@@ -294,10 +294,10 @@ async function refreshPrices(): Promise<NextResponse> {
 }
 
 async function checkResolutions(): Promise<NextResponse> {
-  const openTrades = getOpenPaperTrades()
+  const openTrades = getOpenPositions()
   let resolved = 0
 
-  const wallets = [...new Set(openTrades.map((t) => t.copiedFrom))]
+  const wallets = [...new Set(openTrades.map((t) => t.sourceRef))]
 
   for (const wallet of wallets) {
     try {
@@ -309,7 +309,7 @@ async function checkResolutions(): Promise<NextResponse> {
         if (pos.curPrice < 0.05 || pos.curPrice > 0.95) {
           const matching = openTrades.filter((t) => t.conditionId === pos.conditionId)
           if (matching.length > 0) {
-            resolvePaperTrade(pos.conditionId, pos.curPrice)
+            resolvePosition(pos.conditionId, pos.curPrice)
             resolved++
           }
         }

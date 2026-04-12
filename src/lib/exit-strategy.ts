@@ -1,4 +1,4 @@
-import type { PaperTrade } from './db'
+import type { Position } from './db'
 
 // ── Exit Strategy Config ────────────────────────────────────────
 
@@ -74,7 +74,7 @@ export type ExitDecision = {
  * @param expertStillHolding - Whether the expert still has this position (null = unknown)
  */
 export function evaluateExit(
-  trade: PaperTrade,
+  trade: Position,
   config: ExitConfig = DEFAULT_CONFIG,
   expertStillHolding: boolean | null = null
 ): ExitDecision {

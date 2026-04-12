@@ -108,38 +108,21 @@ export function openReadonlyDb(dbPath: string): Database.Database | null {
  * Get all paper trades from a specific DB file.
  * Used by dashboard to read live trades from live.db.
  */
-export function getAllPaperTradesFromDb(dbPath: string): PaperTrade[] {
+export function getAllPositionsFromDb(dbPath: string): Position[] {
   const db = openReadonlyDb(dbPath)
   if (!db) return []
   try {
-    const rows = db.prepare('SELECT * FROM paper_trades ORDER BY opened_at DESC').all() as Array<Record<string, unknown>>
-    return rows.map((r) => ({
-      id: r.id as string,
-      conditionId: r.condition_id as string,
-      title: r.title as string,
-      domain: r.domain as string | null,
-      side: r.side as string,
-      entryPrice: r.entry_price as number,
-      simulatedUsdc: r.simulated_usdc as number,
-      shares: r.shares as number,
-      sharesRemaining: r.shares_remaining as number | null,
-      copiedFrom: r.copied_from as string,
-      copiedLabel: r.copied_label as string | null,
-      status: r.status as 'open' | 'won' | 'lost',
-      curPrice: r.cur_price as number | null,
-      peakPrice: r.peak_price as number | null,
-      exitPrice: r.exit_price as number | null,
-      pnl: r.pnl as number | null,
-      partialExits: JSON.parse((r.partial_exits as string | null) ?? '[]') as PartialExit[],
-      openedAt: r.opened_at as string,
-      resolvedAt: r.resolved_at as string | null,
-    }))
+    const rows = db.prepare('SELECT * FROM positions ORDER BY opened_at DESC').all()
+    return mapPositionRows(rows)
   } catch {
     return []
   } finally {
     db.close()
   }
 }
+
+/** @deprecated Use getAllPositionsFromDb */
+export const getAllPaperTradesFromDb = getAllPositionsFromDb
 
 /**
  * Get a portfolio setting from a specific DB file.
@@ -148,7 +131,7 @@ export function getPortfolioSettingFromDb(dbPath: string, key: string, fallback:
   const db = openReadonlyDb(dbPath)
   if (!db) return fallback
   try {
-    const row = db.prepare('SELECT value FROM paper_portfolio WHERE key = ?').get(key) as { value: string } | undefined
+    const row = db.prepare('SELECT value FROM portfolio_settings WHERE key = ?').get(key) as { value: string } | undefined
     return row?.value ?? fallback
   } catch {
     return fallback
@@ -245,17 +228,17 @@ function initTables(db: Database.Database): void {
       PRIMARY KEY (wallet, condition_id, outcome_index)
     );
 
-    CREATE TABLE IF NOT EXISTS paper_trades (
+    CREATE TABLE IF NOT EXISTS positions (
       id TEXT PRIMARY KEY,
       condition_id TEXT NOT NULL,
       title TEXT NOT NULL,
       domain TEXT,
       side TEXT NOT NULL,
       entry_price REAL NOT NULL,
-      simulated_usdc REAL NOT NULL,
+      size_usdc REAL NOT NULL,
       shares REAL NOT NULL,
-      copied_from TEXT NOT NULL,
-      copied_label TEXT,
+      source_ref TEXT NOT NULL,
+      source_label TEXT,
       status TEXT NOT NULL DEFAULT 'open',
       cur_price REAL,
       peak_price REAL,
@@ -265,7 +248,7 @@ function initTables(db: Database.Database): void {
       resolved_at TEXT
     );
 
-    CREATE TABLE IF NOT EXISTS paper_portfolio (
+    CREATE TABLE IF NOT EXISTS portfolio_settings (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
     );
@@ -303,9 +286,9 @@ function initTables(db: Database.Database): void {
       domain TEXT,
       side TEXT NOT NULL,
       entry_price REAL NOT NULL,
-      simulated_usdc REAL NOT NULL,
-      copied_from TEXT,
-      copied_label TEXT,
+      size_usdc REAL NOT NULL,
+      source_ref TEXT,
+      source_label TEXT,
       placed_at TEXT NOT NULL,
       order_type TEXT NOT NULL DEFAULT 'BUY',
       exit_price REAL,
@@ -316,17 +299,17 @@ function initTables(db: Database.Database): void {
 
   // Migration: add peak_price column if missing
   try {
-    db.exec('ALTER TABLE paper_trades ADD COLUMN peak_price REAL')
+    db.exec('ALTER TABLE positions ADD COLUMN peak_price REAL')
   } catch {
     // Column already exists — ignore
   }
 
   // Migration: partial exits support
   try {
-    db.exec('ALTER TABLE paper_trades ADD COLUMN shares_remaining REAL')
+    db.exec('ALTER TABLE positions ADD COLUMN shares_remaining REAL')
   } catch {}
   try {
-    db.exec("ALTER TABLE paper_trades ADD COLUMN partial_exits TEXT NOT NULL DEFAULT '[]'")
+    db.exec("ALTER TABLE positions ADD COLUMN partial_exits TEXT NOT NULL DEFAULT '[]'")
   } catch {}
 
   // Migration: implicit edge in wallet_stats
@@ -344,19 +327,70 @@ function initTables(db: Database.Database): void {
     db.exec('ALTER TABLE watched_wallets ADD COLUMN copyability_score REAL')
   } catch {}
 
-  // Migration: pending_orders sell support
+  // Migration: pending_orders sell support (for DBs created before these columns were in CREATE TABLE)
+  try { db.exec("ALTER TABLE pending_orders ADD COLUMN order_type TEXT NOT NULL DEFAULT 'BUY'") } catch {}
+  try { db.exec('ALTER TABLE pending_orders ADD COLUMN exit_price REAL') } catch {}
+  try { db.exec('ALTER TABLE pending_orders ADD COLUMN partial_fraction REAL') } catch {}
+  try { db.exec('ALTER TABLE pending_orders ADD COLUMN exit_reason TEXT') } catch {}
+
+  // ── Migration: rename paper_trades → positions, paper_portfolio → portfolio_settings ──
+  // Check if migration is needed (table paper_trades still exists but positions doesn't)
+  const hasPaperTrades = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='paper_trades'").get()
+  const hasPositions = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='positions'").get()
+  if (hasPaperTrades && !hasPositions) {
+    db.exec('ALTER TABLE paper_trades RENAME TO positions')
+    db.exec('ALTER TABLE positions RENAME COLUMN simulated_usdc TO size_usdc')
+    db.exec('ALTER TABLE positions RENAME COLUMN copied_from TO source_ref')
+    db.exec('ALTER TABLE positions RENAME COLUMN copied_label TO source_label')
+  }
+  const hasPaperPortfolio = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='paper_portfolio'").get()
+  const hasPortfolioSettings = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='portfolio_settings'").get()
+  if (hasPaperPortfolio && !hasPortfolioSettings) {
+    db.exec('ALTER TABLE paper_portfolio RENAME TO portfolio_settings')
+  }
+
+  // ── Migration: rename pending_orders columns ──
   try {
-    db.exec("ALTER TABLE pending_orders ADD COLUMN order_type TEXT NOT NULL DEFAULT 'BUY'")
-  } catch {}
-  try {
-    db.exec('ALTER TABLE pending_orders ADD COLUMN exit_price REAL')
-  } catch {}
-  try {
-    db.exec('ALTER TABLE pending_orders ADD COLUMN partial_fraction REAL')
-  } catch {}
-  try {
-    db.exec('ALTER TABLE pending_orders ADD COLUMN exit_reason TEXT')
-  } catch {}
+    db.exec('ALTER TABLE pending_orders RENAME COLUMN simulated_usdc TO size_usdc')
+    db.exec('ALTER TABLE pending_orders RENAME COLUMN copied_from TO source_ref')
+    db.exec('ALTER TABLE pending_orders RENAME COLUMN copied_label TO source_label')
+  } catch {
+    // Already renamed or columns don't exist
+  }
+
+  // ── Signals table (unified signal pipeline) ──
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS signals (
+      id TEXT PRIMARY KEY,
+      source TEXT NOT NULL,
+      condition_id TEXT NOT NULL,
+      title TEXT NOT NULL,
+      domain TEXT,
+      side TEXT NOT NULL,
+      entry_price REAL NOT NULL,
+      signal_score INTEGER NOT NULL,
+      kelly_fraction REAL,
+      expert_wallet TEXT,
+      expert_label TEXT,
+      expert_trust_level REAL,
+      consensus_count INTEGER,
+      position_size REAL,
+      sport_key TEXT,
+      bookmaker_prob REAL,
+      edge REAL,
+      yes_token_id TEXT,
+      no_token_id TEXT,
+      neg_risk INTEGER DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'pending',
+      reject_reason TEXT,
+      processed_at TEXT,
+      reasons_json TEXT,
+      created_at TEXT NOT NULL,
+      UNIQUE(source, condition_id, side)
+    );
+    CREATE INDEX IF NOT EXISTS idx_signals_status ON signals(status);
+    CREATE INDEX IF NOT EXISTS idx_signals_created ON signals(created_at);
+  `)
 
   // Sports arbitrage tables
   db.exec(`
@@ -727,8 +761,9 @@ export type PositionSnapshotRow = {
 }
 
 export function getPositionSnapshot(wallet: string): Map<string, PositionSnapshotRow> {
-  const db = getSharedDb()  // position snapshots are shared (written by paper auto-trader)
-  const rows = db
+  // Try instance DB first (expert-scanner writes here), fallback to shared DB
+  const instanceDb = getDb()
+  let rows = instanceDb
     .prepare(
       `SELECT condition_id, outcome_index, title, size, avg_price, cur_price
        FROM position_snapshots WHERE wallet = ?`
@@ -741,6 +776,24 @@ export function getPositionSnapshot(wallet: string): Map<string, PositionSnapsho
     avg_price: number
     cur_price: number
   }>
+
+  // Fallback to shared DB if instance has no data (backward compat with auto-trader)
+  if (rows.length === 0 && SHARED_DB_PATH !== DB_PATH) {
+    const sharedDb = getSharedDb()
+    rows = sharedDb
+      .prepare(
+        `SELECT condition_id, outcome_index, title, size, avg_price, cur_price
+         FROM position_snapshots WHERE wallet = ?`
+      )
+      .all(wallet) as Array<{
+      condition_id: string
+      outcome_index: number
+      title: string
+      size: number
+      avg_price: number
+      cur_price: number
+    }>
+  }
 
   const map = new Map<string, PositionSnapshotRow>()
   for (const r of rows) {
@@ -760,8 +813,6 @@ export function savePositionSnapshot(
   wallet: string,
   positions: Array<{ conditionId: string; outcomeIndex: number; title: string; size: number; avgPrice: number; curPrice: number }>
 ): void {
-  // In live mode, paper auto-trader handles snapshots — skip writes from live-trader
-  if (SHARED_DB_PATH !== DB_PATH) return
   const db = getDb()
   // Clear old snapshot
   db.prepare('DELETE FROM position_snapshots WHERE wallet = ?').run(wallet)
@@ -786,18 +837,18 @@ export type PartialExit = {
   at: string        // ISO timestamp
 }
 
-export type PaperTrade = {
+export type Position = {
   id: string
   conditionId: string
   title: string
   domain: string | null
   side: string
   entryPrice: number
-  simulatedUsdc: number
+  sizeUsdc: number
   shares: number
   sharesRemaining: number | null  // null = 100% (pre-migration rows)
-  copiedFrom: string
-  copiedLabel: string | null
+  sourceRef: string
+  sourceLabel: string | null
   status: 'open' | 'won' | 'lost'
   curPrice: number | null
   peakPrice: number | null
@@ -808,9 +859,12 @@ export type PaperTrade = {
   resolvedAt: string | null
 }
 
+/** @deprecated Use Position instead */
+export type PaperTrade = Position
+
 export function getPortfolioSetting(key: string, defaultValue: string): string {
   const db = getDb()
-  const row = db.prepare('SELECT value FROM paper_portfolio WHERE key = ?').get(key) as
+  const row = db.prepare('SELECT value FROM portfolio_settings WHERE key = ?').get(key) as
     | { value: string }
     | undefined
   return row?.value ?? defaultValue
@@ -818,7 +872,7 @@ export function getPortfolioSetting(key: string, defaultValue: string): string {
 
 export function setPortfolioSetting(key: string, value: string): void {
   const db = getDb()
-  db.prepare('INSERT OR REPLACE INTO paper_portfolio (key, value) VALUES (?, ?)').run(key, value)
+  db.prepare('INSERT OR REPLACE INTO portfolio_settings (key, value) VALUES (?, ?)').run(key, value)
 }
 
 // ── Pending orders (survive restarts) ────────────────────────────
@@ -830,9 +884,9 @@ export type PendingOrderRow = {
   domain: string | null
   side: string
   entryPrice: number
-  simulatedUsdc: number
-  copiedFrom: string
-  copiedLabel: string | null
+  sizeUsdc: number
+  sourceRef: string
+  sourceLabel: string | null
   placedAt: string
   orderType: 'BUY' | 'SELL'
   exitPrice: number | null
@@ -844,12 +898,12 @@ export function savePendingOrder(order: PendingOrderRow): void {
   const db = getDb()
   db.prepare(
     `INSERT OR REPLACE INTO pending_orders
-     (order_id, condition_id, title, domain, side, entry_price, simulated_usdc, copied_from, copied_label, placed_at, order_type, exit_price, partial_fraction, exit_reason)
+     (order_id, condition_id, title, domain, side, entry_price, size_usdc, source_ref, source_label, placed_at, order_type, exit_price, partial_fraction, exit_reason)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     order.orderId, order.conditionId, order.title, order.domain,
-    order.side, order.entryPrice, order.simulatedUsdc,
-    order.copiedFrom, order.copiedLabel, order.placedAt,
+    order.side, order.entryPrice, order.sizeUsdc,
+    order.sourceRef, order.sourceLabel, order.placedAt,
     order.orderType, order.exitPrice, order.partialFraction, order.exitReason
   )
 }
@@ -864,9 +918,9 @@ export function getPendingOrders(): PendingOrderRow[] {
     domain: (r.domain as string) ?? null,
     side: r.side as string,
     entryPrice: r.entry_price as number,
-    simulatedUsdc: r.simulated_usdc as number,
-    copiedFrom: (r.copied_from as string) ?? '',
-    copiedLabel: (r.copied_label as string) ?? null,
+    sizeUsdc: r.size_usdc as number,
+    sourceRef: (r.source_ref as string) ?? '',
+    sourceLabel: (r.source_label as string) ?? null,
     placedAt: r.placed_at as string,
     orderType: (r.order_type as 'BUY' | 'SELL') ?? 'BUY',
     exitPrice: (r.exit_price as number) ?? null,
@@ -883,26 +937,26 @@ export function removePendingOrder(orderId: string): void {
 // Polymarket taker fee — charged on buy AND early sell, not on resolution redemption
 const POLYMARKET_FEE = 0.02
 
-export function openPaperTrade(trade: {
+export function openPosition(trade: {
   conditionId: string
   title: string
   domain: string | null
   side: string
   entryPrice: number
-  simulatedUsdc: number
-  copiedFrom: string
-  copiedLabel: string | null
-}): PaperTrade {
+  sizeUsdc: number
+  sourceRef: string
+  sourceLabel: string | null
+}): Position {
   const db = getDb()
   // Entry fee: spend $100 but only get 98¢ worth of shares
-  const shares = (trade.simulatedUsdc * (1 - POLYMARKET_FEE)) / trade.entryPrice
-  const id = `paper-${trade.conditionId}-${Date.now()}`
+  const shares = (trade.sizeUsdc * (1 - POLYMARKET_FEE)) / trade.entryPrice
+  const id = `pos-${trade.conditionId}-${Date.now()}`
   const now = new Date().toISOString()
 
   db.prepare(
-    `INSERT INTO paper_trades
-     (id, condition_id, title, domain, side, entry_price, simulated_usdc, shares,
-      copied_from, copied_label, status, cur_price, opened_at)
+    `INSERT INTO positions
+     (id, condition_id, title, domain, side, entry_price, size_usdc, shares,
+      source_ref, source_label, status, cur_price, opened_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)`
   ).run(
     id,
@@ -911,10 +965,10 @@ export function openPaperTrade(trade: {
     trade.domain,
     trade.side,
     trade.entryPrice,
-    trade.simulatedUsdc,
+    trade.sizeUsdc,
     shares,
-    trade.copiedFrom,
-    trade.copiedLabel,
+    trade.sourceRef,
+    trade.sourceLabel,
     trade.entryPrice,
     now
   )
@@ -926,10 +980,10 @@ export function openPaperTrade(trade: {
     domain: trade.domain,
     side: trade.side,
     entryPrice: trade.entryPrice,
-    simulatedUsdc: trade.simulatedUsdc,
+    sizeUsdc: trade.sizeUsdc,
     shares,
-    copiedFrom: trade.copiedFrom,
-    copiedLabel: trade.copiedLabel,
+    sourceRef: trade.sourceRef,
+    sourceLabel: trade.sourceLabel,
     status: 'open',
     curPrice: trade.entryPrice,
     peakPrice: trade.entryPrice,
@@ -942,43 +996,63 @@ export function openPaperTrade(trade: {
   }
 }
 
-export function getOpenPaperTrades(): PaperTrade[] {
+/** @deprecated Use openPosition */
+export const openPaperTrade = openPosition
+
+export function getOpenPositions(): Position[] {
   const db = getDb()
-  return mapPaperRows(
-    db.prepare("SELECT * FROM paper_trades WHERE status = 'open' ORDER BY opened_at DESC").all()
+  return mapPositionRows(
+    db.prepare("SELECT * FROM positions WHERE status = 'open' ORDER BY opened_at DESC").all()
   )
 }
 
-export function getAllPaperTrades(): PaperTrade[] {
+export function getAllPositions(): Position[] {
   const db = getDb()
-  return mapPaperRows(
-    db.prepare('SELECT * FROM paper_trades ORDER BY opened_at DESC').all()
+  return mapPositionRows(
+    db.prepare('SELECT * FROM positions ORDER BY opened_at DESC').all()
   )
 }
 
 /**
- * Get all paper trades from the shared DB (for expert trust evaluation).
- * In paper mode: same as getAllPaperTrades().
+ * Get all positions from the shared DB (for expert trust evaluation).
+ * In paper mode: same as getAllPositions().
  * In live mode: reads from polymarket.db so trust has full paper trading history.
  */
-export function getSharedPaperTrades(): PaperTrade[] {
+export function getSharedPositions(): Position[] {
   const db = getSharedDb()
-  return mapPaperRows(
-    db.prepare('SELECT * FROM paper_trades ORDER BY opened_at DESC').all()
-  )
+  try {
+    // Try new table name first
+    return mapPositionRows(
+      db.prepare('SELECT * FROM positions ORDER BY opened_at DESC').all()
+    )
+  } catch {
+    // Fallback to old name (shared DB may not be migrated yet)
+    return mapPositionRows(
+      db.prepare('SELECT * FROM paper_trades ORDER BY opened_at DESC').all()
+    )
+  }
 }
 
-export function updatePaperTradePrice(conditionId: string, curPrice: number): void {
+/** @deprecated Use getOpenPositions */
+export const getOpenPaperTrades = getOpenPositions
+/** @deprecated Use getAllPositions */
+export const getAllPaperTrades = getAllPositions
+/** @deprecated Use getSharedPositions */
+export const getSharedPaperTrades = getSharedPositions
+
+export function updatePositionPrice(conditionId: string, curPrice: number): void {
   const db = getDb()
-  // Update cur_price and peak_price (track highest favorable price)
   db.prepare(
-    `UPDATE paper_trades SET cur_price = ?,
+    `UPDATE positions SET cur_price = ?,
      peak_price = MAX(COALESCE(peak_price, cur_price), ?)
      WHERE condition_id = ? AND status = 'open'`
   ).run(curPrice, curPrice, conditionId)
 }
 
-export function resolvePaperTrade(
+/** @deprecated Use updatePositionPrice */
+export const updatePaperTradePrice = updatePositionPrice
+
+export function resolvePosition(
   conditionId: string,
   exitPrice: number
 ): void {
@@ -986,54 +1060,51 @@ export function resolvePaperTrade(
 
   const db = getDb()
   const rows = db.prepare(
-    "SELECT id, entry_price, shares, shares_remaining, simulated_usdc, side FROM paper_trades WHERE condition_id = ? AND status = 'open'"
+    "SELECT id, entry_price, shares, shares_remaining, size_usdc, side FROM positions WHERE condition_id = ? AND status = 'open'"
   ).all(conditionId) as Array<Record<string, unknown>>
 
   for (const row of rows) {
     const entryPrice = row.entry_price as number
     const shares = row.shares as number
     const sharesRemaining = (row.shares_remaining as number | null) ?? shares
-    const simulatedUsdc = row.simulated_usdc as number
+    const sizeUsdc = row.size_usdc as number
     const side = row.side as string
     const id = row.id as string
-    // fraction of original position still open after any partial exits
     const fraction = sharesRemaining / shares
 
-    // PnL calculation — using only remaining shares/investment (partial exits already recorded)
-    // shares = simulatedUsdc / entryPrice (so sharesRemaining × entryPrice = remaining investment)
     let pnl: number
     let status: string
     if (exitPrice > 0.95) {
-      // Market resolved YES
       if (side === 'YES') {
-        pnl = sharesRemaining * (1 - entryPrice)  // paid entryPrice, got $1 per remaining share
+        pnl = sharesRemaining * (1 - entryPrice)
         status = 'won'
       } else {
-        pnl = -(simulatedUsdc * fraction)  // lost remaining portion of investment
+        pnl = -(sizeUsdc * fraction)
         status = 'lost'
       }
     } else if (exitPrice < 0.05) {
-      // Market resolved NO — NO token resolves to $1, same payout structure as YES
       if (side === 'NO') {
-        pnl = sharesRemaining * (1 - entryPrice)  // paid entryPrice, got $1 per remaining share
+        pnl = sharesRemaining * (1 - entryPrice)
         status = 'won'
       } else {
-        pnl = -(simulatedUsdc * fraction)  // lost remaining portion of investment
+        pnl = -(sizeUsdc * fraction)
         status = 'lost'
       }
     } else {
-      // Not fully resolved — paper exit at current price (selling = taker fee applies)
       const netProceeds = sharesRemaining * exitPrice * (1 - POLYMARKET_FEE)
-      pnl = netProceeds - simulatedUsdc * fraction
+      pnl = netProceeds - sizeUsdc * fraction
       status = pnl > 0 ? 'won' : 'lost'
     }
 
     db.prepare(
-      `UPDATE paper_trades SET status = ?, exit_price = ?, pnl = ?, resolved_at = ?
+      `UPDATE positions SET status = ?, exit_price = ?, pnl = ?, resolved_at = ?
        WHERE id = ?`
     ).run(status, exitPrice, pnl, new Date().toISOString(), id)
   }
 }
+
+/** @deprecated Use resolvePosition */
+export const resolvePaperTrade = resolvePosition
 
 /**
  * Partial exit — sells a fraction of the position and keeps the rest open.
@@ -1043,7 +1114,7 @@ export function resolvePaperTrade(
  * @param curPrice - current market price
  * @returns realized PnL from this partial exit, or null if trade not found
  */
-export function partialExitPaperTrade(
+export function partialExitPosition(
   conditionId: string,
   exitPriceFraction: number,
   curPrice: number
@@ -1051,7 +1122,7 @@ export function partialExitPaperTrade(
   const db = getDb()
 
   const row = db.prepare(
-    "SELECT * FROM paper_trades WHERE condition_id = ? AND status = 'open'"
+    "SELECT * FROM positions WHERE condition_id = ? AND status = 'open'"
   ).get(conditionId) as Record<string, unknown> | undefined
 
   if (!row) return null
@@ -1083,7 +1154,7 @@ export function partialExitPaperTrade(
   const updatedExits = [...existingExits, partialExit]
 
   db.prepare(
-    `UPDATE paper_trades
+    `UPDATE positions
      SET shares_remaining = ?,
          partial_exits = ?,
          peak_price = MAX(COALESCE(peak_price, cur_price), ?)
@@ -1098,21 +1169,25 @@ export function partialExitPaperTrade(
   return pnl
 }
 
-export function paperTradeExistsForCondition(conditionId: string): boolean {
+/** @deprecated Use partialExitPosition */
+export const partialExitPaperTrade = partialExitPosition
+
+export function positionExistsForCondition(conditionId: string): boolean {
   const db = getDb()
-  // Block if trade is currently OPEN (don't double-up)
   const openRow = db.prepare(
-    "SELECT 1 FROM paper_trades WHERE condition_id = ? AND status = 'open'"
+    "SELECT 1 FROM positions WHERE condition_id = ? AND status = 'open'"
   ).get(conditionId)
   if (openRow) return true
 
-  // Block if trade was resolved less than 24h ago (cooldown — prevents buy-sell loops)
   const recentRow = db.prepare(
-    `SELECT 1 FROM paper_trades WHERE condition_id = ? AND status != 'open'
+    `SELECT 1 FROM positions WHERE condition_id = ? AND status != 'open'
      AND resolved_at > datetime('now', '-24 hours')`
   ).get(conditionId)
   return recentRow !== undefined
 }
+
+/** @deprecated Use positionExistsForCondition */
+export const paperTradeExistsForCondition = positionExistsForCondition
 
 // ── Bot events operations ───────────────────────────────────────
 
@@ -1192,7 +1267,7 @@ export function setLeaderboardResultsCache(period: string, results: unknown[]): 
 
 // ── Paper trade row mapper ──────────────────────────────────────
 
-function mapPaperRows(rows: unknown[]): PaperTrade[] {
+function mapPositionRows(rows: unknown[]): Position[] {
   return (rows as Array<Record<string, unknown>>).map((r) => ({
     id: r.id as string,
     conditionId: r.condition_id as string,
@@ -1200,11 +1275,11 @@ function mapPaperRows(rows: unknown[]): PaperTrade[] {
     domain: r.domain as string | null,
     side: r.side as string,
     entryPrice: r.entry_price as number,
-    simulatedUsdc: r.simulated_usdc as number,
+    sizeUsdc: r.size_usdc as number,
     shares: r.shares as number,
     sharesRemaining: r.shares_remaining as number | null,
-    copiedFrom: r.copied_from as string,
-    copiedLabel: r.copied_label as string | null,
+    sourceRef: r.source_ref as string,
+    sourceLabel: r.source_label as string | null,
     status: r.status as 'open' | 'won' | 'lost',
     curPrice: r.cur_price as number | null,
     peakPrice: r.peak_price as number | null,
@@ -1274,4 +1349,129 @@ export function saveMarketMetadata(meta: MarketMetadata): void {
     meta.negRisk ? 1 : 0,
     meta.fetchedAt,
   )
+}
+
+// ── Signals pipeline operations ────────────────────────────────
+
+export type SignalRow = {
+  id: string
+  source: string               // 'expert-copy' | 'sports-arb'
+  conditionId: string
+  title: string
+  domain: string | null
+  side: string                 // 'YES' | 'NO'
+  entryPrice: number
+  signalScore: number          // 0-100
+  kellyFraction: number | null
+  // Expert-copy fields
+  expertWallet: string | null
+  expertLabel: string | null
+  expertTrustLevel: number | null
+  consensusCount: number | null
+  positionSize: number | null
+  // Sports-arb fields
+  sportKey: string | null
+  bookmakerProb: number | null
+  edge: number | null
+  // Token info
+  yesTokenId: string | null
+  noTokenId: string | null
+  negRisk: boolean
+  // Processing
+  status: string               // 'pending' | 'taken' | 'rejected' | 'expired'
+  rejectReason: string | null
+  processedAt: string | null
+  reasons: string[]
+  createdAt: string
+}
+
+export function insertSignal(signal: Omit<SignalRow, 'status' | 'rejectReason' | 'processedAt'>): void {
+  const db = getDb()
+  db.prepare(`
+    INSERT OR REPLACE INTO signals
+    (id, source, condition_id, title, domain, side, entry_price, signal_score, kelly_fraction,
+     expert_wallet, expert_label, expert_trust_level, consensus_count, position_size,
+     sport_key, bookmaker_prob, edge,
+     yes_token_id, no_token_id, neg_risk,
+     status, reasons_json, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+  `).run(
+    signal.id, signal.source, signal.conditionId, signal.title, signal.domain,
+    signal.side, signal.entryPrice, signal.signalScore, signal.kellyFraction,
+    signal.expertWallet, signal.expertLabel, signal.expertTrustLevel,
+    signal.consensusCount, signal.positionSize,
+    signal.sportKey, signal.bookmakerProb, signal.edge,
+    signal.yesTokenId, signal.noTokenId, signal.negRisk ? 1 : 0,
+    JSON.stringify(signal.reasons), signal.createdAt,
+  )
+}
+
+export function getPendingSignals(minScore: number = 0): SignalRow[] {
+  const db = getDb()
+  const rows = db.prepare(
+    `SELECT * FROM signals WHERE status = 'pending' AND signal_score >= ?
+     ORDER BY signal_score DESC, created_at ASC`
+  ).all(minScore) as Array<Record<string, unknown>>
+  return rows.map(mapSignalRow)
+}
+
+export function getRecentSignals(limit: number = 50): SignalRow[] {
+  const db = getDb()
+  const rows = db.prepare(
+    'SELECT * FROM signals ORDER BY created_at DESC LIMIT ?'
+  ).all(limit) as Array<Record<string, unknown>>
+  return rows.map(mapSignalRow)
+}
+
+export function markSignalTaken(id: string): void {
+  const db = getDb()
+  db.prepare(
+    "UPDATE signals SET status = 'taken', processed_at = ? WHERE id = ?"
+  ).run(new Date().toISOString(), id)
+}
+
+export function markSignalRejected(id: string, reason: string): void {
+  const db = getDb()
+  db.prepare(
+    "UPDATE signals SET status = 'rejected', reject_reason = ?, processed_at = ? WHERE id = ?"
+  ).run(reason, new Date().toISOString(), id)
+}
+
+export function expireOldSignals(maxAgeMinutes: number = 60): number {
+  const db = getDb()
+  const result = db.prepare(
+    `UPDATE signals SET status = 'expired'
+     WHERE status = 'pending' AND created_at < datetime('now', '-' || ? || ' minutes')`
+  ).run(maxAgeMinutes)
+  return result.changes
+}
+
+function mapSignalRow(r: Record<string, unknown>): SignalRow {
+  return {
+    id: r.id as string,
+    source: r.source as string,
+    conditionId: r.condition_id as string,
+    title: r.title as string,
+    domain: r.domain as string | null,
+    side: r.side as string,
+    entryPrice: r.entry_price as number,
+    signalScore: r.signal_score as number,
+    kellyFraction: r.kelly_fraction as number | null,
+    expertWallet: r.expert_wallet as string | null,
+    expertLabel: r.expert_label as string | null,
+    expertTrustLevel: r.expert_trust_level as number | null,
+    consensusCount: r.consensus_count as number | null,
+    positionSize: r.position_size as number | null,
+    sportKey: r.sport_key as string | null,
+    bookmakerProb: r.bookmaker_prob as number | null,
+    edge: r.edge as number | null,
+    yesTokenId: r.yes_token_id as string | null,
+    noTokenId: r.no_token_id as string | null,
+    negRisk: (r.neg_risk as number) === 1,
+    status: r.status as string,
+    rejectReason: r.reject_reason as string | null,
+    processedAt: r.processed_at as string | null,
+    reasons: JSON.parse((r.reasons_json as string | null) ?? '[]') as string[],
+    createdAt: r.created_at as string,
+  }
 }

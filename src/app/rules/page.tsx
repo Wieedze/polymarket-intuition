@@ -1,21 +1,10 @@
 'use client'
 
-import Link from 'next/link'
-
 const COLORS = {
   bg: '#171821', card: '#21222D', surface: '#2B2B36',
   teal: '#A9DFD8', amber: '#FCB859', pink: '#F2C8ED',
   red: '#EA1701', green: '#029F04', blue: '#28AEF3',
   textMuted: '#87888C', textLight: '#D2D2D2',
-}
-
-function SideLink({ href, children, active }: { href: string; children: React.ReactNode; active?: boolean }): React.ReactElement {
-  return (
-    <Link href={href} className="px-3 py-2 rounded-lg text-sm transition-colors"
-      style={{ background: active ? COLORS.surface : 'transparent', color: active ? 'white' : COLORS.textMuted }}>
-      {children}
-    </Link>
-  )
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }): React.ReactElement {
@@ -47,26 +36,7 @@ function Badge({ children, color }: { children: React.ReactNode; color: string }
 
 export default function RulesPage(): React.ReactElement {
   return (
-    <div className="min-h-screen" style={{ background: COLORS.bg, color: COLORS.textLight }}>
-      <div className="flex">
-        <aside className="hidden lg:flex flex-col w-56 min-h-screen p-5 border-r" style={{ background: COLORS.card, borderColor: COLORS.surface }}>
-          <div className="mb-10">
-            <h1 className="text-lg font-bold text-white">Copy Trader</h1>
-            <p className="text-xs mt-1" style={{ color: COLORS.textMuted }}>Paper simulation</p>
-          </div>
-          <nav className="flex flex-col gap-1">
-            <SideLink href="/">Dashboard</SideLink>
-            <SideLink href="/analytics">Analytics</SideLink>
-            <SideLink href="/paper-trading">Trades</SideLink>
-            <SideLink href="/live-trading">Live Trading</SideLink>
-            <SideLink href="/activity">Activity</SideLink>
-            <SideLink href="/leaderboard">Leaderboard</SideLink>
-            <SideLink href="/rules" active>Rules</SideLink>
-            <SideLink href="/settings">Settings</SideLink>
-          </nav>
-        </aside>
-
-        <main className="flex-1 p-6 lg:p-8 max-w-5xl">
+    <div className="p-6 lg:p-8 max-w-7xl" style={{ color: '#C9CDD8' }}>
           <div className="mb-6">
             <h1 className="text-2xl font-bold text-white">Trading Rules</h1>
             <p className="text-sm mt-1" style={{ color: COLORS.textMuted }}>All safety parameters, thresholds, and investment rules in one place</p>
@@ -207,8 +177,6 @@ export default function RulesPage(): React.ReactElement {
             <RuleRow label="Leaderboard cache TTL" value="30 min" />
           </Section>
 
-        </main>
-      </div>
     </div>
   )
 }

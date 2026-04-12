@@ -21,7 +21,7 @@ export async function GET(): Promise<NextResponse> {
     // Remaining cost basis — partial exits return capital so reduce proportionally
     const totalInvested = open.reduce((s, t) => {
       const fraction = t.sharesRemaining != null && t.shares > 0 ? t.sharesRemaining / t.shares : 1
-      return s + t.simulatedUsdc * fraction
+      return s + t.sizeUsdc * fraction
     }, 0)
 
     // True unrealized: proceeds if sold now (after 2% exit fee) minus remaining cost basis
@@ -29,7 +29,7 @@ export async function GET(): Promise<NextResponse> {
       if (t.curPrice == null) return s
       const sharesNow = t.sharesRemaining ?? t.shares
       const fraction = t.shares > 0 ? sharesNow / t.shares : 1
-      return s + sharesNow * t.curPrice * (1 - POLYMARKET_FEE_RATE) - t.simulatedUsdc * fraction
+      return s + sharesNow * t.curPrice * (1 - POLYMARKET_FEE_RATE) - t.sizeUsdc * fraction
     }, 0)
 
     // ── Chart data: daily metrics ────────────────────────────────

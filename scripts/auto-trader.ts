@@ -49,7 +49,7 @@ function getAvailableCash(): number {
   const equity = getCurrentEquity()
   const totalInvested = getAllPaperTrades()
     .filter((t) => t.status === 'open')
-    .reduce((s, t) => s + t.simulatedUsdc, 0)
+    .reduce((s, t) => s + t.sizeUsdc, 0)
   return equity - totalInvested
 }
 
@@ -167,7 +167,7 @@ function canCopy(alert: PositionAlert): boolean {
 
   // Capital guard
   const equity = getCurrentEquity()
-  const totalInvested = openTrades.reduce((s, t) => s + t.simulatedUsdc, 0)
+  const totalInvested = openTrades.reduce((s, t) => s + t.sizeUsdc, 0)
 
   const betSize = getDynamicBetSize()
   if (totalInvested + betSize > equity * getMaxCapitalPct()) return false
@@ -253,9 +253,9 @@ function tryCopyWithSignal(alert: PositionAlert): boolean {
     domain: domain?.domain ?? null,
     side,
     entryPrice,           // slippage-adjusted
-    simulatedUsdc: betAmount,
-    copiedFrom: alert.wallet,
-    copiedLabel: alert.walletLabel,
+    sizeUsdc: betAmount,
+    sourceRef: alert.wallet,
+    sourceLabel: alert.walletLabel,
   })
 
   const domainTag = domain ? `[${domain.domain.replace('pm-domain/', '')}]` : ''
@@ -284,7 +284,7 @@ async function resolveCompletedTrades(): Promise<number> {
   const openTrades = getOpenPaperTrades()
   if (openTrades.length === 0) return 0
 
-  const wallets = [...new Set(openTrades.map((t) => t.copiedFrom))]
+  const wallets = [...new Set(openTrades.map((t) => t.sourceRef))]
   let resolved = 0
 
   for (const wallet of wallets) {
@@ -325,7 +325,7 @@ async function refreshOpenPrices(): Promise<number> {
   const openTrades = getOpenPaperTrades()
   if (openTrades.length === 0) return 0
 
-  const wallets = [...new Set(openTrades.map((t) => t.copiedFrom))]
+  const wallets = [...new Set(openTrades.map((t) => t.sourceRef))]
   let updated = 0
 
   for (const wallet of wallets) {
@@ -359,7 +359,7 @@ function runExitStrategy(): Record<string, number> {
   // Check if experts still hold their positions
   const expertPositions = new Map<string, Set<string>>()
   if (EXIT_CONFIG.followExpertExit) {
-    const wallets = [...new Set(openTrades.map((t) => t.copiedFrom))]
+    const wallets = [...new Set(openTrades.map((t) => t.sourceRef))]
     for (const w of wallets) {
       const snapshot = getPositionSnapshot(w)
       expertPositions.set(w, new Set(snapshot.keys()))
@@ -370,7 +370,7 @@ function runExitStrategy(): Record<string, number> {
     // Check if expert still holds
     let expertStillHolding: boolean | null = null
     if (EXIT_CONFIG.followExpertExit) {
-      const expertKeys = expertPositions.get(trade.copiedFrom)
+      const expertKeys = expertPositions.get(trade.sourceRef)
       if (expertKeys) {
         // Check both outcomeIndex 0 and 1
         const key0 = `${trade.conditionId}-0`
@@ -421,7 +421,7 @@ function printStats(): void {
     if (t.curPrice == null) return s
     const sharesNow = t.sharesRemaining ?? t.shares
     const fraction = sharesNow / t.shares
-    return s + sharesNow * t.curPrice * (1 - 0.02) - t.simulatedUsdc * fraction
+    return s + sharesNow * t.curPrice * (1 - 0.02) - t.sizeUsdc * fraction
   }, 0)
   const startBal = parseFloat(getPortfolioSetting('starting_balance', '10000'))
   const balance = startBal + realizedPnl
@@ -429,7 +429,7 @@ function printStats(): void {
     ? won.length / (won.length + lost.length)
     : 0
 
-  const totalInvested = open.reduce((s, t) => s + t.simulatedUsdc, 0)
+  const totalInvested = open.reduce((s, t) => s + t.sizeUsdc, 0)
   const cash = startBal + realizedPnl - totalInvested
   const nextBet = getDynamicBetSize()
 

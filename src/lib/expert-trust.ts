@@ -1,4 +1,4 @@
-import { getSharedPaperTrades, getPortfolioSetting, type PaperTrade } from './db'
+import { getSharedPositions, getPortfolioSetting, type Position } from './db'
 
 // ── Types ─────────────────────────────────────────────────────────
 
@@ -48,7 +48,7 @@ type RiskMetrics = {
   compositeScore: number     // 0-100 final score
 }
 
-function computeRiskMetrics(resolved: PaperTrade[]): RiskMetrics {
+function computeRiskMetrics(resolved: Position[]): RiskMetrics {
   const wins = resolved.filter((t) => (t.pnl ?? 0) > 0)
   const losses = resolved.filter((t) => (t.pnl ?? 0) <= 0)
 
@@ -108,8 +108,8 @@ export function evaluateExpertTrust(
   wallet: string,
   label: string | null
 ): ExpertTrust {
-  const allTrades = getSharedPaperTrades()
-  const expertTrades = allTrades.filter((t) => t.copiedFrom === wallet)
+  const allTrades = getSharedPositions()
+  const expertTrades = allTrades.filter((t) => t.sourceRef === wallet)
   const resolved = expertTrades.filter((t) => t.status !== 'open')
   const wins = resolved.filter((t) => t.status === 'won')
   const losses = resolved.filter((t) => t.status === 'lost')
@@ -250,18 +250,18 @@ export function evaluateExpertTrust(
  * Sorted by trustLevel descending.
  */
 export function getAllExpertTrust(): ExpertTrust[] {
-  return getAllExpertTrustFromTrades(getSharedPaperTrades())
+  return getAllExpertTrustFromTrades(getSharedPositions())
 }
 
 /**
  * Same as getAllExpertTrust but accepts pre-fetched trades to avoid N+1 DB calls.
  * Used by the unified /api/snapshot endpoint.
  */
-export function getAllExpertTrustFromTrades(allTrades: PaperTrade[]): ExpertTrust[] {
+export function getAllExpertTrustFromTrades(allTrades: Position[]): ExpertTrust[] {
   const expertWallets = new Map<string, string | null>()
   for (const t of allTrades) {
-    if (!expertWallets.has(t.copiedFrom)) {
-      expertWallets.set(t.copiedFrom, t.copiedLabel)
+    if (!expertWallets.has(t.sourceRef)) {
+      expertWallets.set(t.sourceRef, t.sourceLabel)
     }
   }
 
@@ -279,9 +279,9 @@ export function getAllExpertTrustFromTrades(allTrades: PaperTrade[]): ExpertTrus
 export function evaluateExpertTrustFromTrades(
   wallet: string,
   label: string | null,
-  allTrades: PaperTrade[]
+  allTrades: Position[]
 ): ExpertTrust {
-  const expertTrades = allTrades.filter((t) => t.copiedFrom === wallet)
+  const expertTrades = allTrades.filter((t) => t.sourceRef === wallet)
   const resolved = expertTrades.filter((t) => t.status !== 'open')
   const wins = resolved.filter((t) => t.status === 'won')
   const losses = resolved.filter((t) => t.status === 'lost')
