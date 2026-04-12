@@ -970,24 +970,51 @@ async function pollOnce(): Promise<void> {
 
   const resolved = await resolveCompletedTrades(redeemedConditionIds)
 
-  // ── Phase 5: Reconcile DB with on-chain state ──
-  // Clean up phantom trades: if DB says "open" but on-chain says no position → remove
+  // ── Phase 5: Reconcile DB with on-chain (bidirectional) ──
+  // Source of truth = Polymarket on-chain. DB must match.
   if (!DRY_RUN) {
     const dbOpenTrades = getOpenLiveTrades()
+    const dbConditionIds = new Set(dbOpenTrades.map(t => t.conditionId))
     const onChainConditionIds = new Set(_cachedPositions.map(p => p.conditionId))
     const pendingConditionIds = new Set(getPendingOrders().map(po => po.conditionId))
+
+    // 1. Remove phantoms: DB says open but not on-chain
     let phantomsRemoved = 0
     for (const trade of dbOpenTrades) {
-      // Skip if position exists on-chain OR has a pending order
       if (onChainConditionIds.has(trade.conditionId)) continue
       if (pendingConditionIds.has(trade.conditionId)) continue
-      // Position not on-chain and no pending order → phantom trade
       resolvePaperTrade(trade.conditionId, trade.curPrice ?? trade.entryPrice)
       console.log(`  🧹 PHANTOM REMOVED | not on-chain | ${trade.title.slice(0, 50)}`)
-      logBotEvent('reconcile', `Phantom removed: ${trade.title}`, 'DB trade not found on-chain')
+      logBotEvent('reconcile', `Phantom removed: ${trade.title}`, 'Not on-chain')
       phantomsRemoved++
     }
-    if (phantomsRemoved > 0) console.log(`  🧹 Reconciled: removed ${phantomsRemoved} phantom trades`)
+
+    // 2. Add missing: on-chain exists but not in DB → import from Polymarket
+    let positionsAdded = 0
+    for (const pos of _cachedPositions) {
+      if (dbConditionIds.has(pos.conditionId)) continue
+      if (pendingConditionIds.has(pos.conditionId)) continue
+      // Real on-chain position not tracked in DB → add it
+      const side = pos.side
+      cacheTokenId(pos.conditionId, side, pos.tokenId, false)
+      openPaperTrade({
+        conditionId: pos.conditionId,
+        title: pos.title,
+        domain: keywordClassify(pos.title)?.domain ?? null,
+        side,
+        entryPrice: pos.avgPrice,
+        simulatedUsdc: pos.size * pos.avgPrice,
+        copiedFrom: 'on-chain-sync',
+        copiedLabel: '[LIVE] synced from on-chain',
+      })
+      updatePaperTradePrice(pos.conditionId, pos.curPrice)
+      console.log(`  📥 SYNCED FROM CHAIN | ${side} ${pos.size.toFixed(1)} shares @ ${(pos.avgPrice * 100).toFixed(0)}¢ → ${(pos.curPrice * 100).toFixed(0)}¢ | ${pos.title.slice(0, 50)}`)
+      positionsAdded++
+    }
+
+    if (phantomsRemoved > 0 || positionsAdded > 0) {
+      console.log(`  🔄 Reconciled: -${phantomsRemoved} phantoms, +${positionsAdded} from chain`)
+    }
   }
 
   // ── Summary ──
