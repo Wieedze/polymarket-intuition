@@ -100,7 +100,7 @@ export default function Dashboard(): React.ReactElement {
   useEffect(() => {
     function loadData(): void {
       Promise.all([
-        fetch('/api/snapshot').then(async (res) => {
+        fetch('/api/snapshot?mode=live').then(async (res) => {
           if (!res.ok) return null
           const snap = await res.json()
           const p = snap.portfolio
