@@ -77,23 +77,27 @@ const DRY_RUN = process.env.DRY_RUN === 'true'
 const DAILY_LOSS_LIMIT_PCT = 0.50  // 50% of bankroll — catastrophe safety net
 const DRAWDOWN_LIMIT_PCT = parseFloat(process.env.DRAWDOWN_LIMIT ?? '0.20')  // 20% from peak — close all, protect gains
 
-// ── Scaling (mirrors auto-trader with BANKROLL_SCALE) ────────────
+// ── On-chain equity (single source of truth) ────────────────────
+// The wallet balance is the ONLY source of truth for equity.
+// No more calculated equity from DB — what's on-chain is real.
+
+let _cachedOnChainBalance = 0  // updated every poll via getRealBalance()
+
+function setOnChainBalance(balance: number): void {
+  _cachedOnChainBalance = balance
+}
 
 function getCurrentEquity(): number {
-  const startBal = parseFloat(getPortfolioSetting('starting_balance', '9'))
-  const allTrades = getLivePaperTrades()
-  const realizedPnl = allTrades
-    .filter((t) => t.status !== 'open')
-    .reduce((s, t) => s + (t.pnl ?? 0), 0)
-  return startBal + realizedPnl
+  // On-chain USDC + value of open positions (from DB curPrice)
+  const openValue = getOpenLiveTrades().reduce((s, t) => {
+    const shares = t.sharesRemaining ?? t.shares
+    return s + shares * (t.curPrice ?? t.entryPrice)
+  }, 0)
+  return _cachedOnChainBalance + openValue
 }
 
 function getAvailableCash(): number {
-  const equity = getCurrentEquity()
-  const totalInvested = getLivePaperTrades()
-    .filter((t) => t.status === 'open')
-    .reduce((s, t) => s + t.simulatedUsdc, 0)
-  return equity - totalInvested
+  return _cachedOnChainBalance  // what's actually available to spend
 }
 
 function getMaxOpen(): number {
@@ -196,52 +200,40 @@ let dailyPnlDate = ''
 
 function checkDailyLossLimit(): boolean {
   const today = new Date().toISOString().slice(0, 10)
-  const startBal = parseFloat(getPortfolioSetting('starting_balance', '9'))
+  const currentEquity = getCurrentEquity()
 
   if (dailyPnlDate !== today) {
-    // New day — reset baseline
     dailyPnlDate = today
-    dailyPnlStart = getCurrentEquity()
+    dailyPnlStart = currentEquity  // snapshot at start of day
   }
 
-  const currentEquity = getCurrentEquity()
   const dailyLoss = dailyPnlStart - currentEquity
-  const limitAmount = startBal * DAILY_LOSS_LIMIT_PCT
+  const limitAmount = currentEquity * DAILY_LOSS_LIMIT_PCT
 
   if (dailyLoss >= limitAmount) {
     console.log(`  🚨 DAILY LOSS LIMIT HIT | -$${dailyLoss.toFixed(2)} today (limit: -$${limitAmount.toFixed(2)}) | Bot paused until tomorrow`)
     logBotEvent('safety', `DAILY LOSS LIMIT -$${dailyLoss.toFixed(2)}`, `Limit: -$${limitAmount.toFixed(2)}`)
-    return true  // limit hit
+    return true
   }
   return false
 }
 
 // ── Drawdown circuit breaker ─────────────────────────────────────
-// Track High Water Mark (peak equity). If equity drops 20% from peak,
-// close all positions and stop trading. Protects gains on small accounts.
-// Institutional standard: Bridgewater 15-20%, prop desks 10-20%.
+// Uses on-chain equity (USDC + positions) as single source of truth.
+// If equity drops 20% from peak → stop trading.
 
 let highWaterMark = 0
 
 function checkDrawdownBreaker(): boolean {
-  const equity = getCurrentEquity()
-  const openTrades = getOpenLiveTrades()
-  const unrealized = openTrades.reduce((s, t) => {
-    const cur = t.curPrice ?? t.entryPrice
-    const pnl = (t.sharesRemaining ?? t.shares) * (t.side === 'YES' ? cur - t.entryPrice : t.entryPrice - cur)
-    return s + pnl
-  }, 0)
-  const totalEquity = equity + unrealized
+  const totalEquity = getCurrentEquity()  // on-chain USDC + position value
 
   // Update HWM
   if (totalEquity > highWaterMark) {
     highWaterMark = totalEquity
-    setPortfolioSetting('live_hwm', highWaterMark.toFixed(2))
   }
 
-  // Only check if we've had meaningful gains (at least +10% from start)
-  const startBal = parseFloat(getPortfolioSetting('starting_balance', '9'))
-  if (highWaterMark < startBal * 1.10) return false
+  // Only check if we've had meaningful gains (at least +10% from on-chain start)
+  if (highWaterMark < _cachedOnChainBalance * 1.10) return false
 
   const drawdown = (highWaterMark - totalEquity) / highWaterMark
   if (drawdown >= DRAWDOWN_LIMIT_PCT) {
@@ -885,6 +877,7 @@ async function pollOnce(): Promise<void> {
 
   if (!DRY_RUN) {
     const realBalance = await getRealBalance()
+    setOnChainBalance(realBalance)
     console.log(`[${time}] 🔴 LIVE | On-chain: $${realBalance.toFixed(2)} | Polling ${wallets.length} wallets...`)
   } else {
     console.log(`[${time}] 🏜️ DRY-RUN | Polling ${wallets.length} wallets...`)
@@ -1055,20 +1048,16 @@ async function main(): Promise<void> {
   // Startup balance check
   if (!DRY_RUN) {
     const realBalance = await getRealBalance()
+    setOnChainBalance(realBalance)
     if (realBalance < 0.10) {
       console.error(`❌ Balance too low ($${realBalance.toFixed(2)}) — need USDC.e on Polygon`)
       process.exit(1)
     }
-    if (realBalance < startBal * 0.5) {
-      console.warn(`⚠️  WARNING: On-chain balance ($${realBalance.toFixed(2)}) is much lower than starting_balance ($${startBal})`)
-      console.warn(`   Some capital may already be deployed in open positions.`)
-    }
   }
 
-  // Load saved HWM or initialize from current equity
-  const savedHwm = parseFloat(getPortfolioSetting('live_hwm', '0'))
+  // HWM = current on-chain equity at startup (no DB memory of phantom peaks)
   const eq = getCurrentEquity()
-  highWaterMark = Math.max(savedHwm, eq)
+  highWaterMark = eq
 
   console.log('═══════════════════════════════════════════════')
   console.log(`  ${mode} LIVE TRADER`)
