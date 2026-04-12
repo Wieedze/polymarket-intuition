@@ -2,7 +2,6 @@
 
 import { useState, useEffect } from 'react'
 import { useRefresh } from '../providers'
-import Link from 'next/link'
 
 // Design system — same as dashboard
 const COLORS = {
@@ -171,46 +170,7 @@ export default function AnalyticsPage(): React.ReactElement {
   const p = data.portfolio
 
   return (
-    <div className="min-h-screen" style={{ background: COLORS.bg, color: COLORS.textLight }}>
-      <div className="flex">
-        {/* Sidebar */}
-        <aside className="hidden lg:flex flex-col w-56 min-h-screen p-5 border-r" style={{ background: COLORS.card, borderColor: COLORS.surface }}>
-          <div className="mb-10">
-            <h1 className="text-lg font-bold text-white">Copy Trader</h1>
-            <p className="text-xs mt-1" style={{ color: COLORS.textMuted }}>Paper simulation</p>
-          </div>
-          <nav className="flex flex-col gap-1">
-            <SideLink href="/">Dashboard</SideLink>
-            <SideLink href="/analytics" active>Analytics</SideLink>
-            <SideLink href="/paper-trading">Trades</SideLink>
-            <SideLink href="/live-trading">Live Trading</SideLink>
-            <SideLink href="/activity">Activity</SideLink>
-            <SideLink href="/leaderboard">Leaderboard</SideLink>
-            <SideLink href="/rules">Rules</SideLink>
-            <SideLink href="/settings">Settings</SideLink>
-          </nav>
-          <div className="mt-auto pt-8">
-            <div className="p-3 rounded-lg" style={{ background: COLORS.surface }}>
-              <div className="text-xs" style={{ color: COLORS.textMuted }}>Bot Status</div>
-              <div className="flex items-center gap-2 mt-1">
-                <span className="w-2 h-2 rounded-full animate-pulse" style={{ background: COLORS.green }} />
-                <span className="text-xs text-white">Running</span>
-              </div>
-            </div>
-          </div>
-        </aside>
-
-        {/* Main content */}
-        <main className="flex-1 p-6 lg:p-8">
-          {/* Mobile nav */}
-          <div className="lg:hidden flex items-center justify-between mb-6">
-            <h1 className="text-lg font-bold text-white">Copy Trader</h1>
-            <div className="flex gap-2">
-              <Link href="/" className="text-xs px-3 py-1 rounded-lg" style={{ background: COLORS.surface, color: COLORS.textMuted }}>Dashboard</Link>
-              <Link href="/leaderboard" className="text-xs px-3 py-1 rounded-lg" style={{ background: COLORS.surface, color: COLORS.textMuted }}>Leaderboard</Link>
-            </div>
-          </div>
-
+    <div className="p-6 lg:p-8 max-w-7xl" style={{ color: '#C9CDD8' }}>
           {/* Header */}
           <div className="flex items-center justify-between mb-8">
             <div>
@@ -737,8 +697,6 @@ export default function AnalyticsPage(): React.ReactElement {
               <p className="mt-2 text-sm" style={{ color: COLORS.surface }}>Analytics will populate as markets resolve. Check back in 24-48h.</p>
             </div>
           )}
-        </main>
-      </div>
     </div>
   )
 }
@@ -787,17 +745,3 @@ function TradeRow({ trade }: { trade: { title: string; side: string; entryPrice:
   )
 }
 
-function SideLink({ href, children, active }: { href: string; children: React.ReactNode; active?: boolean }): React.ReactElement {
-  return (
-    <Link
-      href={href}
-      className="px-3 py-2 rounded-lg text-sm transition-colors"
-      style={{
-        background: active ? COLORS.surface : 'transparent',
-        color: active ? COLORS.teal : COLORS.textMuted,
-      }}
-    >
-      {children}
-    </Link>
-  )
-}

@@ -2,7 +2,6 @@
 
 import { useState, useEffect } from 'react'
 import { useRefresh } from './providers'
-import Link from 'next/link'
 import {
   BarChart, Bar, LineChart, Line,
   XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
@@ -158,35 +157,7 @@ export default function LiveTrading(): React.ReactElement {
   const donutData = data.domains.filter((d) => d.trades > 0).map((d) => ({ name: d.domain, value: d.trades }))
 
   return (
-    <div className="min-h-screen" style={{ background: C.bg, color: C.text }}>
-      <div className="flex">
-        {/* Sidebar */}
-        <aside className="hidden lg:flex flex-col w-52 min-h-screen p-5 border-r" style={{ background: C.card, borderColor: C.border }}>
-          <div className="mb-8">
-            <h1 className="text-base font-semibold" style={{ color: C.bright }}>Copy Trader</h1>
-            <div className="flex items-center gap-1.5 mt-1">
-              <span className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ background: C.accent }} />
-              <span className="text-[11px]" style={{ color: C.accent }}>Live</span>
-            </div>
-          </div>
-          <nav className="flex flex-col gap-0.5">
-            {([
-              ['/', 'Dashboard'], ['/analytics', 'Analytics'], ['/paper-trading', 'Paper Trades'],
-              ['/live-trading', 'Live Trading'], ['/activity', 'Activity'],
-              ['/leaderboard', 'Leaderboard'], ['/settings', 'Settings'],
-            ] as const).map(([href, label]) => (
-              <Link key={href} href={href as string} className="px-3 py-1.5 rounded-md text-[13px]"
-                style={{
-                  background: href === '/live-trading' ? C.surface : 'transparent',
-                  color: href === '/live-trading' ? C.bright : C.dim,
-                }}>
-                {label}
-              </Link>
-            ))}
-          </nav>
-        </aside>
-
-        <main className="flex-1 p-5 lg:p-6">
+    <div className="p-6 lg:p-8 max-w-7xl" style={{ color: C.text }}>
 
           {/* ═══ 1. HEADER BAR ═══ */}
           <div className="flex flex-wrap items-end justify-between gap-4 mb-6 pb-4" style={{ borderBottom: `1px solid ${C.border}` }}>
@@ -581,8 +552,6 @@ export default function LiveTrading(): React.ReactElement {
             </div>
           </div>
 
-        </main>
-      </div>
     </div>
   )
 }
