@@ -385,3 +385,107 @@ export async function closePosition(
     }
   }
 }
+
+/**
+ * Redeem resolved positions — claim winning conditional tokens for USDC.
+ *
+ * When a market resolves, the CLOB orderbook closes. You can't sell anymore.
+ * Instead, call redeemPositions() on the CTF contract to get $1 per winning share.
+ *
+ * Returns list of redeemed conditionIds.
+ */
+export async function redeemAllResolved(): Promise<string[]> {
+  if (!_walletAddress) await getClient()
+  if (!_walletAddress) return []
+
+  try {
+    const address = _walletAddress.toLowerCase()
+
+    const res = await fetch(
+      `https://data-api.polymarket.com/positions?user=${address}&sizeThreshold=0`
+    )
+    if (!res.ok) return []
+
+    const positions = await res.json() as Array<{
+      conditionId: string
+      asset: string
+      outcomeIndex: number
+      title: string
+      size: number
+      curPrice: number
+      negativeRisk: boolean
+    }>
+
+    // Resolved = price > 95¢ (winner) or < 5¢ (loser)
+    const resolved = positions.filter(p => p.size > 0 && (p.curPrice > 0.95 || p.curPrice < 0.05))
+    if (resolved.length === 0) return []
+
+    const { createPublicClient, createWalletClient, http, parseAbi } = await import('viem')
+    const { privateKeyToAccount } = await import('viem/accounts')
+    const { polygon } = await import('viem/chains')
+
+    const privateKey = process.env.POLYMARKET_PRIVATE_KEY
+    if (!privateKey) return []
+
+    const account = privateKeyToAccount(privateKey as `0x${string}`)
+    const walletClient = createWalletClient({
+      account,
+      chain: polygon,
+      transport: http(POLYGON_RPC),
+    })
+    const publicClient = createPublicClient({
+      chain: polygon,
+      transport: http(POLYGON_RPC),
+    })
+
+    const CTF_ADDRESS = '0x4D97DCd97eC945f40cF65F87097ACe5EA0476045' as `0x${string}`
+    const NEG_RISK_ADAPTER = '0xC5d563A36AE78145C45a50134d48A1215220f80a' as `0x${string}`
+    const USDC_E = '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174' as `0x${string}`
+
+    const ctfAbi = parseAbi([
+      'function redeemPositions(address collateralToken, bytes32 parentCollectionId, bytes32 conditionId, uint256[] indexSets) external',
+    ])
+    const negRiskAbi = parseAbi([
+      'function redeemPositions(bytes32 conditionId, uint256[] indexSets) external',
+    ])
+
+    const redeemed: string[] = []
+
+    for (const pos of resolved) {
+      try {
+        const indexSets = [1n, 2n]
+        const conditionIdBytes = pos.conditionId as `0x${string}`
+
+        if (pos.negativeRisk) {
+          const hash = await walletClient.writeContract({
+            address: NEG_RISK_ADAPTER,
+            abi: negRiskAbi,
+            functionName: 'redeemPositions',
+            args: [conditionIdBytes, indexSets],
+          })
+          await publicClient.waitForTransactionReceipt({ hash })
+        } else {
+          const parentCollectionId = '0x0000000000000000000000000000000000000000000000000000000000000000' as `0x${string}`
+          const hash = await walletClient.writeContract({
+            address: CTF_ADDRESS,
+            abi: ctfAbi,
+            functionName: 'redeemPositions',
+            args: [USDC_E, parentCollectionId, conditionIdBytes, indexSets],
+          })
+          await publicClient.waitForTransactionReceipt({ hash })
+        }
+
+        const status = pos.curPrice > 0.95 ? 'WON' : 'LOST'
+        const value = pos.curPrice > 0.95 ? (pos.size * 1).toFixed(2) : '0.00'
+        console.log(`  💰 REDEEMED | ${status} | ${pos.size.toFixed(1)} shares → $${value} | ${pos.title.slice(0, 50)}`)
+        redeemed.push(pos.conditionId)
+      } catch (err) {
+        console.log(`  ⚠️  REDEEM FAILED | ${pos.title.slice(0, 40)} | ${err instanceof Error ? err.message : String(err)}`)
+      }
+    }
+
+    return redeemed
+  } catch {
+    return []
+  }
+}

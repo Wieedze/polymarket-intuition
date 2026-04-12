@@ -52,7 +52,7 @@ import { fetchAllPages, fetchMarketMetadata } from '../src/lib/polymarket'
 import { evaluateExit, exitEmoji, type ExitConfig } from '../src/lib/exit-strategy'
 import { scoreSignal, signalBetMultiplier, isContradictory, kellyBetFraction } from '../src/lib/signal-scorer'
 import { evaluateExpertTrust, getAllExpertTrust, getBankrollScale } from '../src/lib/expert-trust'
-import { placeOrder, getRealBalance, closePosition, checkOrderStatus, cancelOrder, type RealOrder } from '../src/lib/real-trader'
+import { placeOrder, getRealBalance, closePosition, checkOrderStatus, cancelOrder, redeemAllResolved, type RealOrder } from '../src/lib/real-trader'
 import { connectOrderbookWS, subscribeToken, unsubscribeToken, getWsBestBid, isWsConnected, getSubscribedCount, connectUserWS, subscribeUserMarket, isUserWsConnected } from '../src/lib/orderbook-ws'
 import { getNoVigConsensus } from '../src/lib/odds-api'
 import { detectSportKey, parseMarketTitle } from '../src/lib/sports-scanner'
@@ -966,6 +966,17 @@ async function pollOnce(): Promise<void> {
   const totalExits = Object.values(exits).reduce((s, n) => s + n, 0)
   const exitSummary = Object.entries(exits).map(([k, v]) => `${v} ${k}`).join(', ')
   const resolved = await resolveCompletedTrades()
+
+  // ── Phase 4: Redeem resolved positions on-chain ──
+  if (!DRY_RUN) {
+    const redeemed = await redeemAllResolved()
+    if (redeemed.length > 0) {
+      // Also resolve in DB if not already
+      for (const conditionId of redeemed) {
+        resolvePaperTrade(conditionId, 1.0)  // winning = $1 per share
+      }
+    }
+  }
 
   // ── Summary ──
   const parts = [`${allNewAlerts.length} new`, `${copied} copied`]
