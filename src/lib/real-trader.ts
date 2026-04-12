@@ -453,7 +453,8 @@ export async function redeemAllResolved(): Promise<Array<{ conditionId: string; 
 
     for (const pos of resolved) {
       try {
-        const indexSets = [1n, 2n]
+        // Correct bitmask: YES (index 0) = 1n, NO (index 1) = 2n
+        const indexSets = [1n << BigInt(pos.outcomeIndex)]
         const conditionIdBytes = pos.conditionId as `0x${string}`
 
         // On-chain redemption FIRST — only update DB after tx confirmed

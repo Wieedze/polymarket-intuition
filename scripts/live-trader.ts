@@ -52,7 +52,7 @@ import { fetchAllPages, fetchMarketMetadata } from '../src/lib/polymarket'
 import { evaluateExit, exitEmoji, type ExitConfig } from '../src/lib/exit-strategy'
 import { scoreSignal, signalBetMultiplier, isContradictory, kellyBetFraction } from '../src/lib/signal-scorer'
 import { evaluateExpertTrust, getAllExpertTrust, getBankrollScale } from '../src/lib/expert-trust'
-import { placeOrder, getRealBalance, closePosition, checkOrderStatus, cancelOrder, redeemAllResolved, type RealOrder } from '../src/lib/real-trader'
+import { placeOrder, getRealBalance, getRealPositions, closePosition, checkOrderStatus, cancelOrder, redeemAllResolved, type RealOrder, type RealPosition } from '../src/lib/real-trader'
 import { connectOrderbookWS, subscribeToken, unsubscribeToken, getWsBestBid, isWsConnected, getSubscribedCount, connectUserWS, subscribeUserMarket, isUserWsConnected } from '../src/lib/orderbook-ws'
 import { getNoVigConsensus } from '../src/lib/odds-api'
 import { detectSportKey, parseMarketTitle } from '../src/lib/sports-scanner'
@@ -81,19 +81,18 @@ const DRAWDOWN_LIMIT_PCT = parseFloat(process.env.DRAWDOWN_LIMIT ?? '0.20')  // 
 // The wallet balance is the ONLY source of truth for equity.
 // No more calculated equity from DB — what's on-chain is real.
 
-let _cachedOnChainBalance = 0  // updated every poll via getRealBalance()
+let _cachedOnChainBalance = 0    // USDC.e balance, updated every poll
+let _cachedPositions: RealPosition[] = []  // on-chain positions, updated every poll
 
-function setOnChainBalance(balance: number): void {
+function setOnChainState(balance: number, positions: RealPosition[]): void {
   _cachedOnChainBalance = balance
+  _cachedPositions = positions
 }
 
 function getCurrentEquity(): number {
-  // On-chain USDC + value of open positions (from DB curPrice)
-  const openValue = getOpenLiveTrades().reduce((s, t) => {
-    const shares = t.sharesRemaining ?? t.shares
-    return s + shares * (t.curPrice ?? t.entryPrice)
-  }, 0)
-  return _cachedOnChainBalance + openValue
+  // On-chain USDC + on-chain position values (NOT from DB)
+  const posValue = _cachedPositions.reduce((s, p) => s + p.size * p.curPrice, 0)
+  return _cachedOnChainBalance + posValue
 }
 
 function getAvailableCash(): number {
@@ -876,9 +875,9 @@ async function pollOnce(): Promise<void> {
   if (!DRY_RUN) await checkPendingOrders()
 
   if (!DRY_RUN) {
-    const realBalance = await getRealBalance()
-    setOnChainBalance(realBalance)
-    console.log(`[${time}] 🔴 LIVE | On-chain: $${realBalance.toFixed(2)} | Polling ${wallets.length} wallets...`)
+    const [realBalance, realPositions] = await Promise.all([getRealBalance(), getRealPositions()])
+    setOnChainState(realBalance, realPositions)
+    console.log(`[${time}] 🔴 LIVE | On-chain: $${realBalance.toFixed(2)} | ${realPositions.length} positions | Polling ${wallets.length} wallets...`)
   } else {
     console.log(`[${time}] 🏜️ DRY-RUN | Polling ${wallets.length} wallets...`)
   }
@@ -1048,8 +1047,8 @@ async function main(): Promise<void> {
 
   // Startup balance check
   if (!DRY_RUN) {
-    const realBalance = await getRealBalance()
-    setOnChainBalance(realBalance)
+    const [realBalance, realPositions] = await Promise.all([getRealBalance(), getRealPositions()])
+    setOnChainState(realBalance, realPositions)
     if (realBalance < 0.10) {
       console.error(`❌ Balance too low ($${realBalance.toFixed(2)}) — need USDC.e on Polygon`)
       process.exit(1)
