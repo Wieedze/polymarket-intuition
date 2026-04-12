@@ -4,405 +4,606 @@ import { useState, useEffect } from 'react'
 import { useRefresh } from './providers'
 import Link from 'next/link'
 import {
-  AreaChart, Area, BarChart, Bar, LineChart, Line,
+  BarChart, Bar, LineChart, Line,
   XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
-  PieChart, Pie, Cell, ReferenceLine,
+  PieChart, Pie, Cell, ReferenceLine, ComposedChart, Area,
 } from 'recharts'
 
-type ChartPoint = {
-  date: string
-  equity: number
-  dailyPnl: number
-  cumPnl: number
-  trades: number
-  winRate: number
-}
+// ── Types ────────────────────────────────────────────────────────
+
+type ChartPoint = { date: string; equity: number; dailyPnl: number; cumPnl: number; trades: number; winRate: number }
+type EquityDay = { day: string; balance: number; dailyPnl: number; trades: number }
 type BotEvent = { id: number; type: string; message: string; detail: string | null; createdAt: string }
-type DomainInfo = { domain: string; pnl: number; trades: number; won: number; winRate: number }
+type DomainInfo = { domain: string; pnl: number; trades: number; won: number; winRate: number; avgPnl: number }
+type ExpertInfo = { expert: string; trades: number; won: number; winRate: number; pnl: number; avgPnl: number }
+type TradeInfo = { title: string; side: string; entryPrice: number; curPrice: number; unrealized: number; expert: string; domain: string }
+type SideInfo = { trades: number; won: number; winRate: number; pnl: number }
+type EntryInfo = { label: string; trades: number; won: number; winRate: number; expectedWinRate: number; implicitEdge: number; pnl: number }
+type ExpertTrustInfo = { expert: string; phase: string; status: string; trustLevel: number; resolvedTrades: number; winRate: number; pnl: number; reason: string }
+type GateInfo = { value: number; threshold: number; ok: boolean }
+type ClosedTrade = { title: string; side: string; entryPrice: number; pnl: number; expert: string; domain: string }
 
-type WalletPosition = {
-  title: string
-  side: string
-  size: number
-  curPrice: number
-  value: number
-  pnl: number
+type LiveData = {
+  balance: number; startingBalance: number; realizedPnl: number; partialExitsPnl: number
+  unrealizedPnl: number; tradingDays: number; avgHoldDays: number; totalInvested: number
+  totalEquity: number; winRate: number; wins: number; losses: number; openTrades: number
+  totalTrades: number; closedTrades: number; roi: number; availableCash: number
+  chartData: ChartPoint[]; equityCurve: EquityDay[]; events: BotEvent[]
+  domains: DomainInfo[]; experts: ExpertInfo[]; topOpen: TradeInfo[]
+  bestTrades: ClosedTrade[]; worstTrades: ClosedTrade[]
+  bySide: { yes: SideInfo; no: SideInfo }; byEntry: EntryInfo[]
+  costs: { preCostPnl: number; totalFees: number; totalSlippage: number; feePct: number; slippagePct: number; totalDeployed: number }
+  gates: { profitFactor: GateInfo; maxConsecutiveLosses: GateInfo; avgPnlPerTrade: GateInfo; minResolvedTrades: GateInfo; allOk: boolean }
+  stats: { profitFactor: number; maxConsecutiveLosses: number; avgPnlPerTrade: number; maxDrawdown: number; significance: string; winRateCI: { lower: number; upper: number }; grossWins: number; grossLosses: number }
+  expertTrust: ExpertTrustInfo[]
+  risk: { maxDrawdown: number; currentDrawdown: number; peakEquity: number; topConcentration: number; top3Concentration: number; openCount: number; cashPct: number }
 }
 
-type WalletEquity = {
-  usdc: number
-  positionsValue: number
-  totalEquity: number
-  positions: WalletPosition[]
+// ── Palette — dark, minimal, no garish colors ────────────────────
+
+const C = {
+  bg: '#0F1117',       // deep dark
+  card: '#181A20',     // card surface
+  surface: '#1E2028',  // elevated surface
+  up: '#10B981',       // emerald positive
+  down: '#EF4444',     // soft red negative
+  accent: '#6366F1',   // indigo identity
+  dim: '#6B7084',      // muted labels
+  text: '#C9CDD8',     // body
+  bright: '#EAECF0',   // headings / numbers
+  border: '#262835',   // subtle lines
+  warn: '#F59E0B',     // warnings only
 }
 
-type DashboardData = {
-  balance: number
-  startingBalance: number
-  realizedPnl: number
-  partialExitsPnl: number
-  unrealizedPnl: number
-  tradingDays: number
-  avgHoldDays: number
-  totalInvested: number
-  totalEquity: number
-  winRate: number
-  wins: number
-  losses: number
-  openTrades: number
-  totalTrades: number
-  roi: number
-  chartData: ChartPoint[]
-  events: BotEvent[]
-  domains: DomainInfo[]
-}
-
-// Design system colors from Figma mockup
-const COLORS = {
-  bg: '#171821',
-  card: '#21222D',
-  surface: '#2B2B36',
-  teal: '#A9DFD8',
-  amber: '#FCB859',
-  pink: '#F2C8ED',
-  red: '#EA1701',
-  green: '#029F04',
-  blue: '#28AEF3',
-  textMuted: '#87888C',
-  textLight: '#D2D2D2',
-}
-
-const DOMAIN_PIE_COLORS: Record<string, string> = {
-  sports: COLORS.teal,
-  weather: COLORS.blue,
-  politics: '#6366f1',
-  crypto: COLORS.amber,
-  economics: '#eab308',
-  science: '#06b6d4',
-  culture: COLORS.pink,
-  'ai-tech': '#8b5cf6',
-  geopolitics: COLORS.red,
+const DOMAIN_COLORS: Record<string, string> = {
+  sports: '#10B981', weather: '#38BDF8', politics: '#818CF8',
+  crypto: '#FBBF24', economics: '#A78BFA', science: '#22D3EE',
+  culture: '#F9A8D4', 'ai-tech': '#C084FC', geopolitics: '#FB7185',
   unknown: '#52525b',
 }
 
-const EVENT_ICONS: Record<string, string> = {
-  copy: '📋', exit: '🚪', resolve: '✅',
+function $(n: number): string { return `${n >= 0 ? '+' : '-'}$${Math.abs(n).toFixed(2)}` }
+function pct(n: number): string { return `${(n * 100).toFixed(1)}%` }
+
+// ── Page ─────────────────────────────────────────────────────────
+
+type WalletData = {
+  pendingRedeem: Array<{ title: string; side: string; size: number; curPrice: number; value: number; pnl: number }>
+  closedTrades: Array<{ title: string; side: string; result: string; pnl: number; totalTraded: number }>
+  openPositions: Array<{ title: string; side: string; size: number; curPrice: number; value: number; pnl: number }>
 }
 
-function pnlStr(n: number): string { return `${n >= 0 ? '+' : '-'}$${Math.abs(n).toFixed(0)}` }
-
-export default function Dashboard(): React.ReactElement {
-  const [data, setData] = useState<DashboardData | null>(null)
-  const [wallet, setWallet] = useState<WalletEquity | null>(null)
+export default function LiveTrading(): React.ReactElement {
+  const [data, setData] = useState<LiveData | null>(null)
+  const [walletData, setWalletData] = useState<WalletData | null>(null)
   const [loading, setLoading] = useState(true)
   const { tick } = useRefresh()
 
   useEffect(() => {
-    function loadData(): void {
-      Promise.all([
-        fetch('/api/snapshot?mode=live').then(async (res) => {
-          if (!res.ok) return null
-          const snap = await res.json()
-          const p = snap.portfolio
-          return {
-            balance: p.currentBalance,
-            startingBalance: p.startingBalance,
-            realizedPnl: p.realizedPnl,
-            partialExitsPnl: p.partialExitsPnl,
-            unrealizedPnl: p.unrealizedPnl,
-            tradingDays: p.tradingDays,
-            avgHoldDays: p.avgHoldDays,
-            totalInvested: p.totalInvested,
-            totalEquity: p.totalEquity,
-            winRate: p.winRate,
-            wins: p.wins,
-            losses: p.losses,
-            openTrades: p.openTrades,
-            totalTrades: p.totalTrades,
-            roi: p.roi,
-            chartData: snap.chartData,
-            events: snap.events,
-            domains: snap.byDomain,
-          } as DashboardData
-        }),
-        fetch('/api/wallet-equity').then(async (res) => {
-          if (!res.ok) return null
-          return await res.json() as WalletEquity
-        }).catch(() => null),
-      ]).then(([d, w]) => {
-        if (d) setData(d)
-        if (w) setWallet(w)
-      }).catch(() => null).finally(() => setLoading(false))
-    }
-    loadData()
+    Promise.all([
+      fetch('/api/snapshot?mode=live').then(async (res) => {
+        if (!res.ok) return null
+        const s = await res.json()
+        const p = s.portfolio
+        return {
+          balance: p.currentBalance, startingBalance: p.startingBalance,
+          realizedPnl: p.realizedPnl, partialExitsPnl: p.partialExitsPnl,
+          unrealizedPnl: p.unrealizedPnl, tradingDays: p.tradingDays,
+          avgHoldDays: p.avgHoldDays, totalInvested: p.totalInvested,
+          totalEquity: p.totalEquity, winRate: p.winRate,
+          wins: p.wins, losses: p.losses, openTrades: p.openTrades,
+          totalTrades: p.totalTrades, closedTrades: p.closedTrades ?? 0,
+          roi: p.roi, availableCash: p.availableCash ?? 0,
+          chartData: s.chartData, equityCurve: s.equityCurve ?? [],
+          events: s.events, domains: s.byDomain,
+          experts: s.byExpert ?? [], topOpen: s.topOpen ?? [],
+          bestTrades: s.bestTrades ?? [], worstTrades: s.worstTrades ?? [],
+          bySide: s.bySide ?? { yes: { trades: 0, won: 0, winRate: 0, pnl: 0 }, no: { trades: 0, won: 0, winRate: 0, pnl: 0 } },
+          byEntry: s.byEntry ?? [], costs: s.costs ?? {},
+          gates: s.gates ?? {}, stats: s.stats ?? {},
+          expertTrust: s.expertTrust ?? [],
+          risk: s.risk ?? { maxDrawdown: 0, currentDrawdown: 0, peakEquity: 0, topConcentration: 0, top3Concentration: 0, openCount: 0, cashPct: 1 },
+        } as LiveData
+      }),
+      fetch('/api/wallet-equity').then(async (res) => {
+        if (!res.ok) return null
+        return await res.json() as Record<string, unknown>
+      }).catch(() => null),
+    ]).then(([d, w]) => {
+      // Override DB data with on-chain truth from wallet-equity
+      if (d && w) {
+        d.totalEquity = (w.totalEquity as number) ?? d.totalEquity
+        d.realizedPnl = (w.realizedPnl as number) ?? d.realizedPnl
+        d.unrealizedPnl = (w.unrealizedPnl as number) ?? d.unrealizedPnl
+        d.wins = (w.wins as number) ?? d.wins
+        d.losses = (w.losses as number) ?? d.losses
+        d.winRate = ((w.winRate as number) ?? 0) / 100
+        d.openTrades = ((w.openPositions as Array<unknown>) ?? []).length
+        d.totalTrades = (w.totalTrades as number) ?? d.totalTrades
+        d.availableCash = (w.usdc as number) ?? d.availableCash
+        d.balance = (w.usdc as number) ?? d.balance
+      }
+      if (d) setData(d)
+      if (w) setWalletData({
+        pendingRedeem: (w.pendingRedeem as WalletData['pendingRedeem']) ?? [],
+        closedTrades: (w.closedTrades as WalletData['closedTrades']) ?? [],
+        openPositions: (w.openPositions as WalletData['openPositions']) ?? [],
+      })
+    }).catch(() => null).finally(() => setLoading(false))
   }, [tick])
 
   if (loading) return (
-    <div className="min-h-screen flex items-center justify-center" style={{ background: COLORS.bg }}>
-      <div className="w-8 h-8 border-2 border-t-transparent rounded-full animate-spin" style={{ borderColor: COLORS.teal, borderTopColor: 'transparent' }} />
+    <div className="min-h-screen flex items-center justify-center" style={{ background: C.bg }}>
+      <div className="w-6 h-6 border-2 border-t-transparent rounded-full animate-spin" style={{ borderColor: C.accent, borderTopColor: 'transparent' }} />
     </div>
   )
 
-  if (!data) return (
-    <div className="min-h-screen flex items-center justify-center" style={{ background: COLORS.bg, color: COLORS.textMuted }}>
-      No data yet — bot is starting up
+  if (!data || data.totalTrades === 0) return (
+    <div className="min-h-screen flex items-center justify-center" style={{ background: C.bg }}>
+      <div className="text-center">
+        <h2 className="text-base font-medium text-white mb-2">Live Trading</h2>
+        <p className="text-sm" style={{ color: C.dim }}>No live trades yet.</p>
+      </div>
     </div>
   )
 
-  const donutData = data.domains.filter((d) => d.trades > 0).map((d) => ({
-    name: d.domain, value: d.trades
-  }))
+  // Equity curve with drawdown overlay
+  let peak = data.startingBalance
+  const eqWithDD = data.equityCurve.map((d) => {
+    if (d.balance > peak) peak = d.balance
+    const dd = peak > 0 ? ((peak - d.balance) / peak) * 100 : 0
+    return { ...d, drawdown: -dd, date: d.day.slice(5) }
+  })
+
+  const donutData = data.domains.filter((d) => d.trades > 0).map((d) => ({ name: d.domain, value: d.trades }))
 
   return (
-    <div className="min-h-screen" style={{ background: COLORS.bg, color: COLORS.textLight }}>
-      {/* Sidebar + Main layout */}
+    <div className="min-h-screen" style={{ background: C.bg, color: C.text }}>
       <div className="flex">
         {/* Sidebar */}
-        <aside className="hidden lg:flex flex-col w-56 min-h-screen p-5 border-r" style={{ background: COLORS.card, borderColor: COLORS.surface }}>
-          <div className="mb-10">
-            <h1 className="text-lg font-bold text-white">Copy Trader</h1>
-            <p className="text-xs mt-1" style={{ color: COLORS.textMuted }}>Paper simulation</p>
-          </div>
-          <nav className="flex flex-col gap-1">
-            <SideLink href="/" active>Dashboard</SideLink>
-            <SideLink href="/analytics">Analytics</SideLink>
-            <SideLink href="/paper-trading">Trades</SideLink>
-            <SideLink href="/live-trading">Live Trading</SideLink>
-            <SideLink href="/activity">Activity</SideLink>
-            <SideLink href="/leaderboard">Leaderboard</SideLink>
-            <SideLink href="/rules">Rules</SideLink>
-            <SideLink href="/settings">Settings</SideLink>
-          </nav>
-          <div className="mt-auto pt-8">
-            <div className="p-3 rounded-lg" style={{ background: COLORS.surface }}>
-              <div className="text-xs" style={{ color: COLORS.textMuted }}>Bot Status</div>
-              <div className="flex items-center gap-2 mt-1">
-                <span className="w-2 h-2 rounded-full animate-pulse" style={{ background: COLORS.green }} />
-                <span className="text-xs text-white">Running</span>
-              </div>
+        <aside className="hidden lg:flex flex-col w-52 min-h-screen p-5 border-r" style={{ background: C.card, borderColor: C.border }}>
+          <div className="mb-8">
+            <h1 className="text-base font-semibold" style={{ color: C.bright }}>Copy Trader</h1>
+            <div className="flex items-center gap-1.5 mt-1">
+              <span className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ background: C.accent }} />
+              <span className="text-[11px]" style={{ color: C.accent }}>Live</span>
             </div>
           </div>
+          <nav className="flex flex-col gap-0.5">
+            {([
+              ['/', 'Dashboard'], ['/analytics', 'Analytics'], ['/paper-trading', 'Paper Trades'],
+              ['/live-trading', 'Live Trading'], ['/activity', 'Activity'],
+              ['/leaderboard', 'Leaderboard'], ['/settings', 'Settings'],
+            ] as const).map(([href, label]) => (
+              <Link key={href} href={href as string} className="px-3 py-1.5 rounded-md text-[13px]"
+                style={{
+                  background: href === '/live-trading' ? C.surface : 'transparent',
+                  color: href === '/live-trading' ? C.bright : C.dim,
+                }}>
+                {label}
+              </Link>
+            ))}
+          </nav>
         </aside>
 
-        {/* Main content */}
-        <main className="flex-1 p-6 lg:p-8">
-          {/* Mobile nav */}
-          <div className="lg:hidden flex items-center justify-between mb-6">
-            <h1 className="text-lg font-bold text-white">Copy Trader</h1>
-            <div className="flex gap-2">
-              <Link href="/analytics" className="text-xs px-3 py-1 rounded-lg" style={{ background: COLORS.surface, color: COLORS.textMuted }}>Analytics</Link>
-              <Link href="/paper-trading" className="text-xs px-3 py-1 rounded-lg" style={{ background: COLORS.surface, color: COLORS.textMuted }}>Trades</Link>
+        <main className="flex-1 p-5 lg:p-6">
+
+          {/* ═══ 1. HEADER BAR ═══ */}
+          <div className="flex flex-wrap items-end justify-between gap-4 mb-6 pb-4" style={{ borderBottom: `1px solid ${C.border}` }}>
+            <div>
+              <div className="text-[11px] uppercase tracking-widest mb-1" style={{ color: C.dim }}>Live Equity</div>
+              <div className="flex items-baseline gap-2">
+                <span className="text-3xl font-semibold" style={{ color: C.bright }}>${data.totalEquity.toFixed(2)}</span>
+                <span className="text-sm" style={{ color: data.roi >= 0 ? C.up : C.down }}>
+                  {data.roi >= 0 ? '+' : ''}{(data.roi * 100).toFixed(1)}%
+                </span>
+              </div>
+              <div className="text-[11px] mt-1" style={{ color: C.dim }}>
+                started ${data.startingBalance.toFixed(0)} / {data.tradingDays.toFixed(1)} days / {data.totalTrades} trades
+              </div>
+            </div>
+            <div className="flex gap-6 text-xs">
+              <Metric label="Realized" value={$(data.realizedPnl)} color={data.realizedPnl >= 0 ? C.up : C.down} />
+              <Metric label="Unrealized" value={$(data.unrealizedPnl)} color={data.unrealizedPnl >= 0 ? C.up : C.down} />
+              <Metric label="Cash" value={`$${data.availableCash.toFixed(2)}`} color={C.text} />
+              <Metric label="Win Rate" value={`${(data.winRate * 100).toFixed(0)}%`} color={C.text} />
+              <Metric label="W / L" value={`${data.wins} / ${data.losses}`} color={C.dim} />
+              <Metric label="Open" value={`${data.openTrades}`} color={C.accent} />
             </div>
           </div>
 
-          {/* Top stats */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4 mb-8">
-            <BigStat
-              label="Live Equity"
-              value={`$${(wallet?.totalEquity ?? data.totalEquity).toFixed(2)}`}
-              sub={`$${(wallet?.usdc ?? 0).toFixed(0)} USDC + $${(wallet?.positionsValue ?? 0).toFixed(0)} positions`}
-              color={COLORS.teal}
-            />
-            <BigStat
-              label="Realized P&L"
-              value={pnlStr(data.realizedPnl)}
-              sub={data.partialExitsPnl !== 0
-                ? `incl. ${pnlStr(data.partialExitsPnl)} partials`
-                : `avg hold ${data.avgHoldDays < 1 ? `${(data.avgHoldDays * 24).toFixed(0)}h` : `${data.avgHoldDays.toFixed(1)}d`}${data.avgHoldDays < 0.5 ? ' ⚠️' : ''}`}
-              color={data.realizedPnl >= 0 ? COLORS.green : COLORS.red}
-            />
-            <BigStat
-              label="Win Rate"
-              value={data.wins + data.losses > 0 ? `${(data.winRate * 100).toFixed(0)}%` : '—'}
-              sub={`${data.wins}W · ${data.losses}L`}
-              color={COLORS.amber}
-            />
-            <BigStat
-              label="Open Trades"
-              value={`${wallet?.positions.length ?? data.openTrades}`}
-              sub={`$${(wallet?.positionsValue ?? data.totalInvested).toFixed(0)} on-chain`}
-              color={COLORS.blue}
-            />
-            <BigStat
-              label="Unrealized"
-              value={pnlStr(wallet?.positions.reduce((s, p) => s + p.pnl, 0) ?? data.unrealizedPnl)}
-              sub="on-chain PnL"
-              color={(wallet?.positions.reduce((s, p) => s + p.pnl, 0) ?? data.unrealizedPnl) >= 0 ? COLORS.teal : COLORS.red}
-            />
+          {/* ═══ 2. RISK ROW ═══ */}
+          <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 mb-6">
+            <Gauge label="Drawdown" value={`${(data.risk.currentDrawdown * 100).toFixed(1)}%`} level={data.risk.currentDrawdown > 0.15 ? 2 : data.risk.currentDrawdown > 0.08 ? 1 : 0} />
+            <Gauge label="Max DD" value={`${(data.risk.maxDrawdown * 100).toFixed(1)}%`} level={data.risk.maxDrawdown > 0.20 ? 2 : data.risk.maxDrawdown > 0.12 ? 1 : 0} />
+            <Gauge label="Streak" value={`${data.stats.maxConsecutiveLosses ?? 0}`} level={(data.stats.maxConsecutiveLosses ?? 0) > 15 ? 2 : (data.stats.maxConsecutiveLosses ?? 0) > 8 ? 1 : 0} />
+            <Gauge label="PF" value={data.stats.profitFactor?.toFixed(2) ?? '--'} level={(data.stats.profitFactor ?? 0) >= 1.3 ? 0 : (data.stats.profitFactor ?? 0) >= 1.0 ? 1 : 2} />
+            <Gauge label="Top Pos" value={pct(data.risk.topConcentration)} level={data.risk.topConcentration > 0.30 ? 2 : data.risk.topConcentration > 0.15 ? 1 : 0} />
+            <Gauge label="Cash %" value={pct(data.risk.cashPct)} level={data.risk.cashPct < 0.10 ? 2 : data.risk.cashPct < 0.30 ? 1 : 0} />
           </div>
 
-          {/* Charts */}
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
-            {/* Equity Curve — THE main chart */}
-            <div className="lg:col-span-2 rounded-xl p-5" style={{ background: COLORS.card }}>
-              <div className="flex items-center justify-between mb-1">
-                <h2 className="text-sm font-medium" style={{ color: COLORS.textMuted }}>Equity Curve</h2>
-                <span className="text-lg font-bold" style={{ color: data.realizedPnl >= 0 ? COLORS.teal : COLORS.red }}>
-                  ${data.balance.toFixed(0)}
-                </span>
+          {/* ═══ 3. EQUITY + DOMAINS ═══ */}
+          <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 mb-6">
+            <div className="lg:col-span-3 rounded-lg p-4" style={{ background: C.card, border: `1px solid ${C.border}` }}>
+              <div className="flex justify-between items-center mb-2">
+                <span className="text-[11px] uppercase tracking-wider" style={{ color: C.dim }}>Equity + Drawdown</span>
+                <span className="text-xs" style={{ color: C.dim }}>peak ${data.risk.peakEquity.toFixed(0)}</span>
               </div>
-              <p className="text-xs mb-3" style={{ color: COLORS.textMuted }}>Portfolio value over time (started at ${data.startingBalance.toFixed(0)})</p>
-              {data.chartData.length > 0 ? (
+              {eqWithDD.length > 0 ? (
                 <ResponsiveContainer width="100%" height={200}>
-                  <AreaChart data={data.chartData} margin={{ top: 5, right: 10, bottom: 5, left: 10 }}>
+                  <ComposedChart data={eqWithDD} margin={{ top: 5, right: 5, bottom: 0, left: 5 }}>
                     <defs>
-                      <linearGradient id="eqFill" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor={COLORS.teal} stopOpacity={0.3} />
-                        <stop offset="100%" stopColor={COLORS.teal} stopOpacity={0} />
+                      <linearGradient id="eqG" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor={C.accent} stopOpacity={0.15} />
+                        <stop offset="100%" stopColor={C.accent} stopOpacity={0} />
                       </linearGradient>
                     </defs>
-                    <CartesianGrid strokeDasharray="3 3" stroke={COLORS.surface} />
-                    <XAxis dataKey="date" tickFormatter={(d: string) => d.slice(5)} tick={{ fill: COLORS.textMuted, fontSize: 10 }} axisLine={false} tickLine={false} />
-                    <YAxis tickFormatter={(v: number) => `$${(v / 1000).toFixed(1)}K`} tick={{ fill: COLORS.textMuted, fontSize: 10 }} axisLine={false} tickLine={false} width={45} domain={['dataMin - 500', 'dataMax + 500']} />
-                    <Tooltip contentStyle={{ background: COLORS.surface, border: 'none', borderRadius: 8, fontSize: 12 }} formatter={(value) => [`$${(typeof value === 'number' ? value : Number(value ?? 0)).toFixed(0)}`, 'Equity']} />                    
-                    <ReferenceLine y={data.startingBalance} stroke={COLORS.textMuted} strokeDasharray="3 3" />
-                    <Area type="monotone" dataKey="equity" stroke={COLORS.teal} fill="url(#eqFill)" strokeWidth={2} dot={false} />
-                  </AreaChart>
+                    <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
+                    <XAxis dataKey="date" tick={{ fill: C.dim, fontSize: 10 }} axisLine={false} tickLine={false} />
+                    <YAxis yAxisId="eq" tickFormatter={(v: number) => `$${v}`} tick={{ fill: C.dim, fontSize: 10 }} axisLine={false} tickLine={false} width={40} />
+                    <YAxis yAxisId="dd" orientation="right" tickFormatter={(v: number) => `${v}%`} tick={{ fill: C.dim, fontSize: 10 }} axisLine={false} tickLine={false} width={30} domain={[-50, 0]} />
+                    <Tooltip contentStyle={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 11 }} />
+                    <ReferenceLine yAxisId="eq" y={data.startingBalance} stroke={C.dim} strokeDasharray="3 3" strokeOpacity={0.5} />
+                    <Area yAxisId="eq" type="monotone" dataKey="balance" stroke={C.accent} fill="url(#eqG)" strokeWidth={1.5} dot={false} />
+                    <Bar yAxisId="dd" dataKey="drawdown" fill={C.down} fillOpacity={0.2} radius={[2, 2, 0, 0]} />
+                  </ComposedChart>
                 </ResponsiveContainer>
               ) : (
-                <div className="h-[200px] flex items-center justify-center text-sm" style={{ color: COLORS.textMuted }}>Chart appears after trades resolve</div>
+                <div className="h-[200px] flex items-center justify-center text-xs" style={{ color: C.dim }}>Waiting for data</div>
               )}
             </div>
 
-            {/* Domain donut */}
-            <div className="rounded-xl p-5" style={{ background: COLORS.card }}>
-              <h2 className="text-sm font-medium mb-3" style={{ color: COLORS.textMuted }}>By Domain</h2>
+            <div className="rounded-lg p-4" style={{ background: C.card, border: `1px solid ${C.border}` }}>
+              <span className="text-[11px] uppercase tracking-wider" style={{ color: C.dim }}>Domains</span>
               {donutData.length > 0 ? (
                 <>
-                  <ResponsiveContainer width="100%" height={130}>
+                  <ResponsiveContainer width="100%" height={110}>
                     <PieChart>
-                      <Pie data={donutData} cx="50%" cy="50%" innerRadius={38} outerRadius={58} paddingAngle={3} dataKey="value">
-                        {donutData.map((entry) => (
-                          <Cell key={entry.name} fill={DOMAIN_PIE_COLORS[entry.name] ?? '#52525b'} />
-                        ))}
+                      <Pie data={donutData} cx="50%" cy="50%" innerRadius={30} outerRadius={48} paddingAngle={2} dataKey="value" stroke="none">
+                        {donutData.map((e) => <Cell key={e.name} fill={DOMAIN_COLORS[e.name] ?? '#52525b'} />)}
                       </Pie>
                     </PieChart>
                   </ResponsiveContainer>
-                  <div className="space-y-2 mt-2">
-                    {data.domains.slice(0, 6).map((d) => (
-                      <div key={d.domain} className="flex items-center justify-between text-xs">
-                        <div className="flex items-center gap-2">
-                          <span className="w-2 h-2 rounded-full" style={{ background: DOMAIN_PIE_COLORS[d.domain] ?? '#52525b' }} />
-                          <span className="capitalize" style={{ color: COLORS.textLight }}>{d.domain}</span>
-                          <span style={{ color: COLORS.textMuted }}>{d.trades}t</span>
+                  <div className="space-y-1.5">
+                    {data.domains.slice(0, 5).map((d) => (
+                      <div key={d.domain} className="flex items-center justify-between text-[11px]">
+                        <div className="flex items-center gap-1.5">
+                          <span className="w-1.5 h-1.5 rounded-full" style={{ background: DOMAIN_COLORS[d.domain] ?? '#52525b' }} />
+                          <span className="capitalize" style={{ color: C.text }}>{d.domain}</span>
+                          <span style={{ color: C.dim }}>{d.trades}t</span>
                         </div>
-                        <span style={{ color: d.pnl >= 0 ? COLORS.teal : COLORS.red }}>{pnlStr(d.pnl)}</span>
+                        <span style={{ color: d.pnl >= 0 ? C.up : C.down }}>{$(d.pnl)}</span>
                       </div>
                     ))}
                   </div>
                 </>
               ) : (
-                <div className="h-[200px] flex items-center justify-center text-sm" style={{ color: COLORS.textMuted }}>No data yet</div>
+                <div className="h-[180px] flex items-center justify-center text-xs" style={{ color: C.dim }}>No data</div>
               )}
             </div>
           </div>
 
-          {/* Second row: Daily PnL + Rolling Win Rate */}
+          {/* ═══ 4. OPEN POSITIONS ═══ */}
+          {data.topOpen.length > 0 && (
+            <div className="rounded-lg p-4 mb-6" style={{ background: C.card, border: `1px solid ${C.border}` }}>
+              <div className="flex justify-between items-center mb-3">
+                <span className="text-[11px] uppercase tracking-wider" style={{ color: C.dim }}>Open Positions</span>
+                <span className="text-[11px]" style={{ color: C.dim }}>{data.openTrades} active / ${data.totalInvested.toFixed(2)} deployed</span>
+              </div>
+              <table className="w-full text-[11px]">
+                <thead>
+                  <tr style={{ color: C.dim }}>
+                    <th className="text-left pb-2 font-normal">Market</th>
+                    <th className="text-left pb-2 font-normal w-12">Side</th>
+                    <th className="text-left pb-2 font-normal">Expert</th>
+                    <th className="text-right pb-2 font-normal">Entry</th>
+                    <th className="text-right pb-2 font-normal">Now</th>
+                    <th className="text-right pb-2 font-normal">P&L</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.topOpen.map((t, i) => (
+                    <tr key={i} style={{ borderTop: `1px solid ${C.border}` }}>
+                      <td className="py-2 pr-3 max-w-[300px] truncate" style={{ color: C.text }}>{t.title}</td>
+                      <td className="py-2">
+                        <span className="text-[10px] font-medium" style={{ color: t.side === 'YES' ? C.up : C.down }}>{t.side}</span>
+                      </td>
+                      <td className="py-2" style={{ color: C.dim }}>{t.expert}</td>
+                      <td className="py-2 text-right tabular-nums">{(t.entryPrice * 100).toFixed(0)}¢</td>
+                      <td className="py-2 text-right tabular-nums">{(t.curPrice * 100).toFixed(0)}¢</td>
+                      <td className="py-2 text-right tabular-nums font-medium" style={{ color: t.unrealized >= 0 ? C.up : C.down }}>{$(t.unrealized)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* ═══ 4b. PENDING REDEEM ═══ */}
+          {walletData && walletData.pendingRedeem.length > 0 && (
+            <div className="rounded-lg p-4 mb-6" style={{ background: C.card, border: `1px solid ${C.border}` }}>
+              <div className="flex justify-between items-center mb-3">
+                <span className="text-[11px] uppercase tracking-wider" style={{ color: C.dim }}>Pending Redeem (waiting for oracle)</span>
+                <span className="text-[11px]" style={{ color: C.dim }}>{walletData.pendingRedeem.length} positions</span>
+              </div>
+              <table className="w-full text-[11px]">
+                <thead>
+                  <tr style={{ color: C.dim }}>
+                    <th className="text-left pb-2 font-normal">Market</th>
+                    <th className="text-left pb-2 font-normal w-12">Side</th>
+                    <th className="text-right pb-2 font-normal">Shares</th>
+                    <th className="text-right pb-2 font-normal">Price</th>
+                    <th className="text-right pb-2 font-normal">Value</th>
+                    <th className="text-right pb-2 font-normal">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {walletData.pendingRedeem.map((p, i) => (
+                    <tr key={i} style={{ borderTop: `1px solid ${C.border}` }}>
+                      <td className="py-2 pr-3 max-w-[300px] truncate" style={{ color: C.text }}>{p.title}</td>
+                      <td className="py-2">
+                        <span className="text-[10px] font-medium" style={{ color: p.side === 'YES' ? C.up : C.down }}>{p.side}</span>
+                      </td>
+                      <td className="py-2 text-right tabular-nums">{p.size.toFixed(1)}</td>
+                      <td className="py-2 text-right tabular-nums">{(p.curPrice * 100).toFixed(0)}¢</td>
+                      <td className="py-2 text-right tabular-nums">${p.value.toFixed(2)}</td>
+                      <td className="py-2 text-right">
+                        <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: p.curPrice > 0.5 ? '#029F0420' : '#EA170120', color: p.curPrice > 0.5 ? C.up : C.down }}>
+                          {p.curPrice > 0.5 ? 'WON' : 'LOST'}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* ═══ 4c. CLOSED TRADES ═══ */}
+          {walletData && walletData.closedTrades.length > 0 && (
+            <div className="rounded-lg p-4 mb-6" style={{ background: C.card, border: `1px solid ${C.border}` }}>
+              <div className="flex justify-between items-center mb-3">
+                <span className="text-[11px] uppercase tracking-wider" style={{ color: C.dim }}>Closed Trades (from Polymarket)</span>
+                <span className="text-[11px]" style={{ color: C.dim }}>{walletData.closedTrades.filter(t => t.result === 'won').length}W / {walletData.closedTrades.filter(t => t.result === 'lost').length}L</span>
+              </div>
+              <table className="w-full text-[11px]">
+                <thead>
+                  <tr style={{ color: C.dim }}>
+                    <th className="text-left pb-2 font-normal">Market</th>
+                    <th className="text-left pb-2 font-normal w-12">Side</th>
+                    <th className="text-right pb-2 font-normal">Result</th>
+                    <th className="text-right pb-2 font-normal">P&L</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {walletData.closedTrades.map((t, i) => (
+                    <tr key={i} style={{ borderTop: `1px solid ${C.border}` }}>
+                      <td className="py-2 pr-3 max-w-[300px] truncate" style={{ color: C.text }}>{t.title}</td>
+                      <td className="py-2">
+                        <span className="text-[10px] font-medium" style={{ color: t.side === 'YES' ? C.up : C.down }}>{t.side}</span>
+                      </td>
+                      <td className="py-2 text-right">
+                        <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: t.result === 'won' ? '#029F0420' : '#EA170120', color: t.result === 'won' ? C.up : C.down }}>
+                          {t.result.toUpperCase()}
+                        </span>
+                      </td>
+                      <td className="py-2 text-right tabular-nums font-medium" style={{ color: t.pnl >= 0 ? C.up : C.down }}>{$(t.pnl)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* ═══ 5. P&L + ENTRY EDGE ═══ */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
+            <div className="rounded-lg p-4" style={{ background: C.card, border: `1px solid ${C.border}` }}>
+              <span className="text-[11px] uppercase tracking-wider" style={{ color: C.dim }}>P&L Breakdown</span>
+              <div className="flex items-center gap-3 mt-3 text-[11px]">
+                <div className="flex-1 text-center p-3 rounded-md" style={{ background: C.surface }}>
+                  <div style={{ color: C.dim }}>Gross</div>
+                  <div className="text-base font-semibold mt-1" style={{ color: data.costs.preCostPnl >= 0 ? C.up : C.down }}>{$(data.costs.preCostPnl)}</div>
+                </div>
+                <span style={{ color: C.dim }}>-</span>
+                <div className="flex-1 text-center p-3 rounded-md" style={{ background: C.surface }}>
+                  <div style={{ color: C.dim }}>Fees</div>
+                  <div className="text-base font-semibold mt-1" style={{ color: C.down }}>-${data.costs.totalFees.toFixed(2)}</div>
+                  <div className="text-[10px]" style={{ color: C.dim }}>{(data.costs.feePct * 100).toFixed(1)}%</div>
+                </div>
+                <span style={{ color: C.dim }}>=</span>
+                <div className="flex-1 text-center p-3 rounded-md" style={{ background: C.surface, border: `1px solid ${C.border}` }}>
+                  <div style={{ color: C.dim }}>Net</div>
+                  <div className="text-base font-semibold mt-1" style={{ color: data.realizedPnl >= 0 ? C.up : C.down }}>{$(data.realizedPnl)}</div>
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-lg p-4" style={{ background: C.card, border: `1px solid ${C.border}` }}>
+              <span className="text-[11px] uppercase tracking-wider" style={{ color: C.dim }}>Entry Price Edge</span>
+              {data.byEntry.length > 0 ? (
+                <div className="space-y-3 mt-3">
+                  {data.byEntry.map((b) => (
+                    <div key={b.label}>
+                      <div className="flex justify-between text-[11px] mb-1">
+                        <span style={{ color: C.text }}>{b.label}</span>
+                        <span style={{ color: b.pnl >= 0 ? C.up : C.down }}>{$(b.pnl)}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <div className="flex-1 h-1 rounded-full" style={{ background: C.surface }}>
+                          <div className="h-full rounded-full" style={{ width: `${Math.min(b.winRate * 100, 100)}%`, background: b.implicitEdge >= 0 ? C.up : C.down, opacity: 0.7 }} />
+                        </div>
+                        <span className="text-[10px] tabular-nums w-12 text-right" style={{ color: b.implicitEdge >= 0 ? C.up : C.down }}>
+                          {b.implicitEdge >= 0 ? '+' : ''}{(b.implicitEdge * 100).toFixed(0)}pts
+                        </span>
+                      </div>
+                      <div className="text-[10px]" style={{ color: C.dim }}>{b.trades}t / exp {(b.expectedWinRate * 100).toFixed(0)}% / act {(b.winRate * 100).toFixed(0)}%</div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-xs py-6 text-center" style={{ color: C.dim }}>Not enough data</div>
+              )}
+            </div>
+          </div>
+
+          {/* ═══ 6. DAILY P&L + WIN RATE ═══ */}
           {data.chartData.length > 0 && (
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
-              {/* Daily PnL bars */}
-              <div className="rounded-xl p-5" style={{ background: COLORS.card }}>
-                <h2 className="text-sm font-medium mb-1" style={{ color: COLORS.textMuted }}>Daily P&L</h2>
-                <p className="text-xs mb-3" style={{ color: COLORS.textMuted }}>Profit/loss per day</p>
-                <ResponsiveContainer width="100%" height={160}>
-                  <BarChart data={data.chartData} margin={{ top: 5, right: 10, bottom: 5, left: 10 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke={COLORS.surface} />
-                    <XAxis dataKey="date" tickFormatter={(d: string) => d.slice(8)} tick={{ fill: COLORS.textMuted, fontSize: 10 }} axisLine={false} tickLine={false} />
-                    <YAxis tickFormatter={(v: number) => `$${v}`} tick={{ fill: COLORS.textMuted, fontSize: 10 }} axisLine={false} tickLine={false} width={40} />
-                    <Tooltip contentStyle={{ background: COLORS.surface, border: 'none', borderRadius: 8, fontSize: 12 }} formatter={(value) => [`${typeof value === 'number' ? value : Number(value ?? 0)}%`, 'Win Rate']} />
-                    <ReferenceLine y={0} stroke={COLORS.textMuted} />
-                    <Bar dataKey="dailyPnl" radius={[3, 3, 0, 0]}>
-                      {data.chartData.map((entry, i) => (
-                        <Cell key={i} fill={entry.dailyPnl >= 0 ? COLORS.teal : COLORS.red} fillOpacity={0.8} />
-                      ))}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
+              <div className="rounded-lg p-4" style={{ background: C.card, border: `1px solid ${C.border}` }}>
+                <span className="text-[11px] uppercase tracking-wider" style={{ color: C.dim }}>Daily P&L</span>
+                <ResponsiveContainer width="100%" height={130}>
+                  <BarChart data={data.chartData} margin={{ top: 10, right: 5, bottom: 0, left: 5 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
+                    <XAxis dataKey="date" tickFormatter={(d: string) => d.slice(8)} tick={{ fill: C.dim, fontSize: 10 }} axisLine={false} tickLine={false} />
+                    <YAxis tickFormatter={(v: number) => `$${v}`} tick={{ fill: C.dim, fontSize: 10 }} axisLine={false} tickLine={false} width={35} />
+                    <ReferenceLine y={0} stroke={C.border} />
+                    <Bar dataKey="dailyPnl" radius={[2, 2, 0, 0]}>
+                      {data.chartData.map((e, i) => <Cell key={i} fill={e.dailyPnl >= 0 ? C.up : C.down} fillOpacity={0.6} />)}
                     </Bar>
                   </BarChart>
                 </ResponsiveContainer>
               </div>
-
-              {/* Rolling win rate */}
-              <div className="rounded-xl p-5" style={{ background: COLORS.card }}>
-                <h2 className="text-sm font-medium mb-1" style={{ color: COLORS.textMuted }}>Win Rate (rolling)</h2>
-                <p className="text-xs mb-3" style={{ color: COLORS.textMuted }}>Last 20 days window</p>
-                <ResponsiveContainer width="100%" height={160}>
-                  <LineChart data={data.chartData} margin={{ top: 5, right: 10, bottom: 5, left: 10 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke={COLORS.surface} />
-                    <XAxis dataKey="date" tickFormatter={(d: string) => d.slice(8)} tick={{ fill: COLORS.textMuted, fontSize: 10 }} axisLine={false} tickLine={false} />
-                    <YAxis tickFormatter={(v: number) => `${v}%`} tick={{ fill: COLORS.textMuted, fontSize: 10 }} axisLine={false} tickLine={false} width={35} domain={[0, 100]} />
-                    <Tooltip contentStyle={{ background: COLORS.surface, border: 'none', borderRadius: 8, fontSize: 12 }} formatter={(value) => [`$${(typeof value === 'number' ? value : Number(value ?? 0)).toFixed(2)}`, 'P&L']} />                    <ReferenceLine y={50} stroke={COLORS.amber} strokeDasharray="3 3" label={{ value: '50%', fill: COLORS.amber, fontSize: 10 }} />
-                    <Line type="monotone" dataKey="winRate" stroke={COLORS.amber} strokeWidth={2} dot={{ r: 3, fill: COLORS.amber }} />
+              <div className="rounded-lg p-4" style={{ background: C.card, border: `1px solid ${C.border}` }}>
+                <span className="text-[11px] uppercase tracking-wider" style={{ color: C.dim }}>Win Rate (rolling)</span>
+                <ResponsiveContainer width="100%" height={130}>
+                  <LineChart data={data.chartData} margin={{ top: 10, right: 5, bottom: 0, left: 5 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
+                    <XAxis dataKey="date" tickFormatter={(d: string) => d.slice(8)} tick={{ fill: C.dim, fontSize: 10 }} axisLine={false} tickLine={false} />
+                    <YAxis tickFormatter={(v: number) => `${v}%`} tick={{ fill: C.dim, fontSize: 10 }} axisLine={false} tickLine={false} width={30} domain={[0, 100]} />
+                    <ReferenceLine y={50} stroke={C.dim} strokeDasharray="3 3" strokeOpacity={0.3} />
+                    <Line type="monotone" dataKey="winRate" stroke={C.accent} strokeWidth={1.5} dot={{ r: 2, fill: C.accent }} />
                   </LineChart>
                 </ResponsiveContainer>
               </div>
             </div>
           )}
 
-          {/* Activity feed — preview, links to full page */}
-          <div className="rounded-xl p-5" style={{ background: COLORS.card }}>
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-sm font-medium" style={{ color: COLORS.textMuted }}>Recent Activity</h2>
-              <Link href="/activity" className="text-xs px-3 py-1 rounded-lg transition-colors" style={{ background: COLORS.surface, color: COLORS.teal }}>
-                View all →
-              </Link>
+          {/* ═══ 7. YES/NO + EXPERTS ═══ */}
+          <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 mb-6">
+            <div className="rounded-lg p-4" style={{ background: C.card, border: `1px solid ${C.border}` }}>
+              <span className="text-[11px] uppercase tracking-wider" style={{ color: C.dim }}>Side Performance</span>
+              <div className="space-y-4 mt-3">
+                {(['yes', 'no'] as const).map((side) => {
+                  const s = data.bySide[side]
+                  return (
+                    <div key={side}>
+                      <div className="flex justify-between text-[11px] mb-1">
+                        <span className="font-medium" style={{ color: side === 'yes' ? C.up : C.down }}>{side.toUpperCase()}</span>
+                        <span className="tabular-nums" style={{ color: s.pnl >= 0 ? C.up : C.down }}>{$(s.pnl)}</span>
+                      </div>
+                      <div className="h-1 rounded-full" style={{ background: C.surface }}>
+                        <div className="h-full rounded-full" style={{ width: `${s.winRate * 100}%`, background: side === 'yes' ? C.up : C.down, opacity: 0.5 }} />
+                      </div>
+                      <div className="text-[10px] mt-0.5" style={{ color: C.dim }}>{s.trades}t / {(s.winRate * 100).toFixed(0)}% WR</div>
+                    </div>
+                  )
+                })}
+              </div>
             </div>
-            <div className="space-y-3">
-              {data.events.length > 0 ? data.events.slice(0, 10).map((e) => (
-                <div key={e.id} className="flex gap-3 text-xs py-2 border-b" style={{ borderColor: COLORS.surface }}>
-                  <span className="text-base">{EVENT_ICONS[e.type] ?? '•'}</span>
-                  <div className="flex-1 min-w-0">
-                    <div style={{ color: COLORS.textLight }}>{e.message}</div>
-                    {e.detail && <div className="mt-0.5 truncate" style={{ color: COLORS.textMuted }}>{e.detail}</div>}
-                  </div>
-                  <span style={{ color: COLORS.textMuted }}>{e.createdAt.slice(11, 16)}</span>
-                </div>
-              )) : (
-                <div className="text-sm py-8 text-center" style={{ color: COLORS.textMuted }}>
-                  Activity will appear as the bot copies trades
-                </div>
-              )}
+
+            <div className="lg:col-span-3 rounded-lg p-4" style={{ background: C.card, border: `1px solid ${C.border}` }}>
+              <span className="text-[11px] uppercase tracking-wider" style={{ color: C.dim }}>Expert Performance</span>
+              <table className="w-full text-[11px] mt-2">
+                <thead>
+                  <tr style={{ color: C.dim }}>
+                    <th className="text-left pb-1.5 font-normal">Expert</th>
+                    <th className="text-center pb-1.5 font-normal">Status</th>
+                    <th className="text-right pb-1.5 font-normal">Trades</th>
+                    <th className="text-right pb-1.5 font-normal">WR</th>
+                    <th className="text-right pb-1.5 font-normal">P&L</th>
+                    <th className="text-right pb-1.5 font-normal">Avg</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.experts.slice(0, 12).map((e) => {
+                    const trust = data.expertTrust.find((t) => e.expert.includes(t.expert.slice(0, 8)) || t.expert.includes(e.expert.slice(0, 8)))
+                    const stColor = trust?.status === 'active' ? C.up : trust?.status === 'reduced' ? C.warn : C.down
+                    return (
+                      <tr key={e.expert} style={{ borderTop: `1px solid ${C.border}` }}>
+                        <td className="py-1.5 truncate max-w-[140px]" style={{ color: C.text }}>{e.expert}</td>
+                        <td className="py-1.5 text-center">
+                          {trust && <span className="text-[9px]" style={{ color: stColor }}>{trust.status}</span>}
+                        </td>
+                        <td className="py-1.5 text-right tabular-nums" style={{ color: C.dim }}>{e.trades}</td>
+                        <td className="py-1.5 text-right tabular-nums">{(e.winRate * 100).toFixed(0)}%</td>
+                        <td className="py-1.5 text-right tabular-nums font-medium" style={{ color: e.pnl >= 0 ? C.up : C.down }}>{$(e.pnl)}</td>
+                        <td className="py-1.5 text-right tabular-nums" style={{ color: e.avgPnl >= 0 ? C.up : C.down }}>{$(e.avgPnl)}</td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
             </div>
-            {data.events.length > 0 && (
-              <div className="mt-4 pt-3 border-t text-center" style={{ borderColor: COLORS.surface }}>
-                <Link href="/activity" className="text-xs" style={{ color: COLORS.teal }}>
-                  See full activity log →
-                </Link>
+          </div>
+
+          {/* ═══ 8. RECENT TRADES + ACTIVITY ═══ */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            {data.bestTrades.length > 0 && (
+              <div className="rounded-lg p-4" style={{ background: C.card, border: `1px solid ${C.border}` }}>
+                <span className="text-[11px] uppercase tracking-wider" style={{ color: C.dim }}>Best Trades</span>
+                <div className="mt-2">
+                  {data.bestTrades.slice(0, 5).map((t, i) => (
+                    <div key={i} className="flex justify-between text-[11px] py-1.5" style={{ borderTop: i > 0 ? `1px solid ${C.border}` : undefined }}>
+                      <span className="truncate max-w-[180px]" style={{ color: C.text }}>{t.title}</span>
+                      <span className="tabular-nums ml-2" style={{ color: C.up }}>{$(t.pnl)}</span>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
+            {data.worstTrades.length > 0 && (
+              <div className="rounded-lg p-4" style={{ background: C.card, border: `1px solid ${C.border}` }}>
+                <span className="text-[11px] uppercase tracking-wider" style={{ color: C.dim }}>Worst Trades</span>
+                <div className="mt-2">
+                  {data.worstTrades.slice(0, 5).map((t, i) => (
+                    <div key={i} className="flex justify-between text-[11px] py-1.5" style={{ borderTop: i > 0 ? `1px solid ${C.border}` : undefined }}>
+                      <span className="truncate max-w-[180px]" style={{ color: C.text }}>{t.title}</span>
+                      <span className="tabular-nums ml-2" style={{ color: C.down }}>{$(t.pnl)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            <div className="rounded-lg p-4" style={{ background: C.card, border: `1px solid ${C.border}` }}>
+              <span className="text-[11px] uppercase tracking-wider" style={{ color: C.dim }}>Activity</span>
+              <div className="mt-2">
+                {data.events.length > 0 ? data.events.slice(0, 8).map((e) => (
+                  <div key={e.id} className="text-[11px] py-1.5" style={{ borderTop: `1px solid ${C.border}` }}>
+                    <div className="flex justify-between">
+                      <span className="truncate" style={{ color: C.text }}>{e.message.slice(0, 55)}</span>
+                      <span className="ml-2 shrink-0" style={{ color: C.dim }}>{e.createdAt.slice(11, 16)}</span>
+                    </div>
+                  </div>
+                )) : (
+                  <div className="text-xs py-6 text-center" style={{ color: C.dim }}>No activity</div>
+                )}
+              </div>
+            </div>
           </div>
+
         </main>
       </div>
     </div>
   )
 }
 
-function BigStat({ label, value, sub, color, change }: {
-  label: string; value: string; color: string; sub?: string; change?: number
-}): React.ReactElement {
+// ── Components ───────────────────────────────────────────────────
+
+function Metric({ label, value, color }: { label: string; value: string; color: string }): React.ReactElement {
   return (
-    <div className="rounded-xl p-4" style={{ background: COLORS.card }}>
-      <div className="text-[11px] uppercase tracking-wider mb-2" style={{ color: COLORS.textMuted }}>{label}</div>
-      <div className="text-xl font-bold" style={{ color }}>{value}</div>
-      {change !== undefined && (
-        <div className="text-xs mt-1" style={{ color: change >= 0 ? COLORS.green : COLORS.red }}>
-          {change >= 0 ? '↑' : '↓'} {Math.abs(change * 100).toFixed(1)}% ROI
-        </div>
-      )}
-      {sub && <div className="text-xs mt-1" style={{ color: COLORS.textMuted }}>{sub}</div>}
+    <div>
+      <div className="text-[10px] uppercase tracking-wider" style={{ color: C.dim }}>{label}</div>
+      <div className="text-sm font-medium tabular-nums" style={{ color }}>{value}</div>
     </div>
   )
 }
 
-function SideLink({ href, children, active }: { href: string; children: React.ReactNode; active?: boolean }): React.ReactElement {
+function Gauge({ label, value, level }: { label: string; value: string; level: number }): React.ReactElement {
+  const color = level === 0 ? C.up : level === 1 ? C.warn : C.down
   return (
-    <Link
-      href={href}
-      className="px-3 py-2 rounded-lg text-sm transition-colors"
-      style={{
-        background: active ? COLORS.surface : 'transparent',
-        color: active ? COLORS.teal : COLORS.textMuted,
-      }}
-    >
-      {children}
-    </Link>
+    <div className="rounded-md p-2.5 text-center" style={{ background: C.card, border: `1px solid ${C.border}` }}>
+      <div className="text-[9px] uppercase tracking-wider" style={{ color: C.dim }}>{label}</div>
+      <div className="text-sm font-semibold mt-0.5 tabular-nums" style={{ color }}>{value}</div>
+    </div>
   )
 }
