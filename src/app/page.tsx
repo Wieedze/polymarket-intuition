@@ -199,8 +199,8 @@ export default function Dashboard(): React.ReactElement {
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4 mb-8">
             <BigStat
               label="Live Equity"
-              value={wallet ? `$${wallet.totalEquity.toFixed(2)}` : `$${data.totalEquity.toFixed(0)}`}
-              sub={wallet ? `$${wallet.usdc.toFixed(0)} USDC + $${wallet.positionsValue.toFixed(0)} positions` : `${(data.roi * 100).toFixed(1)}% over ${data.tradingDays.toFixed(0)}d`}
+              value={`$${(wallet?.totalEquity ?? data.totalEquity).toFixed(2)}`}
+              sub={`$${(wallet?.usdc ?? 0).toFixed(0)} USDC + $${(wallet?.positionsValue ?? 0).toFixed(0)} positions`}
               color={COLORS.teal}
             />
             <BigStat
@@ -219,15 +219,15 @@ export default function Dashboard(): React.ReactElement {
             />
             <BigStat
               label="Open Trades"
-              value={wallet ? `${wallet.positions.length}` : `${data.openTrades}`}
-              sub={wallet ? `$${wallet.positionsValue.toFixed(0)} on-chain` : `$${data.totalInvested.toFixed(0)} at risk`}
+              value={`${wallet?.positions.length ?? data.openTrades}`}
+              sub={`$${(wallet?.positionsValue ?? data.totalInvested).toFixed(0)} on-chain`}
               color={COLORS.blue}
             />
             <BigStat
               label="Unrealized"
-              value={wallet ? pnlStr(wallet.positions.reduce((s, p) => s + p.pnl, 0)) : pnlStr(data.unrealizedPnl)}
-              sub={wallet ? 'from wallet' : 'after 2% exit fee'}
-              color={(wallet ? wallet.positions.reduce((s, p) => s + p.pnl, 0) : data.unrealizedPnl) >= 0 ? COLORS.teal : COLORS.red}
+              value={pnlStr(wallet?.positions.reduce((s, p) => s + p.pnl, 0) ?? data.unrealizedPnl)}
+              sub="on-chain PnL"
+              color={(wallet?.positions.reduce((s, p) => s + p.pnl, 0) ?? data.unrealizedPnl) >= 0 ? COLORS.teal : COLORS.red}
             />
           </div>
 
