@@ -711,35 +711,33 @@ async function runExitStrategy(): Promise<Record<string, number>> {
 // ── Stats ────────────────────────────────────────────────────────
 
 function printStats(): void {
+  // On-chain data = source of truth
+  const equity = getCurrentEquity()
+  const cash = getAvailableCash()
+  const posValue = _cachedPositions.reduce((s, p) => s + p.size * p.curPrice, 0)
+  const posCost = _cachedPositions.reduce((s, p) => s + p.size * p.avgPrice, 0)
+  const unrealizedPnl = posValue - posCost
+  const openCount = _cachedPositions.length
+  const nextBet = getDynamicBetSize()
+
+  // DB data for resolved trades stats
   const all = getLivePaperTrades()
-  const open = all.filter((t) => t.status === 'open')
   const won = all.filter((t) => t.status === 'won')
   const lost = all.filter((t) => t.status === 'lost')
   const realizedPnl = [...won, ...lost].reduce((s, t) => s + (t.pnl ?? 0), 0)
-  const unrealizedPnl = open.reduce((s, t) => {
-    if (t.curPrice == null) return s
-    const sharesNow = t.sharesRemaining ?? t.shares
-    const fraction = sharesNow / t.shares
-    return s + sharesNow * t.curPrice * (1 - 0.02) - t.sizeUsdc * fraction
-  }, 0)
-  const startBal = parseFloat(getPortfolioSetting('starting_balance', '9'))
-  const balance = startBal + realizedPnl
   const winRate = (won.length + lost.length) > 0
     ? won.length / (won.length + lost.length)
     : 0
 
-  const totalInvested = open.reduce((s, t) => s + t.sizeUsdc, 0)
-  const cash = startBal + realizedPnl - totalInvested
-  const nextBet = getDynamicBetSize()
-
   console.log(`\n  ┌─────────────────────────────────────┐`)
-  console.log(`  │ 🔴 LIVE BALANCE                      │`)
-  console.log(`  │ Balance:  $${balance.toFixed(2).padStart(10)}  (start: $${startBal.toFixed(0)})`)
-  console.log(`  │ Realized: ${realizedPnl >= 0 ? '+' : ''}${realizedPnl.toFixed(2).padStart(10)}`)
+  console.log(`  │ 🔴 LIVE (on-chain)                    │`)
+  console.log(`  │ Equity:   $${equity.toFixed(2).padStart(10)}`)
+  console.log(`  │ USDC:     $${cash.toFixed(2).padStart(10)}`)
+  console.log(`  │ Invested: $${posValue.toFixed(2).padStart(10)}  (${openCount} positions)`)
   console.log(`  │ Unreal:   ${unrealizedPnl >= 0 ? '+' : ''}${unrealizedPnl.toFixed(2).padStart(10)}`)
-  console.log(`  │ Cash:     $${cash.toFixed(2).padStart(10)}  (next bet: $${nextBet.toFixed(2)})`)
-  console.log(`  │ Open:     ${open.length.toString().padStart(10)}  trades`)
-  console.log(`  │ Win Rate: ${(winRate * 100).toFixed(0).padStart(9)}%  (${won.length}W / ${lost.length}L)`)
+  console.log(`  │ Realized: ${realizedPnl >= 0 ? '+' : ''}${realizedPnl.toFixed(2).padStart(10)}  (${won.length}W / ${lost.length}L)`)
+  console.log(`  │ Win Rate: ${(winRate * 100).toFixed(0).padStart(9)}%`)
+  console.log(`  │ Next bet: $${nextBet.toFixed(2).padStart(10)}`)
   console.log(`  │ WS:      ${isWsConnected() ? '🟢' : '🔴'} market | ${isUserWsConnected() ? '🟢' : '🔴'} user  (${getSubscribedCount()} tokens, ${getPendingOrders().length} pending)`)
   console.log(`  └─────────────────────────────────────┘`)
 
