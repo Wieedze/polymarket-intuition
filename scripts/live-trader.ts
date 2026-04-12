@@ -429,8 +429,11 @@ async function tryCopyWithSignal(alert: PositionAlert): Promise<boolean> {
   })
 
   if (signal.score < MIN_SIGNAL_SCORE) {
-    const oddsTag = bookmakerEdgeBonus > 0 ? ` | book:+${bookmakerEdgeBonus}pts` : ''
-    console.log(`  ⏭️  SKIP (${signal.score}/${MIN_SIGNAL_SCORE}) | ${signal.reasons[0]}${oddsTag} | ${alert.position.title.slice(0, 50)}`)
+    // Only log non-zero scores (blocked domains/unknown = score 0, too noisy)
+    if (signal.score > 0) {
+      const oddsTag = bookmakerEdgeBonus > 0 ? ` | book:+${bookmakerEdgeBonus}pts` : ''
+      console.log(`  ⏭️  SKIP (${signal.score}/${MIN_SIGNAL_SCORE}) | ${signal.reasons[0]}${oddsTag} | ${alert.position.title.slice(0, 50)}`)
+    }
     return false
   }
 
