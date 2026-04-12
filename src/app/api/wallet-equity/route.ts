@@ -82,22 +82,63 @@ async function getPositions(address: string): Promise<RawPosition[]> {
 
 async function getActivity(address: string): Promise<ClosedTrade[]> {
   try {
-    // Fetch trade history from Polymarket
-    const res = await fetch(`${DATA_API}/activity?user=${address}&limit=100&offset=0`)
+    // Fetch ALL trade history from Polymarket activity API
+    const res = await fetch(`${DATA_API}/activity?user=${address}&limit=500&offset=0`)
     if (!res.ok) return []
     const data = await res.json()
     if (!Array.isArray(data)) return []
 
-    // Group by market and determine won/lost
-    const trades: ClosedTrade[] = []
+    // Aggregate individual trades (BUY/SELL) by conditionId to get position-level P&L
+    const positionMap = new Map<string, {
+      title: string
+      side: string
+      totalBought: number  // USDC spent on BUY
+      totalSold: number    // USDC received from SELL
+      sharesBought: number
+      sharesSold: number
+    }>()
+
     for (const item of data) {
-      const pnl = parseFloat(item.cashPnl ?? item.pnl ?? '0')
+      const condId = item.conditionId as string
+      const usdcSize = parseFloat(item.usdcSize ?? '0')
+      const size = parseFloat(item.size ?? '0')
+      const tradeType = item.side as string  // "BUY" or "SELL"
+      const title = (item.title as string) ?? 'Unknown'
+      const outcomeIdx = item.outcomeIndex as number
+
+      if (!positionMap.has(condId)) {
+        positionMap.set(condId, {
+          title,
+          side: outcomeIdx === 0 ? 'YES' : 'NO',
+          totalBought: 0,
+          totalSold: 0,
+          sharesBought: 0,
+          sharesSold: 0,
+        })
+      }
+      const pos = positionMap.get(condId)!
+      if (tradeType === 'BUY') {
+        pos.totalBought += usdcSize
+        pos.sharesBought += size
+      } else {
+        pos.totalSold += usdcSize
+        pos.sharesSold += size
+      }
+    }
+
+    // Only include positions that are fully closed (all shares sold or redeemed)
+    // Open positions are handled by the positions API
+    const trades: ClosedTrade[] = []
+    for (const [, pos] of positionMap) {
+      const remaining = pos.sharesBought - pos.sharesSold
+      if (remaining > 0.5) continue  // still has shares → active, skip
+      const pnl = pos.totalSold - pos.totalBought
       trades.push({
-        title: item.title ?? item.market ?? 'Unknown',
-        side: item.outcome ?? item.side ?? '?',
+        title: pos.title,
+        side: pos.side,
         result: pnl >= 0 ? 'won' : 'lost',
-        totalTraded: parseFloat(item.totalTraded ?? item.size ?? '0'),
-        amountWon: parseFloat(item.amountWon ?? '0'),
+        totalTraded: pos.totalBought + pos.totalSold,
+        amountWon: pnl > 0 ? pos.totalSold : 0,
         pnl,
       })
     }
