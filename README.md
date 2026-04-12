@@ -1,8 +1,6 @@
-# Polymarket Copy Trader
+Indexes expert wallets, scores every signal, executes real orders via CLOB, and manages risk with Kelly sizing, partial exits, and expert trust phases.
 
-Copy-trading bot for Polymarket. Indexes expert wallets, scores every signal, executes real orders via CLOB, and manages risk with Kelly sizing, partial exits, and expert trust phases.
-
-**Two modes:** paper trading (simulation in SQLite) and live trading (real USDC on Polygon via Polymarket CLOB).
+**Two modes:**
 
 ---
 
