@@ -970,6 +970,26 @@ async function pollOnce(): Promise<void> {
 
   const resolved = await resolveCompletedTrades(redeemedConditionIds)
 
+  // ── Phase 5: Reconcile DB with on-chain state ──
+  // Clean up phantom trades: if DB says "open" but on-chain says no position → remove
+  if (!DRY_RUN) {
+    const dbOpenTrades = getOpenLiveTrades()
+    const onChainConditionIds = new Set(_cachedPositions.map(p => p.conditionId))
+    const pendingConditionIds = new Set(getPendingOrders().map(po => po.conditionId))
+    let phantomsRemoved = 0
+    for (const trade of dbOpenTrades) {
+      // Skip if position exists on-chain OR has a pending order
+      if (onChainConditionIds.has(trade.conditionId)) continue
+      if (pendingConditionIds.has(trade.conditionId)) continue
+      // Position not on-chain and no pending order → phantom trade
+      resolvePaperTrade(trade.conditionId, trade.curPrice ?? trade.entryPrice)
+      console.log(`  🧹 PHANTOM REMOVED | not on-chain | ${trade.title.slice(0, 50)}`)
+      logBotEvent('reconcile', `Phantom removed: ${trade.title}`, 'DB trade not found on-chain')
+      phantomsRemoved++
+    }
+    if (phantomsRemoved > 0) console.log(`  🧹 Reconciled: removed ${phantomsRemoved} phantom trades`)
+  }
+
   // ── Summary ──
   const parts = [`${allNewAlerts.length} new`, `${copied} copied`]
   const consensusCount = [...consensusMap.values()].filter((e) => e.experts.length >= 2).length
