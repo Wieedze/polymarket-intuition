@@ -1100,11 +1100,18 @@ export function partialExitPaperTrade(
 
 export function paperTradeExistsForCondition(conditionId: string): boolean {
   const db = getDb()
-  // Check ALL trades (open + resolved) to prevent re-trading the same market after exit
-  const row = db.prepare(
-    "SELECT 1 FROM paper_trades WHERE condition_id = ?"
+  // Block if trade is currently OPEN (don't double-up)
+  const openRow = db.prepare(
+    "SELECT 1 FROM paper_trades WHERE condition_id = ? AND status = 'open'"
   ).get(conditionId)
-  return row !== undefined
+  if (openRow) return true
+
+  // Block if trade was resolved less than 24h ago (cooldown — prevents buy-sell loops)
+  const recentRow = db.prepare(
+    `SELECT 1 FROM paper_trades WHERE condition_id = ? AND status != 'open'
+     AND resolved_at > datetime('now', '-24 hours')`
+  ).get(conditionId)
+  return recentRow !== undefined
 }
 
 // ── Bot events operations ───────────────────────────────────────
