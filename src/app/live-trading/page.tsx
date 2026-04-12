@@ -67,8 +67,15 @@ function pct(n: number): string { return `${(n * 100).toFixed(1)}%` }
 
 // ── Page ─────────────────────────────────────────────────────────
 
+type WalletData = {
+  pendingRedeem: Array<{ title: string; side: string; size: number; curPrice: number; value: number; pnl: number }>
+  closedTrades: Array<{ title: string; side: string; result: string; pnl: number; totalTraded: number }>
+  openPositions: Array<{ title: string; side: string; size: number; curPrice: number; value: number; pnl: number }>
+}
+
 export default function LiveTrading(): React.ReactElement {
   const [data, setData] = useState<LiveData | null>(null)
+  const [walletData, setWalletData] = useState<WalletData | null>(null)
   const [loading, setLoading] = useState(true)
   const { tick } = useRefresh()
 
@@ -117,6 +124,11 @@ export default function LiveTrading(): React.ReactElement {
         d.balance = (w.usdc as number) ?? d.balance
       }
       if (d) setData(d)
+      if (w) setWalletData({
+        pendingRedeem: (w.pendingRedeem as WalletData['pendingRedeem']) ?? [],
+        closedTrades: (w.closedTrades as WalletData['closedTrades']) ?? [],
+        openPositions: (w.openPositions as WalletData['openPositions']) ?? [],
+      })
     }).catch(() => null).finally(() => setLoading(false))
   }, [tick])
 
@@ -300,6 +312,82 @@ export default function LiveTrading(): React.ReactElement {
                       <td className="py-2 text-right tabular-nums">{(t.entryPrice * 100).toFixed(0)}¢</td>
                       <td className="py-2 text-right tabular-nums">{(t.curPrice * 100).toFixed(0)}¢</td>
                       <td className="py-2 text-right tabular-nums font-medium" style={{ color: t.unrealized >= 0 ? C.up : C.down }}>{$(t.unrealized)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* ═══ 4b. PENDING REDEEM ═══ */}
+          {walletData && walletData.pendingRedeem.length > 0 && (
+            <div className="rounded-lg p-4 mb-6" style={{ background: C.card, border: `1px solid ${C.border}` }}>
+              <div className="flex justify-between items-center mb-3">
+                <span className="text-[11px] uppercase tracking-wider" style={{ color: C.dim }}>Pending Redeem (waiting for oracle)</span>
+                <span className="text-[11px]" style={{ color: C.dim }}>{walletData.pendingRedeem.length} positions</span>
+              </div>
+              <table className="w-full text-[11px]">
+                <thead>
+                  <tr style={{ color: C.dim }}>
+                    <th className="text-left pb-2 font-normal">Market</th>
+                    <th className="text-left pb-2 font-normal w-12">Side</th>
+                    <th className="text-right pb-2 font-normal">Shares</th>
+                    <th className="text-right pb-2 font-normal">Price</th>
+                    <th className="text-right pb-2 font-normal">Value</th>
+                    <th className="text-right pb-2 font-normal">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {walletData.pendingRedeem.map((p, i) => (
+                    <tr key={i} style={{ borderTop: `1px solid ${C.border}` }}>
+                      <td className="py-2 pr-3 max-w-[300px] truncate" style={{ color: C.text }}>{p.title}</td>
+                      <td className="py-2">
+                        <span className="text-[10px] font-medium" style={{ color: p.side === 'YES' ? C.up : C.down }}>{p.side}</span>
+                      </td>
+                      <td className="py-2 text-right tabular-nums">{p.size.toFixed(1)}</td>
+                      <td className="py-2 text-right tabular-nums">{(p.curPrice * 100).toFixed(0)}¢</td>
+                      <td className="py-2 text-right tabular-nums">${p.value.toFixed(2)}</td>
+                      <td className="py-2 text-right">
+                        <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: p.curPrice > 0.5 ? '#029F0420' : '#EA170120', color: p.curPrice > 0.5 ? C.up : C.down }}>
+                          {p.curPrice > 0.5 ? 'WON' : 'LOST'}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* ═══ 4c. CLOSED TRADES ═══ */}
+          {walletData && walletData.closedTrades.length > 0 && (
+            <div className="rounded-lg p-4 mb-6" style={{ background: C.card, border: `1px solid ${C.border}` }}>
+              <div className="flex justify-between items-center mb-3">
+                <span className="text-[11px] uppercase tracking-wider" style={{ color: C.dim }}>Closed Trades (from Polymarket)</span>
+                <span className="text-[11px]" style={{ color: C.dim }}>{walletData.closedTrades.filter(t => t.result === 'won').length}W / {walletData.closedTrades.filter(t => t.result === 'lost').length}L</span>
+              </div>
+              <table className="w-full text-[11px]">
+                <thead>
+                  <tr style={{ color: C.dim }}>
+                    <th className="text-left pb-2 font-normal">Market</th>
+                    <th className="text-left pb-2 font-normal w-12">Side</th>
+                    <th className="text-right pb-2 font-normal">Result</th>
+                    <th className="text-right pb-2 font-normal">P&L</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {walletData.closedTrades.map((t, i) => (
+                    <tr key={i} style={{ borderTop: `1px solid ${C.border}` }}>
+                      <td className="py-2 pr-3 max-w-[300px] truncate" style={{ color: C.text }}>{t.title}</td>
+                      <td className="py-2">
+                        <span className="text-[10px] font-medium" style={{ color: t.side === 'YES' ? C.up : C.down }}>{t.side}</span>
+                      </td>
+                      <td className="py-2 text-right">
+                        <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: t.result === 'won' ? '#029F0420' : '#EA170120', color: t.result === 'won' ? C.up : C.down }}>
+                          {t.result.toUpperCase()}
+                        </span>
+                      </td>
+                      <td className="py-2 text-right tabular-nums font-medium" style={{ color: t.pnl >= 0 ? C.up : C.down }}>{$(t.pnl)}</td>
                     </tr>
                   ))}
                 </tbody>
