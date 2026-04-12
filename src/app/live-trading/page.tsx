@@ -73,8 +73,8 @@ export default function LiveTrading(): React.ReactElement {
   const { tick } = useRefresh()
 
   useEffect(() => {
-    fetch('/api/snapshot?mode=live')
-      .then(async (res) => {
+    Promise.all([
+      fetch('/api/snapshot?mode=live').then(async (res) => {
         if (!res.ok) return null
         const s = await res.json()
         const p = s.portfolio
@@ -97,10 +97,27 @@ export default function LiveTrading(): React.ReactElement {
           expertTrust: s.expertTrust ?? [],
           risk: s.risk ?? { maxDrawdown: 0, currentDrawdown: 0, peakEquity: 0, topConcentration: 0, top3Concentration: 0, openCount: 0, cashPct: 1 },
         } as LiveData
-      })
-      .then((d) => { if (d) setData(d) })
-      .catch(() => null)
-      .finally(() => setLoading(false))
+      }),
+      fetch('/api/wallet-equity').then(async (res) => {
+        if (!res.ok) return null
+        return await res.json() as Record<string, unknown>
+      }).catch(() => null),
+    ]).then(([d, w]) => {
+      // Override DB data with on-chain truth from wallet-equity
+      if (d && w) {
+        d.totalEquity = (w.totalEquity as number) ?? d.totalEquity
+        d.realizedPnl = (w.realizedPnl as number) ?? d.realizedPnl
+        d.unrealizedPnl = (w.unrealizedPnl as number) ?? d.unrealizedPnl
+        d.wins = (w.wins as number) ?? d.wins
+        d.losses = (w.losses as number) ?? d.losses
+        d.winRate = ((w.winRate as number) ?? 0) / 100
+        d.openTrades = ((w.openPositions as Array<unknown>) ?? []).length
+        d.totalTrades = (w.totalTrades as number) ?? d.totalTrades
+        d.availableCash = (w.usdc as number) ?? d.availableCash
+        d.balance = (w.usdc as number) ?? d.balance
+      }
+      if (d) setData(d)
+    }).catch(() => null).finally(() => setLoading(false))
   }, [tick])
 
   if (loading) return (
