@@ -61,7 +61,7 @@ const MAX_OPEN = parseInt(process.env.MAX_OPEN_TRADES ?? '20', 10)
 const MAX_SPORTS = parseInt(process.env.MAX_SPORTS ?? '10', 10)
 const ALLOWED_SPORTS = process.env.ALLOWED_SPORTS?.split(',').filter(Boolean) ?? []  // empty = all
 const DRY_RUN = process.env.DRY_RUN !== 'false'
-const MAX_ENTRY = parseFloat(process.env.MAX_ENTRY_PRICE ?? '0.65')
+const MAX_ENTRY = parseFloat(process.env.MAX_ENTRY_PRICE ?? '0.50')
 const GTC_TIMEOUT_MS = 5 * 60 * 1000  // 5 min timeout for pending GTC orders
 
 const POLY_MIN_ORDER_SHARES = 15

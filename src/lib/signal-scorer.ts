@@ -198,11 +198,11 @@ export function scoreSignal(params: {
   // 4. Entry price quality (15 points max)
   // Entry price scoring — longshots have best edge, mid-range acceptable for proven experts
   let entryScore = 0
-  if (entryPrice > 0.65) {
+  if (entryPrice > 0.50) {
     return {
       score: 0, domainMatch: false, expertCalibration: 0,
       expertWinRate: 0, expertTrades: 0, betSizeSignal: 0,
-      expertImplicitEdge: 0, domain, reasons: [`Entry ${(entryPrice * 100).toFixed(0)}¢ blocked — no edge above 65¢`],
+      expertImplicitEdge: 0, domain, reasons: [`Entry ${(entryPrice * 100).toFixed(0)}¢ blocked — no edge above 50¢`],
       bookmakerEdgeBonus: 0, bookmakerNoVigProb: null,
     }
   } else if (entryPrice >= 0.15 && entryPrice <= 0.30) {

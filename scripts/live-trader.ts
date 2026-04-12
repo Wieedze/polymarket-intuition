@@ -65,7 +65,7 @@ const POLYMARKET_DATA_URL = process.env.POLYMARKET_DATA_URL ?? 'https://data-api
 const POLL_INTERVAL_MS = parseInt(process.env.POLL_INTERVAL_MS ?? '15000', 10)  // 15s — faster detection for FOK fills
 const BET_PCT = parseFloat(process.env.BET_PCT ?? '0.02')
 const MIN_ENTRY = parseFloat(process.env.MIN_ENTRY_PRICE ?? '0.05')
-const MAX_ENTRY = parseFloat(process.env.MAX_ENTRY_PRICE ?? '0.65')  // signal-scorer blocks >65¢ with score=0
+const MAX_ENTRY = parseFloat(process.env.MAX_ENTRY_PRICE ?? '0.50')  // signal-scorer blocks >50¢ with score=0
 const MAX_OPEN = parseInt(process.env.MAX_OPEN_TRADES ?? '100', 10)  // fixed cap
 const MIN_SIGNAL_SCORE = parseInt(process.env.MIN_SIGNAL_SCORE_LIVE ?? '50', 10)
 const ODDS_API_KEY = process.env.ODDS_API_KEY ?? ''
