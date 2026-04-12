@@ -53,7 +53,7 @@ type CacheEntry = {
 }
 
 const cache = new Map<string, CacheEntry>()
-const CACHE_TTL_MS = parseInt(process.env.ODDS_CACHE_TTL_MS ?? '300000', 10)  // 5 min default, 2h for free tier
+const CACHE_TTL_MS = parseInt(process.env.ODDS_CACHE_TTL_MS ?? '1800000', 10)  // 30 min default (20k req/month budget)
 const MIN_FETCH_INTERVAL_MS = 3 * 60 * 1000 // hard minimum 3 min between fetches per sport
 
 let lastBudgetWarning = 0
