@@ -967,14 +967,13 @@ async function pollOnce(): Promise<void> {
   const exitSummary = Object.entries(exits).map(([k, v]) => `${v} ${k}`).join(', ')
   const resolved = await resolveCompletedTrades()
 
-  // ── Phase 4: Redeem resolved positions on-chain ──
+  // ── Phase 4: Redeem resolved positions on-chain, THEN update DB ──
   if (!DRY_RUN) {
     const redeemed = await redeemAllResolved()
-    if (redeemed.length > 0) {
-      // Also resolve in DB if not already
-      for (const conditionId of redeemed) {
-        resolvePaperTrade(conditionId, 1.0)  // winning = $1 per share
-      }
+    for (const { conditionId, exitPrice } of redeemed) {
+      // On-chain tx already confirmed — now safe to update DB
+      resolvePaperTrade(conditionId, exitPrice)
+      logBotEvent('live-redeem', `Redeemed @ ${exitPrice > 0 ? '$1' : '$0'} | ${conditionId.slice(0, 16)}`, exitPrice > 0 ? 'WON' : 'LOST')
     }
   }
 

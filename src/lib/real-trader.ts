@@ -392,9 +392,9 @@ export async function closePosition(
  * When a market resolves, the CLOB orderbook closes. You can't sell anymore.
  * Instead, call redeemPositions() on the CTF contract to get $1 per winning share.
  *
- * Returns list of redeemed conditionIds.
+ * Returns list of { conditionId, exitPrice } — only after on-chain tx confirmed.
  */
-export async function redeemAllResolved(): Promise<string[]> {
+export async function redeemAllResolved(): Promise<Array<{ conditionId: string; exitPrice: number }>> {
   if (!_walletAddress) await getClient()
   if (!_walletAddress) return []
 
@@ -449,13 +449,14 @@ export async function redeemAllResolved(): Promise<string[]> {
       'function redeemPositions(bytes32 conditionId, uint256[] indexSets) external',
     ])
 
-    const redeemed: string[] = []
+    const redeemed: Array<{ conditionId: string; exitPrice: number }> = []
 
     for (const pos of resolved) {
       try {
         const indexSets = [1n, 2n]
         const conditionIdBytes = pos.conditionId as `0x${string}`
 
+        // On-chain redemption FIRST — only update DB after tx confirmed
         if (pos.negativeRisk) {
           const hash = await walletClient.writeContract({
             address: NEG_RISK_ADAPTER,
@@ -475,10 +476,12 @@ export async function redeemAllResolved(): Promise<string[]> {
           await publicClient.waitForTransactionReceipt({ hash })
         }
 
-        const status = pos.curPrice > 0.95 ? 'WON' : 'LOST'
-        const value = pos.curPrice > 0.95 ? (pos.size * 1).toFixed(2) : '0.00'
+        // On-chain tx confirmed — now safe to report
+        const exitPrice = pos.curPrice > 0.95 ? 1.0 : 0.0
+        const status = exitPrice > 0 ? 'WON' : 'LOST'
+        const value = (pos.size * exitPrice).toFixed(2)
         console.log(`  💰 REDEEMED | ${status} | ${pos.size.toFixed(1)} shares → $${value} | ${pos.title.slice(0, 50)}`)
-        redeemed.push(pos.conditionId)
+        redeemed.push({ conditionId: pos.conditionId, exitPrice })
       } catch (err) {
         console.log(`  ⚠️  REDEEM FAILED | ${pos.title.slice(0, 40)} | ${err instanceof Error ? err.message : String(err)}`)
       }
