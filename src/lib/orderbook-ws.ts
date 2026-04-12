@@ -337,8 +337,10 @@ function _sendUserSubscription(): void {
 function _handleUserMessage(msg: UserWsEvent): void {
   if (msg.event_type === 'trade') {
     const e = msg as UserTradeEvent
-    if (e.status === 'MATCHED' || e.status === 'CONFIRMED' || e.status === 'MINED') {
-      // Our order was filled
+    if (e.status === 'MATCHED') {
+      console.log(`  [USER-WS] ⏳ ORDER MATCHED (awaiting on-chain confirmation) | ${e.id}`)
+    } else if (e.status === 'CONFIRMED' || e.status === 'MINED') {
+      // Our order was confirmed on-chain
       const orderId = e.maker_orders?.[0]?.order_id ?? e.id
       const filledPrice = parseFloat(e.price)
       const filledSize = parseFloat(e.size)

@@ -1,4 +1,6 @@
 import { NextResponse } from 'next/server'
+import { createPublicClient, http, parseAbi } from 'viem'
+import { polygon } from 'viem/chains'
 
 export const dynamic = 'force-dynamic'
 
@@ -6,8 +8,10 @@ const WALLET_ADDRESS = process.env.WALLET_ADDRESS ?? '0x1acC2880Cca00f61C41eb2b4
 const POLYGON_RPC = process.env.POLYGON_RPC_URL ?? 'https://polygon-bor-rpc.publicnode.com'
 const USDC_ADDRESS = '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174'
 
-// Minimal ABI for balanceOf — no external deps needed
-const BALANCE_OF_SELECTOR = '0x70a08231'
+const publicClient = createPublicClient({
+  chain: polygon,
+  transport: http(POLYGON_RPC),
+})
 
 type PolymarketPosition = {
   conditionId: string
@@ -22,24 +26,13 @@ type PolymarketPosition = {
 
 async function getUsdcBalance(address: string): Promise<number> {
   try {
-    // Encode balanceOf(address) call
-    const paddedAddress = address.slice(2).toLowerCase().padStart(64, '0')
-    const data = `${BALANCE_OF_SELECTOR}${paddedAddress}`
-
-    const res = await fetch(POLYGON_RPC, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        method: 'eth_call',
-        params: [{ to: USDC_ADDRESS, data }, 'latest'],
-        id: 1,
-      }),
+    const balance = await publicClient.readContract({
+      address: USDC_ADDRESS as `0x${string}`,
+      abi: parseAbi(['function balanceOf(address) view returns (uint256)']),
+      functionName: 'balanceOf',
+      args: [address as `0x${string}`],
     })
-
-    const json = await res.json() as { result?: string }
-    if (!json.result) return 0
-    return parseInt(json.result, 16) / 1e6  // USDC.e has 6 decimals
+    return Number(balance) / 1e6
   } catch {
     return 0
   }
