@@ -21,19 +21,19 @@ const COLORS = {
 
 type PartialExit = { pct: number; price: number; pnl: number; at: string }
 
-type PaperTrade = {
+type Position = {
   id: string
   conditionId: string
   title: string
   domain: string | null
   side: string
   entryPrice: number
-  simulatedUsdc: number
+  sizeUsdc: number
   shares: number
   sharesRemaining: number | null
   partialExits: PartialExit[]
-  copiedFrom: string
-  copiedLabel: string | null
+  sourceRef: string
+  sourceLabel: string | null
   status: 'open' | 'won' | 'lost'
   curPrice: number | null
   exitPrice: number | null
@@ -63,7 +63,7 @@ type Portfolio = {
 
 type PaperTradingData = {
   portfolio: Portfolio
-  trades: PaperTrade[]
+  trades: Position[]
 }
 
 const DOMAIN_LABELS: Record<string, string> = {
@@ -378,7 +378,7 @@ export default function PaperTradingPage(): React.ReactElement {
                 const fraction = t.shares > 0 ? sharesNow / t.shares : 1
                 // Unrealized: proceeds if sold now (after 2% fee) minus remaining cost basis
                 const unrealized = t.curPrice != null
-                  ? sharesNow * t.curPrice * (1 - FEE) - t.simulatedUsdc * fraction
+                  ? sharesNow * t.curPrice * (1 - FEE) - t.sizeUsdc * fraction
                   : 0
                 const partialPnl = (t.partialExits ?? []).reduce((s, e) => s + e.pnl, 0)
                 const displayPnl = t.status === 'open' ? unrealized : (t.pnl ?? 0)
@@ -448,7 +448,7 @@ export default function PaperTradingPage(): React.ReactElement {
 
                       {/* Copied from */}
                       <span className="text-[10px] w-20 text-right truncate shrink-0" style={{ color: COLORS.textMuted }}>
-                        {t.copiedLabel ?? truncAddr(t.copiedFrom)}
+                        {t.sourceLabel ?? truncAddr(t.sourceRef)}
                       </span>
                     </div>
                   </div>

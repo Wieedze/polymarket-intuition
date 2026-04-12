@@ -1,15 +1,15 @@
 import { NextResponse } from 'next/server'
-import { getAllPaperTrades, getPortfolioSetting, type PaperTrade } from '@/lib/db'
+import { getAllPositions, getPortfolioSetting, type Position } from '@/lib/db'
 
 export const dynamic = 'force-dynamic'
 import { getAllExpertTrust } from '@/lib/expert-trust'
 
-function pnlOf(trades: PaperTrade[]): number {
+function pnlOf(trades: Position[]): number {
   return trades.reduce((s, t) => s + (t.pnl ?? 0), 0)
 }
 
-function groupBy(trades: PaperTrade[], key: (t: PaperTrade) => string): Record<string, PaperTrade[]> {
-  const map: Record<string, PaperTrade[]> = {}
+function groupBy(trades: Position[], key: (t: Position) => string): Record<string, Position[]> {
+  const map: Record<string, Position[]> = {}
   for (const t of trades) {
     const k = key(t)
     if (!map[k]) map[k] = []
@@ -20,7 +20,7 @@ function groupBy(trades: PaperTrade[], key: (t: PaperTrade) => string): Record<s
 
 // ── Statistical helpers ───────────────────────────────────────────
 
-function profitFactor(trades: PaperTrade[]): number {
+function profitFactor(trades: Position[]): number {
   let wins = 0
   let losses = 0
   for (const t of trades) {
@@ -31,7 +31,7 @@ function profitFactor(trades: PaperTrade[]): number {
   return wins / losses
 }
 
-function maxConsecutiveLosses(trades: PaperTrade[]): number {
+function maxConsecutiveLosses(trades: Position[]): number {
   const sorted = [...trades].sort((a, b) =>
     (a.resolvedAt ?? a.openedAt).localeCompare(b.resolvedAt ?? b.openedAt)
   )
@@ -56,8 +56,8 @@ function wilsonCI(wins: number, n: number): { low: number; high: number } {
   }
 }
 
-function buildEquityCurve(closed: PaperTrade[], startBal: number) {
-  const byDay = new Map<string, PaperTrade[]>()
+function buildEquityCurve(closed: Position[], startBal: number) {
+  const byDay = new Map<string, Position[]>()
   for (const t of closed) {
     const day = (t.resolvedAt ?? t.openedAt).slice(0, 10)
     const existing = byDay.get(day) ?? []
@@ -112,7 +112,7 @@ type EntryBucket = {
 
 export async function GET(): Promise<NextResponse> {
   try {
-    const all = getAllPaperTrades()
+    const all = getAllPositions()
     const open = all.filter((t) => t.status === 'open')
     const closed = all.filter((t) => t.status !== 'open')
     const won = closed.filter((t) => t.status === 'won')
@@ -129,7 +129,7 @@ export async function GET(): Promise<NextResponse> {
     // Remaining cost basis for open positions (accounts for partial exits returning capital)
     const totalInvested = open.reduce((s, t) => {
       const fraction = t.sharesRemaining != null && t.shares > 0 ? t.sharesRemaining / t.shares : 1
-      return s + t.simulatedUsdc * fraction
+      return s + t.sizeUsdc * fraction
     }, 0)
 
     // What you'd actually get if you sold all open positions right now (after 2% exit fee)
@@ -144,7 +144,7 @@ export async function GET(): Promise<NextResponse> {
       if (t.curPrice == null) return s
       const sharesNow = t.sharesRemaining ?? t.shares
       const fraction = t.shares > 0 ? sharesNow / t.shares : 1
-      const costBasis = t.simulatedUsdc * fraction
+      const costBasis = t.sizeUsdc * fraction
       return s + sharesNow * t.curPrice * (1 - POLYMARKET_FEE_RATE) - costBasis
     }, 0)
 
@@ -184,7 +184,7 @@ export async function GET(): Promise<NextResponse> {
       .sort((a, b) => b.pnl - a.pnl)
 
     // By expert
-    const byExpertMap = groupBy(closed, (t) => t.copiedLabel ?? t.copiedFrom.slice(0, 12))
+    const byExpertMap = groupBy(closed, (t) => t.sourceLabel ?? t.sourceRef.slice(0, 12))
     const byExpert: ExpertStat[] = Object.entries(byExpertMap)
       .map(([expert, trades]) => {
         const w = trades.filter((t) => t.status === 'won').length
@@ -249,8 +249,8 @@ export async function GET(): Promise<NextResponse> {
       .filter((b) => b.trades > 0)
 
     // Bet size analysis (consensus proxy)
-    const smallBets = closed.filter((t) => t.simulatedUsdc <= 100)
-    const bigBets = closed.filter((t) => t.simulatedUsdc > 100)
+    const smallBets = closed.filter((t) => t.sizeUsdc <= 100)
+    const bigBets = closed.filter((t) => t.sizeUsdc > 100)
     const byBetSize = {
       standard: {
         trades: smallBets.length,
@@ -274,27 +274,27 @@ export async function GET(): Promise<NextResponse> {
       return base + sizeImpact
     }
 
-    const closedEntryFees = closed.reduce((s, t) => s + t.simulatedUsdc * POLYMARKET_FEE_RATE, 0)
+    const closedEntryFees = closed.reduce((s, t) => s + t.sizeUsdc * POLYMARKET_FEE_RATE, 0)
     const closedExitFees = closed.reduce((s, t) => {
       if (t.exitPrice == null) return s
       return s + t.shares * t.exitPrice * POLYMARKET_FEE_RATE
     }, 0)
-    const closedSlippage = closed.reduce((s, t) => s + estimateSlippage(t.entryPrice, t.simulatedUsdc) * t.simulatedUsdc, 0)
+    const closedSlippage = closed.reduce((s, t) => s + estimateSlippage(t.entryPrice, t.sizeUsdc) * t.sizeUsdc, 0)
 
     // For display: show all-trades fees (what the bot has spent total including open positions)
-    const totalEntryFees = all.reduce((s, t) => s + t.simulatedUsdc * POLYMARKET_FEE_RATE, 0)
+    const totalEntryFees = all.reduce((s, t) => s + t.sizeUsdc * POLYMARKET_FEE_RATE, 0)
     const totalExitFees = closedExitFees
     const totalFees = totalEntryFees + totalExitFees
-    const totalSlippage = all.reduce((s, t) => s + estimateSlippage(t.entryPrice, t.simulatedUsdc) * t.simulatedUsdc, 0)
+    const totalSlippage = all.reduce((s, t) => s + estimateSlippage(t.entryPrice, t.sizeUsdc) * t.sizeUsdc, 0)
     const totalCost = totalFees + totalSlippage
-    const totalDeployed = all.reduce((s, t) => s + t.simulatedUsdc, 0)
+    const totalDeployed = all.reduce((s, t) => s + t.sizeUsdc, 0)
 
     // Pre-cost alpha: same scope as Net — closed trades + partial exits from open trades
     // Partial exit fees: estimate from the partial exits themselves (2% on proceeds)
     const partialFees = open.reduce((s, t) =>
       s + t.partialExits.reduce((ps, e) => ps + Math.abs(e.pnl) * POLYMARKET_FEE_RATE, 0), 0)
     const partialSlippage = open.reduce((s, t) =>
-      s + t.partialExits.reduce((ps, e) => ps + estimateSlippage(t.entryPrice, t.simulatedUsdc) * t.simulatedUsdc * e.pct, 0), 0)
+      s + t.partialExits.reduce((ps, e) => ps + estimateSlippage(t.entryPrice, t.sizeUsdc) * t.sizeUsdc * e.pct, 0), 0)
     const preCostPnl = realizedPnl + closedEntryFees + closedExitFees + closedSlippage + partialFees + partialSlippage
 
     const costs = {
@@ -313,11 +313,11 @@ export async function GET(): Promise<NextResponse> {
     // Best and worst trades
     const bestTrades = [...closed].sort((a, b) => (b.pnl ?? 0) - (a.pnl ?? 0)).slice(0, 5).map((t) => ({
       title: t.title, side: t.side, entryPrice: t.entryPrice, pnl: t.pnl ?? 0,
-      expert: t.copiedLabel ?? t.copiedFrom.slice(0, 10), domain: t.domain?.replace('pm-domain/', '') ?? '?',
+      expert: t.sourceLabel ?? t.sourceRef.slice(0, 10), domain: t.domain?.replace('pm-domain/', '') ?? '?',
     }))
     const worstTrades = [...closed].sort((a, b) => (a.pnl ?? 0) - (b.pnl ?? 0)).slice(0, 5).map((t) => ({
       title: t.title, side: t.side, entryPrice: t.entryPrice, pnl: t.pnl ?? 0,
-      expert: t.copiedLabel ?? t.copiedFrom.slice(0, 10), domain: t.domain?.replace('pm-domain/', '') ?? '?',
+      expert: t.sourceLabel ?? t.sourceRef.slice(0, 10), domain: t.domain?.replace('pm-domain/', '') ?? '?',
     }))
 
     // Open positions
@@ -326,7 +326,7 @@ export async function GET(): Promise<NextResponse> {
         const sharesNow = t.sharesRemaining ?? t.shares
         const fraction = t.shares > 0 ? sharesNow / t.shares : 1
         const unrealized = t.curPrice != null
-          ? sharesNow * t.curPrice * (1 - POLYMARKET_FEE_RATE) - t.simulatedUsdc * fraction
+          ? sharesNow * t.curPrice * (1 - POLYMARKET_FEE_RATE) - t.sizeUsdc * fraction
           : 0
         return {
           title: t.title,
@@ -334,7 +334,7 @@ export async function GET(): Promise<NextResponse> {
           entryPrice: t.entryPrice,
           curPrice: t.curPrice ?? t.entryPrice,
           unrealized,
-          expert: t.copiedLabel ?? t.copiedFrom.slice(0, 10),
+          expert: t.sourceLabel ?? t.sourceRef.slice(0, 10),
           domain: t.domain?.replace('pm-domain/', '') ?? '?',
         }
       })

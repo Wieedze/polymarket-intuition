@@ -40,7 +40,7 @@ import {
   savePendingOrder,
   getPendingOrders,
   removePendingOrder,
-  type PaperTrade,
+  type Position,
   getWalletStats,
   updateWalletCopyability,
 } from '../src/lib/db'
@@ -127,15 +127,15 @@ function getDynamicBetSize(): number {
 }
 
 // ── Live paper trades filter ─────────────────────────────────────
-// Live trades are stored as paper_trades with copiedLabel starting with "[LIVE]"
+// Live trades are stored as paper_trades with sourceLabel starting with "[LIVE]"
 // This keeps them separate from pure paper trades.
 
-function getLivePaperTrades(): PaperTrade[] {
-  return getAllPaperTrades().filter((t) => t.copiedLabel?.startsWith('[LIVE]'))
+function getLivePaperTrades(): Position[] {
+  return getAllPaperTrades().filter((t) => t.sourceLabel?.startsWith('[LIVE]'))
 }
 
-function getOpenLiveTrades(): PaperTrade[] {
-  return getOpenPaperTrades().filter((t) => t.copiedLabel?.startsWith('[LIVE]'))
+function getOpenLiveTrades(): Position[] {
+  return getOpenPaperTrades().filter((t) => t.sourceLabel?.startsWith('[LIVE]'))
 }
 
 // ── Exit strategy config (same as auto-trader) ───────────────────
@@ -276,13 +276,13 @@ async function checkPendingOrders(): Promise<void> {
           domain: po.domain,
           side: po.side,
           entryPrice: filledPrice,
-          simulatedUsdc: po.simulatedUsdc,
-          copiedFrom: po.copiedFrom,
-          copiedLabel: po.copiedLabel,
+          sizeUsdc: po.sizeUsdc,
+          sourceRef: po.sourceRef,
+          sourceLabel: po.sourceLabel,
         })
         removePendingOrder(po.orderId)
-        console.log(`  ✅ BUY FILLED | ${po.side} @ ${(filledPrice * 100).toFixed(0)}¢ | $${po.simulatedUsdc.toFixed(2)} | ${po.title.slice(0, 40)}`)
-        logBotEvent('live-filled', `BUY FILLED ${po.side} @ ${(filledPrice * 100).toFixed(0)}¢ $${po.simulatedUsdc.toFixed(2)} | ${po.title}`, `orderId:${po.orderId.slice(0, 12)}`)
+        console.log(`  ✅ BUY FILLED | ${po.side} @ ${(filledPrice * 100).toFixed(0)}¢ | $${po.sizeUsdc.toFixed(2)} | ${po.title.slice(0, 40)}`)
+        logBotEvent('live-filled', `BUY FILLED ${po.side} @ ${(filledPrice * 100).toFixed(0)}¢ $${po.sizeUsdc.toFixed(2)} | ${po.title}`, `orderId:${po.orderId.slice(0, 12)}`)
       } else {
         // SELL FILLED — NOW we resolve/partial the paper trade
         const filledPrice = status.filledPrice ?? po.exitPrice ?? po.entryPrice
@@ -294,7 +294,7 @@ async function checkPendingOrders(): Promise<void> {
           // Unsubscribe from WS
           const meta = await getTokenId(po.conditionId, po.side)
           if (meta) unsubscribeToken(meta.tokenId)
-          const pnl = (po.simulatedUsdc / po.entryPrice) * (filledPrice - po.entryPrice)
+          const pnl = (po.sizeUsdc / po.entryPrice) * (filledPrice - po.entryPrice)
           console.log(`  ✅ SELL FILLED | ${po.exitReason} | ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)} @ ${(filledPrice * 100).toFixed(0)}¢ | ${po.title.slice(0, 40)}`)
         }
         removePendingOrder(po.orderId)
@@ -360,7 +360,7 @@ function canCopy(alert: PositionAlert): boolean {
   if (openTrades.length >= getMaxOpen()) return false
 
   const equity = getCurrentEquity()
-  const totalInvested = openTrades.reduce((s, t) => s + t.simulatedUsdc, 0)
+  const totalInvested = openTrades.reduce((s, t) => s + t.sizeUsdc, 0)
   const betSize = getDynamicBetSize()
   if (totalInvested + betSize > equity * getMaxCapitalPct()) return false
 
@@ -547,9 +547,9 @@ async function tryCopyWithSignal(alert: PositionAlert): Promise<boolean> {
         domain: domain?.domain ?? null,
         side,
         entryPrice: orderPrice,
-        simulatedUsdc: liveBetAmount,
-        copiedFrom: alert.wallet,
-        copiedLabel: `[LIVE] ${alert.walletLabel ?? alert.wallet.slice(0, 10)}`,
+        sizeUsdc: liveBetAmount,
+        sourceRef: alert.wallet,
+        sourceLabel: `[LIVE] ${alert.walletLabel ?? alert.wallet.slice(0, 10)}`,
         placedAt: new Date().toISOString(),
         orderType: 'BUY',
         exitPrice: null,
@@ -586,12 +586,12 @@ async function refreshOpenPrices(): Promise<number> {
   // 2. Expert positions fallback — for trades where WS has no data
   const tradesWithoutPrice = openTrades.filter((t) => {
     // Skip if WS already updated this trade
-    return !updated || t.copiedFrom === 'on-chain-sync'
+    return !updated || t.sourceRef === 'on-chain-sync'
   })
   const wallets = [...new Set(
     tradesWithoutPrice
-      .filter((t) => t.copiedFrom !== 'on-chain-sync')
-      .map((t) => t.copiedFrom)
+      .filter((t) => t.sourceRef !== 'on-chain-sync')
+      .map((t) => t.sourceRef)
   )]
 
   for (const wallet of wallets) {
@@ -681,7 +681,7 @@ async function runExitStrategy(): Promise<Record<string, number>> {
   // Check if experts still hold their positions
   const expertPositions = new Map<string, Set<string>>()
   if (EXIT_CONFIG.followExpertExit) {
-    const wallets = [...new Set(openTrades.map((t) => t.copiedFrom))]
+    const wallets = [...new Set(openTrades.map((t) => t.sourceRef))]
     for (const w of wallets) {
       const snapshot = getPositionSnapshot(w)
       expertPositions.set(w, new Set(snapshot.keys()))
@@ -699,8 +699,8 @@ async function runExitStrategy(): Promise<Record<string, number>> {
     if (pendingSellConditions.has(trade.conditionId)) continue
 
     let expertStillHolding: boolean | null = null
-    if (EXIT_CONFIG.followExpertExit && trade.copiedFrom !== 'on-chain-sync') {
-      const expertKeys = expertPositions.get(trade.copiedFrom)
+    if (EXIT_CONFIG.followExpertExit && trade.sourceRef !== 'on-chain-sync') {
+      const expertKeys = expertPositions.get(trade.sourceRef)
       if (expertKeys) {
         const key0 = `${trade.conditionId}-0`
         const key1 = `${trade.conditionId}-1`
@@ -747,9 +747,9 @@ async function runExitStrategy(): Promise<Record<string, number>> {
               domain: trade.domain ?? null,
               side: trade.side,
               entryPrice: trade.entryPrice,
-              simulatedUsdc: trade.simulatedUsdc,
-              copiedFrom: trade.copiedFrom,
-              copiedLabel: trade.copiedLabel,
+              sizeUsdc: trade.sizeUsdc,
+              sourceRef: trade.sourceRef,
+              sourceLabel: trade.sourceLabel,
               placedAt: new Date().toISOString(),
               orderType: 'SELL',
               exitPrice,
@@ -793,9 +793,9 @@ async function runExitStrategy(): Promise<Record<string, number>> {
               domain: trade.domain ?? null,
               side: trade.side,
               entryPrice: trade.entryPrice,
-              simulatedUsdc: trade.simulatedUsdc,
-              copiedFrom: trade.copiedFrom,
-              copiedLabel: trade.copiedLabel,
+              sizeUsdc: trade.sizeUsdc,
+              sourceRef: trade.sourceRef,
+              sourceLabel: trade.sourceLabel,
               placedAt: new Date().toISOString(),
               orderType: 'SELL',
               exitPrice,
@@ -828,7 +828,7 @@ function printStats(): void {
     if (t.curPrice == null) return s
     const sharesNow = t.sharesRemaining ?? t.shares
     const fraction = sharesNow / t.shares
-    return s + sharesNow * t.curPrice * (1 - 0.02) - t.simulatedUsdc * fraction
+    return s + sharesNow * t.curPrice * (1 - 0.02) - t.sizeUsdc * fraction
   }, 0)
   const startBal = parseFloat(getPortfolioSetting('starting_balance', '9'))
   const balance = startBal + realizedPnl
@@ -836,7 +836,7 @@ function printStats(): void {
     ? won.length / (won.length + lost.length)
     : 0
 
-  const totalInvested = open.reduce((s, t) => s + t.simulatedUsdc, 0)
+  const totalInvested = open.reduce((s, t) => s + t.sizeUsdc, 0)
   const cash = startBal + realizedPnl - totalInvested
   const nextBet = getDynamicBetSize()
 
@@ -1006,9 +1006,9 @@ async function pollOnce(): Promise<void> {
         domain: keywordClassify(pos.title)?.domain ?? null,
         side,
         entryPrice: pos.avgPrice,
-        simulatedUsdc: pos.size * pos.avgPrice,
-        copiedFrom: 'on-chain-sync',
-        copiedLabel: '[LIVE] synced from on-chain',
+        sizeUsdc: pos.size * pos.avgPrice,
+        sourceRef: 'on-chain-sync',
+        sourceLabel: '[LIVE] synced from on-chain',
       })
       updatePaperTradePrice(pos.conditionId, pos.curPrice)
       console.log(`  📥 SYNCED FROM CHAIN | ${side} ${pos.size.toFixed(1)} shares @ ${(pos.avgPrice * 100).toFixed(0)}¢ → ${(pos.curPrice * 100).toFixed(0)}¢ | ${pos.title.slice(0, 50)}`)
@@ -1193,12 +1193,12 @@ async function main(): Promise<void> {
             domain: po.domain,
             side: po.side,
             entryPrice: confirmedPrice,
-            simulatedUsdc: po.simulatedUsdc,
-            copiedFrom: po.copiedFrom,
-            copiedLabel: po.copiedLabel,
+            sizeUsdc: po.sizeUsdc,
+            sourceRef: po.sourceRef,
+            sourceLabel: po.sourceLabel,
           })
           subscribeToken(tokenIdCache.get(`${po.conditionId}-${po.side}`)?.tokenId ?? '')
-          console.log(`  💰 BUY FILLED (verified) | ${po.side} @ ${(confirmedPrice * 100).toFixed(0)}¢ | $${po.simulatedUsdc.toFixed(2)} | ${po.title.slice(0, 40)}`)
+          console.log(`  💰 BUY FILLED (verified) | ${po.side} @ ${(confirmedPrice * 100).toFixed(0)}¢ | $${po.sizeUsdc.toFixed(2)} | ${po.title.slice(0, 40)}`)
         } else {
           const exitPrice = verified.filledPrice ?? po.exitPrice ?? confirmedPrice
           if (po.partialFraction) {

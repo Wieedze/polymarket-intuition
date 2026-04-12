@@ -1,9 +1,14 @@
 /**
- * Sports Arbitrage Trader
+ * Sports Arbitrage Trader — INDEPENDENT from the copy-trader (live-trader.ts)
  *
- * Autonomous sports betting bot — generates signals by comparing
- * Polymarket prices with bookmaker consensus odds (via the-odds-api.com).
- * No expert copying — pure cross-platform arbitrage.
+ * Strategy: cross-platform arbitrage. Compares Polymarket prices with
+ * bookmaker consensus odds (FanDuel, DraftKings, Pinnacle, etc. via
+ * the-odds-api.com). Removes vig, computes fair probabilities, and buys
+ * when Polymarket underprices an outcome vs bookmaker consensus (edge >= 4pts).
+ *
+ * NO expert copying — pure mathematical edge from price discrepancies.
+ * Uses its own DB (sports.db), separate from the copy-trader (live.db).
+ * Shares the same on-chain wallet for order execution.
  *
  * Usage:
  *   node_modules/.bin/tsx scripts/sports-trader.ts
@@ -13,9 +18,9 @@
  *   POLYMARKET_PRIVATE_KEY     # (if DRY_RUN=false)
  *
  * Optional env:
- *   DB_PATH=data/sports.db     # separate DB for sports trades
+ *   DB_PATH=data/sports.db     # separate DB (NOT live.db)
  *   SHARED_DB_PATH=data/polymarket.db
- *   STARTING_BALANCE=50        # bankroll
+ *   STARTING_BALANCE=50        # bankroll (independent from live-trader)
  *   POLL_INTERVAL_MS=300000    # 5 min poll cycle
  *   SCAN_INTERVAL_MS=3600000   # 1h market rescan
  *   MAX_OPEN_TRADES=20
@@ -40,7 +45,7 @@ import {
   removePendingOrder,
   getActiveSportsMarkets,
   saveSportsMarket,
-  type PaperTrade,
+  type Position,
 } from '../src/lib/db'
 import { fetchMarketMetadata } from '../src/lib/polymarket'
 import { evaluateExit, exitEmoji, type ExitConfig } from '../src/lib/exit-strategy'
@@ -102,13 +107,13 @@ function getCurrentEquity(): number {
   return startBal + realizedPnl
 }
 
-function getOpenSportsTrades(): PaperTrade[] {
-  return getOpenPaperTrades().filter((t) => t.copiedLabel?.startsWith('[SPORTS]'))
+function getOpenSportsTrades(): Position[] {
+  return getOpenPaperTrades().filter((t) => t.sourceLabel?.startsWith('[SPORTS]'))
 }
 
 function getAvailableCash(): number {
   const equity = getCurrentEquity()
-  const invested = getOpenSportsTrades().reduce((sum, t) => sum + t.simulatedUsdc, 0)
+  const invested = getOpenSportsTrades().reduce((sum, t) => sum + t.sizeUsdc, 0)
   return Math.max(equity * 0.70 - invested, 0)  // max 70% deployed
 }
 
@@ -169,9 +174,9 @@ async function checkPendingOrders(): Promise<void> {
           domain: order.domain,
           side: order.side,
           entryPrice: result.filledPrice ?? order.entryPrice,
-          simulatedUsdc: order.simulatedUsdc,
-          copiedFrom: 'sports-arb',
-          copiedLabel: order.copiedLabel,
+          sizeUsdc: order.sizeUsdc,
+          sourceRef: 'sports-arb',
+          sourceLabel: order.sourceLabel,
         })
         removePendingOrder(order.orderId)
         logBotEvent('sports-fill', `FILLED ${order.side} @ ${((result.filledPrice ?? order.entryPrice) * 100).toFixed(0)}¢`, order.title ?? '')
@@ -236,9 +241,9 @@ async function tryPlaceSportsOrder(signal: SportsSignal): Promise<boolean> {
       domain: 'pm-domain/sports',
       side: signal.side,
       entryPrice: orderPrice,
-      simulatedUsdc: betAmount,
-      copiedFrom: 'sports-arb',
-      copiedLabel: `[SPORTS] ${signal.sport}`,
+      sizeUsdc: betAmount,
+      sourceRef: 'sports-arb',
+      sourceLabel: `[SPORTS] ${signal.sport}`,
     })
     logBotEvent('sports-dry', `${signal.side} @ ${(entryPrice * 100).toFixed(0)}¢ $${betAmount.toFixed(2)}`, `${edgeTag} | ${signal.title.slice(0, 60)}`)
     return true
@@ -267,9 +272,9 @@ async function tryPlaceSportsOrder(signal: SportsSignal): Promise<boolean> {
         domain: 'pm-domain/sports',
         side: signal.side,
         entryPrice: result.filledPrice,
-        simulatedUsdc: betAmount,
-        copiedFrom: 'sports-arb',
-        copiedLabel: `[SPORTS] ${signal.sport}`,
+        sizeUsdc: betAmount,
+        sourceRef: 'sports-arb',
+        sourceLabel: `[SPORTS] ${signal.sport}`,
       })
       subscribeToken(tokenId)
       logBotEvent('sports-fill', `FILLED ${signal.side} @ ${(result.filledPrice * 100).toFixed(0)}¢ $${betAmount.toFixed(2)}`, `${edgeTag} | ${signal.title.slice(0, 60)}`)
@@ -283,9 +288,9 @@ async function tryPlaceSportsOrder(signal: SportsSignal): Promise<boolean> {
         domain: 'pm-domain/sports',
         side: signal.side,
         entryPrice: orderPrice,
-        simulatedUsdc: betAmount,
-        copiedFrom: 'sports-arb',
-        copiedLabel: `[SPORTS] ${signal.sport}`,
+        sizeUsdc: betAmount,
+        sourceRef: 'sports-arb',
+        sourceLabel: `[SPORTS] ${signal.sport}`,
         placedAt: new Date().toISOString(),
       })
       subscribeToken(tokenId)
@@ -424,17 +429,17 @@ function resolveCompletedTrades(): void {
 
 function printStats(): void {
   const startBal = getStartBal()
-  const allTrades = getAllPaperTrades().filter((t) => t.copiedLabel?.startsWith('[SPORTS]'))
+  const allTrades = getAllPaperTrades().filter((t) => t.sourceLabel?.startsWith('[SPORTS]'))
   const resolved = allTrades.filter((t) => t.status !== 'open')
   const won = resolved.filter((t) => t.status === 'won').length
   const lost = resolved.filter((t) => t.status === 'lost').length
   const realizedPnl = resolved.reduce((s, t) => s + (t.pnl ?? 0), 0)
   const openTrades = allTrades.filter((t) => t.status === 'open')
-  const invested = openTrades.reduce((s, t) => s + t.simulatedUsdc, 0)
+  const invested = openTrades.reduce((s, t) => s + t.sizeUsdc, 0)
   const unrealizedPnl = openTrades.reduce((s, t) => {
     const shares = t.sharesRemaining ?? t.shares
     const cur = t.curPrice ?? t.entryPrice
-    return s + (shares * cur * 0.98 - t.simulatedUsdc * (shares / t.shares))
+    return s + (shares * cur * 0.98 - t.sizeUsdc * (shares / t.shares))
   }, 0)
   const cash = startBal + realizedPnl - invested
   const wr = won + lost > 0 ? ((won / (won + lost)) * 100).toFixed(0) : '0'
@@ -509,7 +514,7 @@ async function pollOnce(): Promise<void> {
   const ranked = rankSignals(signals)
 
   const openCount = getOpenSportsTrades().length
-  let copied = 0
+  let placed = 0
 
   if (ranked.length > 0) {
     console.log(`  📊 ${ranked.length} signals | top: ${ranked[0].side} ${(ranked[0].edge * 100).toFixed(1)}pts edge @ ${(ranked[0].polymarketPrice * 100).toFixed(0)}¢ | ${ranked[0].title.slice(0, 35)}`)
@@ -524,17 +529,17 @@ async function pollOnce(): Promise<void> {
   for (const signal of ranked) {
     if (signal.signalScore < MIN_SIGNAL_SCORE) continue
     if (paperTradeExistsForCondition(signal.conditionId)) continue
-    if (openCount + copied >= MAX_OPEN) break
+    if (openCount + placed >= MAX_OPEN) break
 
     const success = await tryPlaceSportsOrder(signal)
-    if (success) copied++
+    if (success) placed++
   }
 
   // Manage exits
   runExitStrategy()
   resolveCompletedTrades()
 
-  console.log(`  → ${allNoVigGames.length} games | ${ranked.length} signals | ${copied} copied | ${openCount} open`)
+  console.log(`  → ${allNoVigGames.length} games | ${ranked.length} signals | ${placed} placed | ${openCount} open`)
   printStats()
 }
 
@@ -607,9 +612,9 @@ async function main(): Promise<void> {
             domain: pending.domain,
             side: pending.side,
             entryPrice: filledPrice,
-            simulatedUsdc: pending.simulatedUsdc,
-            copiedFrom: 'sports-arb',
-            copiedLabel: pending.copiedLabel,
+            sizeUsdc: pending.sizeUsdc,
+            sourceRef: 'sports-arb',
+            sourceLabel: pending.sourceLabel,
           })
           removePendingOrder(orderId)
         },

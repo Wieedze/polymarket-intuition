@@ -9,7 +9,7 @@
  *   - Daily equity curve
  */
 
-import { getAllPaperTrades, getPortfolioSetting, type PaperTrade } from '../src/lib/db'
+import { getAllPositions, getPortfolioSetting, type Position } from '../src/lib/db'
 
 // ── Helpers ──────────────────────────────────────────────────────
 
@@ -24,11 +24,11 @@ function groupBy<T>(arr: T[], key: (item: T) => string): Map<string, T[]> {
   return map
 }
 
-function pnlOf(trades: PaperTrade[]): number {
+function pnlOf(trades: Position[]): number {
   return trades.reduce((s, t) => s + (t.pnl ?? 0), 0)
 }
 
-function wrOf(trades: PaperTrade[]): number {
+function wrOf(trades: Position[]): number {
   // AUDIT: only closed trades — never open — to avoid bias
   const closed = trades.filter((t) => t.status !== 'open')
   if (closed.length === 0) return 0
@@ -45,7 +45,7 @@ function pnlStr(n: number): string {
  * Profit Factor = gross wins / gross losses
  * > 1.0 = profitable | > 1.3 = good | > 2.0 = excellent
  */
-function profitFactor(trades: PaperTrade[]): number {
+function profitFactor(trades: Position[]): number {
   let wins = 0
   let losses = 0
   for (const t of trades) {
@@ -59,7 +59,7 @@ function profitFactor(trades: PaperTrade[]): number {
 /**
  * Max consecutive losses — key drawdown metric
  */
-function maxConsecutiveLosses(trades: PaperTrade[]): number {
+function maxConsecutiveLosses(trades: Position[]): number {
   // Sort by resolution date for accurate streak tracking
   const sorted = [...trades].sort((a, b) =>
     (a.resolvedAt ?? a.openedAt).localeCompare(b.resolvedAt ?? b.openedAt)
@@ -105,7 +105,7 @@ function significanceLabel(n: number): string {
 /**
  * Average PnL per trade (realized only)
  */
-function avgPnlPerTrade(trades: PaperTrade[]): number {
+function avgPnlPerTrade(trades: Position[]): number {
   if (trades.length === 0) return 0
   return pnlOf(trades) / trades.length
 }
@@ -114,11 +114,11 @@ function avgPnlPerTrade(trades: PaperTrade[]): number {
  * Daily equity curve — maps each day to cumulative realized PnL
  */
 function buildEquityCurve(
-  closed: PaperTrade[],
+  closed: Position[],
   startBal: number
 ): Array<{ day: string; balance: number; dailyPnl: number; trades: number }> {
   // Group by resolution date
-  const byDay = new Map<string, PaperTrade[]>()
+  const byDay = new Map<string, Position[]>()
   for (const t of closed) {
     const day = (t.resolvedAt ?? t.openedAt).slice(0, 10)
     const existing = byDay.get(day) ?? []
@@ -140,7 +140,7 @@ function buildEquityCurve(
 // ── Main ─────────────────────────────────────────────────────────
 
 function main(): void {
-  const all = getAllPaperTrades()
+  const all = getAllPositions()
   const open = all.filter((t) => t.status === 'open')
   const closed = all.filter((t) => t.status !== 'open')
   const won = closed.filter((t) => t.status === 'won')
@@ -301,7 +301,7 @@ function main(): void {
     console.log(`  ${'Expert'.padEnd(25)} ${'Trades'.padStart(6)} ${'WR'.padStart(6)} ${'PnL'.padStart(12)} ${'Avg'.padStart(8)} ${'MCL'.padStart(5)}`)
     console.log('  ' + '─'.repeat(62))
 
-    const byExpert = groupBy(closed, (t) => t.copiedLabel ?? t.copiedFrom.slice(0, 10))
+    const byExpert = groupBy(closed, (t) => t.sourceLabel ?? t.sourceRef.slice(0, 10))
     const expertEntries = [...byExpert.entries()]
       .sort((a, b) => pnlOf(b[1]) - pnlOf(a[1]))
       .slice(0, 15)

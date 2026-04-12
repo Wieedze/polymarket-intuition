@@ -17,4 +17,5 @@ fi
 
 # Run bot (defaults to live-trader, override with BOT_SCRIPT env)
 SCRIPT="${BOT_SCRIPT:-scripts/live-trader.ts}"
+echo "🚀 Starting: $SCRIPT"
 exec node_modules/.bin/tsx "$SCRIPT"
