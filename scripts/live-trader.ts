@@ -350,6 +350,12 @@ function canCopy(alert: PositionAlert): boolean {
     console.log(`  ⏭️  ALREADY TRADED | ${alert.position.title.slice(0, 40)}`)
     return false
   }
+  // Check pending orders too — prevent duplicate GTC orders for same market
+  const pendingOrders = getPendingOrders()
+  if (pendingOrders.some(po => po.conditionId === alert.position.conditionId)) {
+    console.log(`  ⏭️  PENDING ORDER | ${alert.position.title.slice(0, 40)}`)
+    return false
+  }
 
   const openTrades = getOpenLiveTrades()
   if (openTrades.length >= getMaxOpen()) return false
@@ -525,24 +531,11 @@ async function tryCopyWithSignal(alert: PositionAlert): Promise<boolean> {
       return false
     }
 
-    if (result.filledPrice) {
-      // Filled immediately — record paper trade
-      console.log(`  💰 LIVE ${scoreTag} FILLED | ${side} @ ${(rawPrice * 100).toFixed(0)}¢→${(result.filledPrice * 100).toFixed(0)}¢ | $${liveBetAmount.toFixed(2)}${consensusTag}${trustTag} | ${kellyTag} | ${stopTag}${oddsTag} | ${alert.position.title.slice(0, 40)} ${domainTag}`)
-      logBotEvent('live-copy', `FILLED ${side} @ ${(result.filledPrice * 100).toFixed(0)}¢ $${liveBetAmount.toFixed(2)} | ${alert.position.title}`, `Score: ${signal.score}/100 | ${kellyTag}`)
-
-      openPaperTrade({
-        conditionId: alert.position.conditionId,
-        title: alert.position.title,
-        domain: domain?.domain ?? null,
-        side,
-        entryPrice: result.filledPrice,
-        simulatedUsdc: liveBetAmount,
-        copiedFrom: alert.wallet,
-        copiedLabel: `[LIVE] ${alert.walletLabel ?? alert.wallet.slice(0, 10)}`,
-      })
-    } else if (result.orderId) {
-      // GTC pending — save to DB, User WS will notify when filled
-      console.log(`  📋 LIVE ${scoreTag} GTC PLACED | ${side} @ ${(orderPrice * 100).toFixed(0)}¢ | $${liveBetAmount.toFixed(2)}${consensusTag} | ${kellyTag} | orderId:${result.orderId.slice(0, 12)} | ${alert.position.title.slice(0, 40)} ${domainTag}`)
+    // ALL orders go through pending flow — no immediate paper trade
+    // checkPendingOrders() or WS callback will create the paper trade after on-chain verification
+    if (result.orderId) {
+      const status = result.filledPrice ? 'FILLED' : 'PLACED'
+      console.log(`  📋 LIVE ${scoreTag} GTC ${status} | ${side} @ ${(orderPrice * 100).toFixed(0)}¢ | $${liveBetAmount.toFixed(2)}${consensusTag}${trustTag} | ${kellyTag} | orderId:${result.orderId.slice(0, 12)} | ${alert.position.title.slice(0, 40)} ${domainTag}`)
       logBotEvent('live-gtc', `GTC ${side} @ ${(orderPrice * 100).toFixed(0)}¢ $${liveBetAmount.toFixed(2)} | ${alert.position.title}`, `Score: ${signal.score}/100 | timeout: 5min`)
 
       savePendingOrder({
@@ -562,7 +555,6 @@ async function tryCopyWithSignal(alert: PositionAlert): Promise<boolean> {
         exitReason: null,
       })
 
-      // Subscribe User WS to this market for fill notifications
       subscribeUserMarket(alert.position.conditionId)
     }
   }
@@ -630,41 +622,49 @@ type PositionRecord = {
   redeemable: boolean
 }
 
-async function resolveCompletedTrades(): Promise<number> {
+async function resolveCompletedTrades(redeemedConditionIds: Set<string>): Promise<number> {
   const openTrades = getOpenLiveTrades()
   if (openTrades.length === 0) return 0
 
-  const wallets = [...new Set(openTrades.map((t) => t.copiedFrom))]
+  // Collect our own on-chain positions to check for zero-size
+  let ownPositions: RealPosition[] = []
+  try {
+    ownPositions = await getRealPositions()
+  } catch {
+    // If we can't fetch, only resolve already-redeemed
+  }
+  const ownSizeByCondition = new Map<string, number>()
+  for (const p of ownPositions) {
+    ownSizeByCondition.set(p.conditionId, (ownSizeByCondition.get(p.conditionId) ?? 0) + p.size)
+  }
+
   let resolved = 0
 
-  for (const wallet of wallets) {
-    try {
-      const positions = await fetchAllPages<PositionRecord>(
-        `${POLYMARKET_DATA_URL}/positions?user=${wallet}&sizeThreshold=0&closed=true`,
-        2
-      )
+  for (const trade of openTrades) {
+    const condId = trade.conditionId
+    // Only resolve if already redeemed on-chain OR position is gone (size=0)
+    const wasRedeemed = redeemedConditionIds.has(condId)
+    const sizeOnChain = ownSizeByCondition.get(condId) ?? 0
+    const positionGone = !wasRedeemed && sizeOnChain === 0
 
-      for (const pos of positions) {
-        if (pos.curPrice < 0.05 || pos.curPrice > 0.95) {
-          const matching = openTrades.filter((t) => t.conditionId === pos.conditionId)
-          for (const trade of matching) {
-            resolvePaperTrade(pos.conditionId, pos.curPrice)
-            const result = pos.curPrice > 0.95
-              ? (trade.side === 'YES' ? 'WON' : 'LOST')
-              : (trade.side === 'NO' ? 'WON' : 'LOST')
-            const pnl = trade.shares * (pos.curPrice > 0.95
-              ? (trade.side === 'YES' ? 1 - trade.entryPrice : -trade.entryPrice)
-              : (trade.side === 'NO' ? 1 - trade.entryPrice : -trade.entryPrice))
-            console.log(`  ✅ RESOLVED | ${result} | PnL: ${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)} | ${trade.title}`)
-            logBotEvent('live-resolved', `${result} PnL ${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)} | ${trade.title}`, '')
-            resolved++
-          }
-        }
-      }
-    } catch {
-      // Skip
-    }
-    await new Promise((r) => setTimeout(r, 500))
+    if (!wasRedeemed && !positionGone) continue
+
+    // Determine exit price: redeemed means market resolved, position gone means sold/exited
+    const exitPrice = wasRedeemed
+      ? (trade.curPrice != null && trade.curPrice > 0.5 ? 1 : 0)
+      : (trade.curPrice ?? trade.entryPrice)
+
+    resolvePaperTrade(condId, exitPrice)
+    const result = exitPrice > 0.5
+      ? (trade.side === 'YES' ? 'WON' : 'LOST')
+      : (trade.side === 'NO' ? 'WON' : 'LOST')
+    const pnl = trade.shares * (exitPrice > 0.5
+      ? (trade.side === 'YES' ? 1 - trade.entryPrice : -trade.entryPrice)
+      : (trade.side === 'NO' ? 1 - trade.entryPrice : -trade.entryPrice))
+    const reason = wasRedeemed ? 'redeemed' : 'position-gone'
+    console.log(`  ✅ RESOLVED (${reason}) | ${result} | PnL: ${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)} | ${trade.title}`)
+    logBotEvent('live-resolved', `${result} PnL ${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)} | ${trade.title}`, reason)
+    resolved++
   }
 
   return resolved
@@ -958,17 +958,18 @@ async function pollOnce(): Promise<void> {
   const exits = await runExitStrategy()
   const totalExits = Object.values(exits).reduce((s, n) => s + n, 0)
   const exitSummary = Object.entries(exits).map(([k, v]) => `${v} ${k}`).join(', ')
-  const resolved = await resolveCompletedTrades()
-
-  // ── Phase 4: Redeem resolved positions on-chain, THEN update DB ──
+  // ── Phase 4: Redeem on-chain FIRST, then resolve DB ──
+  const redeemedConditionIds = new Set<string>()
   if (!DRY_RUN) {
     const redeemed = await redeemAllResolved()
     for (const { conditionId, exitPrice } of redeemed) {
-      // On-chain tx already confirmed — now safe to update DB
+      redeemedConditionIds.add(conditionId)
       resolvePaperTrade(conditionId, exitPrice)
       logBotEvent('live-redeem', `Redeemed @ ${exitPrice > 0 ? '$1' : '$0'} | ${conditionId.slice(0, 16)}`, exitPrice > 0 ? 'WON' : 'LOST')
     }
   }
+
+  const resolved = await resolveCompletedTrades(redeemedConditionIds)
 
   // ── Summary ──
   const parts = [`${allNewAlerts.length} new`, `${copied} copied`]
@@ -1122,28 +1123,44 @@ async function main(): Promise<void> {
   if (apiKey && apiSecret) {
     connectUserWS(
       { apiKey, secret: apiSecret, passphrase: apiPassphrase },
-      // On order fill: create paper trade from pending order
-      (orderId: string, filledPrice: number, _filledSize: number) => {
+      // On order fill: verify on-chain FIRST, then update DB
+      async (orderId: string, filledPrice: number, _filledSize: number) => {
         const pending = getPendingOrders()
         const po = pending.find(p => p.orderId === orderId)
-        if (po) {
+        if (!po) return
+
+        // Double-verify with CLOB API — WS can fire before on-chain settlement
+        const verified = await checkOrderStatus(orderId)
+        if (verified.status !== 'filled') {
+          console.log(`  ⏳ WS says filled but CLOB says "${verified.status}" — waiting | ${po.title.slice(0, 40)}`)
+          return  // checkPendingOrders() will handle it when truly filled
+        }
+
+        const confirmedPrice = verified.filledPrice ?? filledPrice
+        if (po.orderType === 'BUY') {
           openPaperTrade({
             conditionId: po.conditionId,
             title: po.title,
             domain: po.domain,
             side: po.side,
-            entryPrice: filledPrice,
+            entryPrice: confirmedPrice,
             simulatedUsdc: po.simulatedUsdc,
             copiedFrom: po.copiedFrom,
             copiedLabel: po.copiedLabel,
           })
-          removePendingOrder(orderId)
-          subscribeToken(po.side === 'YES'
-            ? (tokenIdCache.get(`${po.conditionId}-YES`)?.tokenId ?? '')
-            : (tokenIdCache.get(`${po.conditionId}-NO`)?.tokenId ?? ''))
-          console.log(`  💰 FILLED via WS | ${po.side} @ ${(filledPrice * 100).toFixed(0)}¢ | $${po.simulatedUsdc.toFixed(2)} | ${po.title.slice(0, 40)}`)
-          logBotEvent('live-filled', `FILLED ${po.side} @ ${(filledPrice * 100).toFixed(0)}¢ $${po.simulatedUsdc.toFixed(2)} | ${po.title}`, `orderId:${orderId.slice(0, 12)}`)
+          subscribeToken(tokenIdCache.get(`${po.conditionId}-${po.side}`)?.tokenId ?? '')
+          console.log(`  💰 BUY FILLED (verified) | ${po.side} @ ${(confirmedPrice * 100).toFixed(0)}¢ | $${po.simulatedUsdc.toFixed(2)} | ${po.title.slice(0, 40)}`)
+        } else {
+          const exitPrice = verified.filledPrice ?? po.exitPrice ?? confirmedPrice
+          if (po.partialFraction) {
+            partialExitPaperTrade(po.conditionId, po.partialFraction, exitPrice)
+          } else {
+            resolvePaperTrade(po.conditionId, exitPrice)
+          }
+          console.log(`  💰 SELL FILLED (verified) | ${po.exitReason} @ ${(exitPrice * 100).toFixed(0)}¢ | ${po.title.slice(0, 40)}`)
         }
+        removePendingOrder(orderId)
+        logBotEvent('live-filled', `${po.orderType} FILLED (verified) @ ${(confirmedPrice * 100).toFixed(0)}¢ | ${po.title}`, `orderId:${orderId.slice(0, 12)}`)
       },
       // On order cancel
       (orderId: string) => {
