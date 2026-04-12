@@ -24,29 +24,16 @@ type WalletPosition = {
   title: string
   side: string
   size: number
-  avgPrice: number
   curPrice: number
   value: number
-  cost: number
   pnl: number
-  pnlPct: number
-  resolved: boolean
 }
 
 type WalletEquity = {
   usdc: number
   positionsValue: number
   totalEquity: number
-  realizedPnl: number
-  unrealizedPnl: number
-  wins: number
-  losses: number
-  winRate: number
-  totalTrades: number
-  openPositions: WalletPosition[]
-  pendingRedeem: WalletPosition[]
-  pendingRedeemValue: number
-  closedTrades: Array<{ title: string; side: string; result: string; pnl: number }>
+  positions: WalletPosition[]
 }
 
 type DashboardData = {
@@ -112,8 +99,6 @@ export default function Dashboard(): React.ReactElement {
 
   useEffect(() => {
     function loadData(): void {
-      // Wallet-equity is the PRIMARY source (on-chain truth)
-      // Snapshot is secondary (DB trade history for charts/events)
       Promise.all([
         fetch('/api/snapshot?mode=live').then(async (res) => {
           if (!res.ok) return null
@@ -145,18 +130,6 @@ export default function Dashboard(): React.ReactElement {
           return await res.json() as WalletEquity
         }).catch(() => null),
       ]).then(([d, w]) => {
-        // Override DB data with on-chain truth
-        if (d && w) {
-          d.totalEquity = w.totalEquity
-          d.realizedPnl = w.realizedPnl
-          d.unrealizedPnl = w.unrealizedPnl
-          d.wins = w.wins
-          d.losses = w.losses
-          d.winRate = w.winRate / 100  // API returns %, dashboard expects 0-1
-          d.openTrades = w.openPositions?.length ?? 0
-          d.totalTrades = w.totalTrades
-          d.balance = w.usdc
-        }
         if (d) setData(d)
         if (w) setWallet(w)
       }).catch(() => null).finally(() => setLoading(false))
@@ -246,15 +219,15 @@ export default function Dashboard(): React.ReactElement {
             />
             <BigStat
               label="Open Trades"
-              value={`${wallet?.openPositions.length ?? data.openTrades}`}
+              value={`${wallet?.positions.length ?? data.openTrades}`}
               sub={`$${(wallet?.positionsValue ?? data.totalInvested).toFixed(0)} on-chain`}
               color={COLORS.blue}
             />
             <BigStat
               label="Unrealized"
-              value={pnlStr(wallet?.unrealizedPnl ?? data.unrealizedPnl)}
+              value={pnlStr(wallet?.positions.reduce((s, p) => s + p.pnl, 0) ?? data.unrealizedPnl)}
               sub="on-chain PnL"
-              color={(wallet?.unrealizedPnl ?? data.unrealizedPnl) >= 0 ? COLORS.teal : COLORS.red}
+              color={(wallet?.positions.reduce((s, p) => s + p.pnl, 0) ?? data.unrealizedPnl) >= 0 ? COLORS.teal : COLORS.red}
             />
           </div>
 
