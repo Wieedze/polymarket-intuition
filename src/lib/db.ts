@@ -761,8 +761,9 @@ export type PositionSnapshotRow = {
 }
 
 export function getPositionSnapshot(wallet: string): Map<string, PositionSnapshotRow> {
-  const db = getSharedDb()  // position snapshots are shared (written by paper auto-trader)
-  const rows = db
+  // Try instance DB first (expert-scanner writes here), fallback to shared DB
+  const instanceDb = getDb()
+  let rows = instanceDb
     .prepare(
       `SELECT condition_id, outcome_index, title, size, avg_price, cur_price
        FROM position_snapshots WHERE wallet = ?`
@@ -775,6 +776,24 @@ export function getPositionSnapshot(wallet: string): Map<string, PositionSnapsho
     avg_price: number
     cur_price: number
   }>
+
+  // Fallback to shared DB if instance has no data (backward compat with auto-trader)
+  if (rows.length === 0 && SHARED_DB_PATH !== DB_PATH) {
+    const sharedDb = getSharedDb()
+    rows = sharedDb
+      .prepare(
+        `SELECT condition_id, outcome_index, title, size, avg_price, cur_price
+         FROM position_snapshots WHERE wallet = ?`
+      )
+      .all(wallet) as Array<{
+      condition_id: string
+      outcome_index: number
+      title: string
+      size: number
+      avg_price: number
+      cur_price: number
+    }>
+  }
 
   const map = new Map<string, PositionSnapshotRow>()
   for (const r of rows) {
@@ -794,8 +813,6 @@ export function savePositionSnapshot(
   wallet: string,
   positions: Array<{ conditionId: string; outcomeIndex: number; title: string; size: number; avgPrice: number; curPrice: number }>
 ): void {
-  // In live mode, paper auto-trader handles snapshots — skip writes from live-trader
-  if (SHARED_DB_PATH !== DB_PATH) return
   const db = getDb()
   // Clear old snapshot
   db.prepare('DELETE FROM position_snapshots WHERE wallet = ?').run(wallet)
