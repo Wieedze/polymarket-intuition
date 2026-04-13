@@ -68,7 +68,6 @@ module.exports = {
         POLL_INTERVAL_MS: '15000',       // 15s — fast signal pickup + exit checks
         MIN_SIGNAL_SCORE_LIVE: '50',     // aligned with paper trading
         STOP_LOSS: '0.50',              // -50% stop-loss (was -40%)
-        TAKE_PROFIT: '0.45',            // +45% take-profit — lock gains
         DRY_RUN: 'false',               // REAL orders
         BOT_SCRIPT: 'scripts/live-trader.ts',
       },
