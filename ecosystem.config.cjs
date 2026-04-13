@@ -9,6 +9,7 @@ module.exports = {
       env: {
         NODE_ENV: 'production',
         PORT: 3000,
+        WALLET_ADDRESS: '0x1acC2880Cca00f61C41eb2b436C4f7D2d09a2fEC',
       },
     },
 

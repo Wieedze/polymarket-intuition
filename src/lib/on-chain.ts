@@ -8,7 +8,7 @@ import { polygon } from 'viem/chains'
 
 // ── Config ──────────────────────────────────────────────────────
 
-const WALLET_ADDRESS = process.env.WALLET_ADDRESS ?? '0x1acC2880Cca00f61C41eb2b436C4f7D2d09a2fEC'
+const WALLET_ADDRESS = process.env.WALLET_ADDRESS ?? ''
 const POLYGON_RPC = process.env.POLYGON_RPC_URL ?? 'https://polygon-bor-rpc.publicnode.com'
 const USDC_ADDRESS = '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174'
 const DATA_API = 'https://data-api.polymarket.com'
@@ -58,6 +58,12 @@ export type ClosedTrade = {
   pnl: number
 }
 
+export type ActivityResult = {
+  trades: ClosedTrade[]
+  totalBoughtUsdc: number
+  totalSoldUsdc: number
+}
+
 export type WalletEquity = {
   wallet: string
   usdc: number
@@ -73,6 +79,8 @@ export type WalletEquity = {
   pendingRedeem: OnChainPosition[]
   pendingRedeemValue: number
   closedTrades: ClosedTrade[]
+  totalBoughtUsdc: number
+  totalSoldUsdc: number
   fetchedAt: string
 }
 
@@ -106,12 +114,13 @@ export async function getPositions(address: string): Promise<RawPosition[]> {
   }
 }
 
-export async function getActivity(address: string): Promise<ClosedTrade[]> {
+export async function getActivity(address: string): Promise<ActivityResult> {
   try {
     const res = await fetch(`${DATA_API}/activity?user=${address}&limit=500&offset=0`)
-    if (!res.ok) return []
+    const empty: ActivityResult = { trades: [], totalBoughtUsdc: 0, totalSoldUsdc: 0 }
+    if (!res.ok) return empty
     const data = await res.json()
-    if (!Array.isArray(data)) return []
+    if (!Array.isArray(data)) return empty
 
     const positionMap = new Map<string, {
       title: string
@@ -182,9 +191,17 @@ export async function getActivity(address: string): Promise<ClosedTrade[]> {
         })
       }
     }
-    return trades
+    // Sum all buys and sells across all positions
+    let totalBoughtUsdc = 0
+    let totalSoldUsdc = 0
+    for (const [, pos] of positionMap) {
+      totalBoughtUsdc += pos.totalBought
+      totalSoldUsdc += pos.totalSold
+    }
+
+    return { trades, totalBoughtUsdc, totalSoldUsdc }
   } catch {
-    return []
+    return { trades: [], totalBoughtUsdc: 0, totalSoldUsdc: 0 }
   }
 }
 
@@ -193,11 +210,12 @@ export async function getActivity(address: string): Promise<ClosedTrade[]> {
 export async function fetchWalletEquity(): Promise<WalletEquity> {
   const address = WALLET_ADDRESS.toLowerCase()
 
-  const [usdc, rawPositions, closedTrades] = await Promise.all([
+  const [usdc, rawPositions, activity] = await Promise.all([
     getUsdcBalance(address),
     getPositions(address),
     getActivity(address),
   ])
+  const { trades: closedTrades, totalBoughtUsdc, totalSoldUsdc } = activity
 
   const active: OnChainPosition[] = rawPositions
     .filter((p) => p.size > 0)
@@ -244,6 +262,8 @@ export async function fetchWalletEquity(): Promise<WalletEquity> {
     pendingRedeem,
     pendingRedeemValue: Math.round(pendingRedeemValue * 100) / 100,
     closedTrades,
+    totalBoughtUsdc: Math.round(totalBoughtUsdc * 100) / 100,
+    totalSoldUsdc: Math.round(totalSoldUsdc * 100) / 100,
     fetchedAt: new Date().toISOString(),
   }
 }

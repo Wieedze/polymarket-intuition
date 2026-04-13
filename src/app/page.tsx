@@ -22,7 +22,7 @@ type WalletData = {
   totalEquity: number; usdc: number; positionsValue: number
   realizedPnl: number; unrealizedPnl: number
   wins: number; losses: number; winRate: number; totalTrades: number
-  startingBalance: number; roi: number
+  totalBoughtUsdc: number; totalSoldUsdc: number; netDeposited: number; pnlPct: number
   openPositions: OpenPosition[]
   pendingRedeem: OpenPosition[]
   pendingRedeemValue: number
@@ -104,12 +104,12 @@ export default function LiveTrading(): React.ReactElement {
           <div className="text-[11px] uppercase tracking-widest mb-1" style={{ color: C.dim }}>Live Equity</div>
           <div className="flex items-baseline gap-2">
             <span className="text-3xl font-semibold" style={{ color: C.bright }}>${data.totalEquity.toFixed(2)}</span>
-            <span className="text-sm" style={{ color: data.roi >= 0 ? C.up : C.down }}>
-              {data.roi >= 0 ? '+' : ''}{(data.roi * 100).toFixed(1)}%
+            <span className="text-sm" style={{ color: data.pnlPct >= 0 ? C.up : C.down }}>
+              {data.pnlPct >= 0 ? '+' : ''}{data.pnlPct.toFixed(1)}%
             </span>
           </div>
           <div className="text-[11px] mt-1" style={{ color: C.dim }}>
-            started ${data.startingBalance.toFixed(0)} / {data.totalTrades} trades
+            deployed ${data.totalBoughtUsdc.toFixed(0)} / sold ${data.totalSoldUsdc.toFixed(0)} / {data.totalTrades} trades
           </div>
         </div>
         <div className="flex gap-6 text-xs">

@@ -8,7 +8,9 @@ export async function GET(): Promise<NextResponse> {
   try {
     const w = await fetchWalletEquity()
 
-    const startingBalance = parseFloat(process.env.STARTING_BALANCE ?? '9')
+    // Capital deployed = total bought on-chain (real money in)
+    // Net PnL = current equity - (totalBought - totalSold) = what you have vs what you put in net
+    const netDeposited = w.totalBoughtUsdc - w.totalSoldUsdc
 
     // ── Domain breakdown from closed trades (classify titles) ────
     const domainMap = new Map<string, { pnl: number; trades: number; won: number }>()
@@ -69,8 +71,10 @@ export async function GET(): Promise<NextResponse> {
       losses: w.losses,
       winRate: w.winRate,
       totalTrades: w.totalTrades,
-      startingBalance,
-      roi: startingBalance > 0 ? (w.totalEquity - startingBalance) / startingBalance : 0,
+      totalBoughtUsdc: w.totalBoughtUsdc,
+      totalSoldUsdc: w.totalSoldUsdc,
+      netDeposited,
+      pnlPct: netDeposited > 0 ? ((w.totalEquity - netDeposited) / netDeposited) * 100 : 0,
 
       // Positions
       openPositions: w.openPositions,
