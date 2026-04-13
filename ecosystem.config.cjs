@@ -40,7 +40,7 @@ module.exports = {
       env: {
         DB_PATH: '/opt/polymarket-intuition/data/live.db',
         SHARED_DB_PATH: '/opt/polymarket-intuition/data/polymarket.db',
-        POLL_INTERVAL_MS: '300000',      // 5 min signal cycle
+        POLL_INTERVAL_MS: '900000',      // 15 min signal cycle (budget: 480 req/day < 666 limit)
         SCAN_INTERVAL_MS: '3600000',     // 1h market rescan on Gamma
         ODDS_CACHE_TTL_MS: '1800000',    // 30 min cache (20k req/month budget)
         MAX_SPORTS: '5',
@@ -65,7 +65,6 @@ module.exports = {
       env: {
         DB_PATH: '/opt/polymarket-intuition/data/live.db',
         SHARED_DB_PATH: '/opt/polymarket-intuition/data/polymarket.db',
-        STARTING_BALANCE: '9',
         POLL_INTERVAL_MS: '15000',       // 15s — fast signal pickup + exit checks
         MIN_SIGNAL_SCORE_LIVE: '40',
         DRY_RUN: 'false',               // REAL orders

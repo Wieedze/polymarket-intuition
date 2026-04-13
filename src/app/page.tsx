@@ -80,50 +80,81 @@ export default function LiveTrading(): React.ReactElement {
 
   useEffect(() => {
     Promise.all([
-      fetch('/api/snapshot?mode=live').then(async (res) => {
-        if (!res.ok) return null
-        const s = await res.json()
-        const p = s.portfolio
-        return {
-          balance: p.currentBalance, startingBalance: p.startingBalance,
-          realizedPnl: p.realizedPnl, partialExitsPnl: p.partialExitsPnl,
-          unrealizedPnl: p.unrealizedPnl, tradingDays: p.tradingDays,
-          avgHoldDays: p.avgHoldDays, totalInvested: p.totalInvested,
-          totalEquity: p.totalEquity, winRate: p.winRate,
-          wins: p.wins, losses: p.losses, openTrades: p.openTrades,
-          totalTrades: p.totalTrades, closedTrades: p.closedTrades ?? 0,
-          roi: p.roi, availableCash: p.availableCash ?? 0,
-          chartData: s.chartData, equityCurve: s.equityCurve ?? [],
-          events: s.events, domains: s.byDomain,
-          experts: s.byExpert ?? [], topOpen: s.topOpen ?? [],
-          bestTrades: s.bestTrades ?? [], worstTrades: s.worstTrades ?? [],
-          bySide: s.bySide ?? { yes: { trades: 0, won: 0, winRate: 0, pnl: 0 }, no: { trades: 0, won: 0, winRate: 0, pnl: 0 } },
-          byEntry: s.byEntry ?? [], costs: s.costs ?? {},
-          gates: s.gates ?? {}, stats: s.stats ?? {},
-          expertTrust: s.expertTrust ?? [],
-          risk: s.risk ?? { maxDrawdown: 0, currentDrawdown: 0, peakEquity: 0, topConcentration: 0, top3Concentration: 0, openCount: 0, cashPct: 1 },
-        } as LiveData
-      }),
+      // PRIMARY: on-chain data (wallet-equity) = source of truth
       fetch('/api/wallet-equity').then(async (res) => {
         if (!res.ok) return null
         return await res.json() as Record<string, unknown>
       }).catch(() => null),
-    ]).then(([d, w]) => {
-      // Override DB data with on-chain truth from wallet-equity
-      if (d && w) {
-        d.totalEquity = (w.totalEquity as number) ?? d.totalEquity
-        d.realizedPnl = (w.realizedPnl as number) ?? d.realizedPnl
-        d.unrealizedPnl = (w.unrealizedPnl as number) ?? d.unrealizedPnl
-        d.wins = (w.wins as number) ?? d.wins
-        d.losses = (w.losses as number) ?? d.losses
-        d.winRate = ((w.winRate as number) ?? 0) / 100
-        d.openTrades = ((w.openPositions as Array<unknown>) ?? []).length
-        d.totalTrades = (w.totalTrades as number) ?? d.totalTrades
-        d.availableCash = (w.usdc as number) ?? d.availableCash
-        d.balance = (w.usdc as number) ?? d.balance
+      // SECONDARY: DB data (snapshot) = charts, events, domain stats only
+      fetch('/api/snapshot?mode=live').then(async (res) => {
+        if (!res.ok) return null
+        return await res.json()
+      }).catch(() => null),
+    ]).then(([w, s]) => {
+      if (!w) { setLoading(false); return }
+
+      const usdc = (w.usdc as number) ?? 0
+      const positionsValue = (w.positionsValue as number) ?? 0
+      const totalEquity = (w.totalEquity as number) ?? 0
+      const realizedPnl = (w.realizedPnl as number) ?? 0
+      const unrealizedPnl = (w.unrealizedPnl as number) ?? 0
+      const wins = (w.wins as number) ?? 0
+      const losses = (w.losses as number) ?? 0
+      const winRate = (w.winRate as number) ?? 0
+      const totalTrades = (w.totalTrades as number) ?? 0
+      const openPositions = (w.openPositions as Array<unknown>) ?? []
+      const startingBalance = 9  // known starting point
+
+      // Build LiveData from on-chain truth + DB historical data
+      const p = s?.portfolio ?? {}
+      const d: LiveData = {
+        // Core metrics from ON-CHAIN (wallet-equity)
+        totalEquity,
+        balance: usdc,
+        availableCash: usdc,
+        realizedPnl,
+        unrealizedPnl,
+        wins,
+        losses,
+        winRate: winRate / 100,
+        totalTrades,
+        openTrades: openPositions.length,
+        totalInvested: positionsValue,
+        startingBalance,
+        roi: startingBalance > 0 ? (totalEquity - startingBalance) / startingBalance : 0,
+
+        // Historical data from DB (charts, events, domain breakdown)
+        partialExitsPnl: p.partialExitsPnl ?? 0,
+        tradingDays: p.tradingDays ?? 1,
+        avgHoldDays: p.avgHoldDays ?? 0,
+        closedTrades: p.closedTrades ?? totalTrades,
+        chartData: s?.chartData ?? [],
+        equityCurve: s?.equityCurve ?? [],
+        events: s?.events ?? [],
+        domains: s?.byDomain ?? [],
+        experts: s?.byExpert ?? [],
+        topOpen: s?.topOpen ?? [],
+        bestTrades: s?.bestTrades ?? [],
+        worstTrades: s?.worstTrades ?? [],
+        bySide: s?.bySide ?? { yes: { trades: 0, won: 0, winRate: 0, pnl: 0 }, no: { trades: 0, won: 0, winRate: 0, pnl: 0 } },
+        byEntry: s?.byEntry ?? [],
+        costs: s?.costs ?? {},
+        gates: s?.gates ?? {},
+        stats: s?.stats ?? {},
+        expertTrust: s?.expertTrust ?? [],
+        risk: {
+          maxDrawdown: s?.risk?.maxDrawdown ?? 0,
+          currentDrawdown: s?.risk?.currentDrawdown ?? 0,
+          peakEquity: s?.risk?.peakEquity ?? totalEquity,
+          topConcentration: openPositions.length > 0 ? Math.max(...(openPositions as Array<Record<string, unknown>>).map((p) => ((p.value as number) ?? 0) / (totalEquity || 1))) : 0,
+          top3Concentration: 0,
+          openCount: openPositions.length,
+          cashPct: totalEquity > 0 ? usdc / totalEquity : 1,
+        },
       }
-      if (d) setData(d)
-      if (w) setWalletData({
+
+      setData(d)
+      setWalletData({
         pendingRedeem: (w.pendingRedeem as WalletData['pendingRedeem']) ?? [],
         closedTrades: (w.closedTrades as WalletData['closedTrades']) ?? [],
         openPositions: (w.openPositions as WalletData['openPositions']) ?? [],

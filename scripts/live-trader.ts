@@ -711,35 +711,33 @@ async function runExitStrategy(): Promise<Record<string, number>> {
 // ── Stats ────────────────────────────────────────────────────────
 
 function printStats(): void {
+  // On-chain data = source of truth
+  const equity = getCurrentEquity()
+  const cash = getAvailableCash()
+  const posValue = _cachedPositions.reduce((s, p) => s + p.size * p.curPrice, 0)
+  const posCost = _cachedPositions.reduce((s, p) => s + p.size * p.avgPrice, 0)
+  const unrealizedPnl = posValue - posCost
+  const openCount = _cachedPositions.length
+  const nextBet = getDynamicBetSize()
+
+  // DB data for resolved trades stats
   const all = getLivePaperTrades()
-  const open = all.filter((t) => t.status === 'open')
   const won = all.filter((t) => t.status === 'won')
   const lost = all.filter((t) => t.status === 'lost')
   const realizedPnl = [...won, ...lost].reduce((s, t) => s + (t.pnl ?? 0), 0)
-  const unrealizedPnl = open.reduce((s, t) => {
-    if (t.curPrice == null) return s
-    const sharesNow = t.sharesRemaining ?? t.shares
-    const fraction = sharesNow / t.shares
-    return s + sharesNow * t.curPrice * (1 - 0.02) - t.sizeUsdc * fraction
-  }, 0)
-  const startBal = parseFloat(getPortfolioSetting('starting_balance', '9'))
-  const balance = startBal + realizedPnl
   const winRate = (won.length + lost.length) > 0
     ? won.length / (won.length + lost.length)
     : 0
 
-  const totalInvested = open.reduce((s, t) => s + t.sizeUsdc, 0)
-  const cash = startBal + realizedPnl - totalInvested
-  const nextBet = getDynamicBetSize()
-
   console.log(`\n  ┌─────────────────────────────────────┐`)
-  console.log(`  │ 🔴 LIVE BALANCE                      │`)
-  console.log(`  │ Balance:  $${balance.toFixed(2).padStart(10)}  (start: $${startBal.toFixed(0)})`)
-  console.log(`  │ Realized: ${realizedPnl >= 0 ? '+' : ''}${realizedPnl.toFixed(2).padStart(10)}`)
+  console.log(`  │ 🔴 LIVE (on-chain)                    │`)
+  console.log(`  │ Equity:   $${equity.toFixed(2).padStart(10)}`)
+  console.log(`  │ USDC:     $${cash.toFixed(2).padStart(10)}`)
+  console.log(`  │ Invested: $${posValue.toFixed(2).padStart(10)}  (${openCount} positions)`)
   console.log(`  │ Unreal:   ${unrealizedPnl >= 0 ? '+' : ''}${unrealizedPnl.toFixed(2).padStart(10)}`)
-  console.log(`  │ Cash:     $${cash.toFixed(2).padStart(10)}  (next bet: $${nextBet.toFixed(2)})`)
-  console.log(`  │ Open:     ${open.length.toString().padStart(10)}  trades`)
-  console.log(`  │ Win Rate: ${(winRate * 100).toFixed(0).padStart(9)}%  (${won.length}W / ${lost.length}L)`)
+  console.log(`  │ Realized: ${realizedPnl >= 0 ? '+' : ''}${realizedPnl.toFixed(2).padStart(10)}  (${won.length}W / ${lost.length}L)`)
+  console.log(`  │ Win Rate: ${(winRate * 100).toFixed(0).padStart(9)}%`)
+  console.log(`  │ Next bet: $${nextBet.toFixed(2).padStart(10)}`)
   console.log(`  │ WS:      ${isWsConnected() ? '🟢' : '🔴'} market | ${isUserWsConnected() ? '🟢' : '🔴'} user  (${getSubscribedCount()} tokens, ${getPendingOrders().length} pending)`)
   console.log(`  └─────────────────────────────────────┘`)
 
@@ -870,17 +868,7 @@ async function main(): Promise<void> {
     }
   }
 
-  // Init portfolio settings — use STARTING_BALANCE env var or default to $9
-  if (getPortfolioSetting('starting_balance', '') === '') {
-    const startBal = process.env.STARTING_BALANCE ?? '9'
-    setPortfolioSetting('starting_balance', startBal)
-    console.log(`  💰 Starting balance: $${startBal}`)
-  }
-
-  const startBal = parseFloat(getPortfolioSetting('starting_balance', '9'))
-  const scale = getBankrollScale()
-
-  // Startup balance check
+  // On-chain state first — this is the source of truth
   if (!DRY_RUN) {
     const [realBalance, realPositions] = await Promise.all([getRealBalance(), getRealPositions()])
     setOnChainState(realBalance, realPositions)
@@ -890,15 +878,25 @@ async function main(): Promise<void> {
     }
   }
 
-  // HWM = current on-chain equity at startup (no DB memory of phantom peaks)
+  // Starting balance = on-chain equity at startup (auto-detected, not hardcoded)
   const eq = getCurrentEquity()
+  const existingStartBal = getPortfolioSetting('starting_balance', '')
+  if (existingStartBal === '' || existingStartBal === '9') {
+    // First run or legacy value — set to current on-chain equity
+    setPortfolioSetting('starting_balance', eq.toFixed(2))
+    console.log(`  💰 Starting balance set from on-chain: $${eq.toFixed(2)}`)
+  }
+  const startBal = parseFloat(getPortfolioSetting('starting_balance', eq.toFixed(2)))
+  const scale = getBankrollScale()
+
+  // HWM = current on-chain equity (reset every restart, no phantom peaks)
   highWaterMark = eq
 
   console.log('═══════════════════════════════════════════════')
   console.log(`  ${mode} LIVE TRADER`)
   console.log('═══════════════════════════════════════════════')
-  console.log(`  Bankroll:    $${startBal} (scale: ${scale.toFixed(3)})`)
-  console.log(`  Equity:      $${eq.toFixed(2)}`)
+  console.log(`  Equity:      $${eq.toFixed(2)} (on-chain)`)
+  console.log(`  Start bal:   $${startBal.toFixed(2)} (scale: ${scale.toFixed(3)})`)
   console.log(`  Source:      signals table (from scanners)`)
   console.log(`  Bet sizing:  ${(BET_PCT * 100).toFixed(0)}% of cash ($${getMinBet(eq).toFixed(2)}-$${getMaxBet(eq).toFixed(2)})`)
   console.log(`  Entry range: ${(MIN_ENTRY * 100).toFixed(0)}¢ - ${(MAX_ENTRY * 100).toFixed(0)}¢`)
