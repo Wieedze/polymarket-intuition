@@ -594,6 +594,10 @@ async function runExitStrategy(): Promise<Record<string, number>> {
   )
 
   for (const trade of openTrades) {
+    // Skip on-chain-sync positions — bot didn't place these, don't manage exits
+    // (avgPrice from API is unreliable, would cause false stop-loss)
+    if (trade.sourceRef === 'on-chain-sync') continue
+
     // Skip resolved positions — these are handled by redeemAllResolved(), not exit strategy
     if (trade.curPrice != null && (trade.curPrice >= 0.95 || trade.curPrice <= 0.05)) continue
 
@@ -949,19 +953,21 @@ async function main(): Promise<void> {
         cacheTokenId(p.conditionId, p.side, p.tokenId, false)
 
         // Create position record if not in DB (startup sync after DB wipe or first run)
+        // Use curPrice as entry — avgPrice from Polymarket API is unreliable
+        // and would cause false stop-loss triggers
         if (!dbConditionIds.has(p.conditionId)) {
           openPaperTrade({
             conditionId: p.conditionId,
             title: p.title,
             domain: keywordClassify(p.title)?.domain ?? null,
             side: p.side,
-            entryPrice: p.avgPrice,
-            sizeUsdc: p.size * p.avgPrice,
+            entryPrice: p.curPrice,
+            sizeUsdc: p.size * p.curPrice,
             sourceRef: 'on-chain-sync',
             sourceLabel: '[LIVE] synced from on-chain',
           })
           updatePaperTradePrice(p.conditionId, p.curPrice)
-          console.log(`  📥 SYNCED | ${p.side} ${p.size.toFixed(1)} shares @ ${(p.avgPrice * 100).toFixed(0)}¢ → ${(p.curPrice * 100).toFixed(0)}¢ | ${p.title.slice(0, 50)}`)
+          console.log(`  📥 SYNCED | ${p.side} ${p.size.toFixed(1)} shares @ ${(p.curPrice * 100).toFixed(0)}¢ (cur) | ${p.title.slice(0, 50)}`)
         }
       }
       if (positions.length > 0) {
