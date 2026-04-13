@@ -593,6 +593,9 @@ async function runExitStrategy(): Promise<Record<string, number>> {
   )
 
   for (const trade of openTrades) {
+    // Skip resolved positions — these are handled by redeemAllResolved(), not exit strategy
+    if (trade.curPrice != null && (trade.curPrice >= 0.95 || trade.curPrice <= 0.05)) continue
+
     // Don't place another sell if one is already pending
     if (pendingSellConditions.has(trade.conditionId)) continue
 
