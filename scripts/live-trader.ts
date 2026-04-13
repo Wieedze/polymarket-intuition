@@ -939,8 +939,17 @@ async function main(): Promise<void> {
   // from the Data API so the dashboard and exit logic can track them.
   if (!DRY_RUN) {
     try {
+      // Ensure wallet is initialized before fetching positions
+      const { getWalletAddress } = await import('../src/lib/real-trader')
+      const addr = getWalletAddress()
+      if (!addr) {
+        await getRealBalance()  // triggers getClient() → sets _walletAddress
+      }
+      const walletAddr = getWalletAddress().toLowerCase()
+      if (!walletAddr) throw new Error('Wallet address not available')
+
       const res = await fetch(
-        `https://data-api.polymarket.com/positions?user=${(await import('../src/lib/real-trader')).getWalletAddress().toLowerCase()}&sizeThreshold=0`
+        `https://data-api.polymarket.com/positions?user=${walletAddr}&sizeThreshold=0`
       )
       if (res.ok) {
         const positions = await res.json() as Array<{
