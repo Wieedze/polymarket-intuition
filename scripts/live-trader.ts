@@ -943,19 +943,36 @@ async function main(): Promise<void> {
         `https://data-api.polymarket.com/positions?user=${(await import('../src/lib/real-trader')).getWalletAddress().toLowerCase()}&sizeThreshold=0`
       )
       if (res.ok) {
-        // Only cache token IDs for exit orders — don't create phantom paper trades
-        // Real positions are visible via /api/wallet-equity (on-chain source of truth)
         const positions = await res.json() as Array<{
           conditionId: string; title: string; outcomeIndex: number
-          size: number; asset: string; negativeRisk: boolean
+          size: number; avgPrice: number; curPrice: number; asset: string; negativeRisk: boolean
         }>
         const openPositions = positions.filter(p => p.size > 0)
+        const dbOpenTrades = getOpenLiveTrades()
+        const dbConditionIds = new Set(dbOpenTrades.map(t => t.conditionId))
+
         for (const p of openPositions) {
           const side = p.outcomeIndex === 0 ? 'YES' : 'NO'
           cacheTokenId(p.conditionId, side, p.asset, p.negativeRisk ?? false)
+
+          // Create paper trade if not in DB (startup sync after DB wipe or first run)
+          if (!dbConditionIds.has(p.conditionId)) {
+            openPaperTrade({
+              conditionId: p.conditionId,
+              title: p.title,
+              domain: keywordClassify(p.title)?.domain ?? null,
+              side,
+              entryPrice: p.avgPrice,
+              sizeUsdc: p.size * p.avgPrice,
+              sourceRef: 'on-chain-sync',
+              sourceLabel: '[LIVE] synced from on-chain',
+            })
+            updatePaperTradePrice(p.conditionId, p.curPrice)
+            console.log(`  📥 SYNCED | ${side} ${p.size.toFixed(1)} shares @ ${(p.avgPrice * 100).toFixed(0)}¢ → ${(p.curPrice * 100).toFixed(0)}¢ | ${p.title.slice(0, 50)}`)
+          }
         }
         if (openPositions.length > 0) {
-          console.log(`  📥 Cached ${openPositions.length} on-chain token IDs (no phantom trades)`)
+          console.log(`  📥 Cached ${openPositions.length} on-chain token IDs`)
         }
       }
     } catch (err) {
