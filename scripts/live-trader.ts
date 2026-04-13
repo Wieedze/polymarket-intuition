@@ -426,22 +426,28 @@ async function processSignals(): Promise<number> {
       console.log(`  📋 LIVE ${scoreTag} GTC ${status} | ${signal.side} @ ${(orderPrice * 100).toFixed(0)}¢ | $${liveBetAmount.toFixed(2)} | score:${signal.signalScore} | src:${signal.source} | ${signal.title.slice(0, 40)}`)
       logBotEvent('live-gtc', `GTC ${signal.side} @ ${(orderPrice * 100).toFixed(0)}¢ $${liveBetAmount.toFixed(2)} | ${signal.title}`, `Score: ${signal.signalScore}/100 | source: ${signal.source}`)
 
-      savePendingOrder({
-        orderId: result.orderId,
-        conditionId: signal.conditionId,
-        title: signal.title,
-        domain: signal.domain,
-        side: signal.side,
-        entryPrice: orderPrice,
-        sizeUsdc: liveBetAmount,
-        sourceRef: signal.source === 'expert-copy' ? (signal.expertWallet ?? 'expert') : 'sports-arb',
-        sourceLabel,
-        placedAt: new Date().toISOString(),
-        orderType: 'BUY',
-        exitPrice: null,
-        partialFraction: null,
-        exitReason: null,
-      })
+      try {
+        savePendingOrder({
+          orderId: result.orderId,
+          conditionId: signal.conditionId,
+          title: signal.title,
+          domain: signal.domain,
+          side: signal.side,
+          entryPrice: orderPrice,
+          sizeUsdc: liveBetAmount,
+          sourceRef: signal.source === 'expert-copy' ? (signal.expertWallet ?? 'expert') : 'sports-arb',
+          sourceLabel,
+          placedAt: new Date().toISOString(),
+          orderType: 'BUY',
+          exitPrice: null,
+          partialFraction: null,
+          exitReason: null,
+        })
+      } catch (dbErr) {
+        console.error(`  🚨 CRITICAL: BUY order ${result.orderId} placed on CLOB but DB save failed! Manual reconciliation needed.`)
+        console.error(dbErr)
+        logBotEvent('critical-orphan', `BUY order ${result.orderId} orphaned`, String(dbErr))
+      }
 
       cacheTokenId(signal.conditionId, signal.side, tokenId, signal.negRisk)
       subscribeUserMarket(signal.conditionId)
@@ -632,22 +638,28 @@ async function runExitStrategy(): Promise<Record<string, number>> {
           }
           // Save as pending SELL — only resolve when fill confirmed
           if (result.orderId) {
-            savePendingOrder({
-              orderId: result.orderId,
-              conditionId: trade.conditionId,
-              title: trade.title,
-              domain: trade.domain ?? null,
-              side: trade.side,
-              entryPrice: trade.entryPrice,
-              sizeUsdc: trade.sizeUsdc,
-              sourceRef: trade.sourceRef,
-              sourceLabel: trade.sourceLabel,
-              placedAt: new Date().toISOString(),
-              orderType: 'SELL',
-              exitPrice,
-              partialFraction: decision.partialFraction,
-              exitReason: decision.reason,
-            })
+            try {
+              savePendingOrder({
+                orderId: result.orderId,
+                conditionId: trade.conditionId,
+                title: trade.title,
+                domain: trade.domain ?? null,
+                side: trade.side,
+                entryPrice: trade.entryPrice,
+                sizeUsdc: trade.sizeUsdc,
+                sourceRef: trade.sourceRef,
+                sourceLabel: trade.sourceLabel,
+                placedAt: new Date().toISOString(),
+                orderType: 'SELL',
+                exitPrice,
+                partialFraction: decision.partialFraction,
+                exitReason: decision.reason,
+              })
+            } catch (dbErr) {
+              console.error(`  🚨 CRITICAL: SELL order ${result.orderId} placed on CLOB but DB save failed!`)
+              console.error(dbErr)
+              logBotEvent('critical-orphan', `SELL order ${result.orderId} orphaned`, String(dbErr))
+            }
             console.log(`  📋 SELL PLACED | ${decision.reason} | ${sharesToSell.toFixed(1)} shares @ ${(exitPrice * 100).toFixed(0)}¢ | orderId:${result.orderId.slice(0, 12)} | ${trade.title.slice(0, 40)}`)
             logBotEvent('live-sell-pending', `${decision.reason} | ${sharesToSell.toFixed(1)} shares @ ${(exitPrice * 100).toFixed(0)}¢ | ${trade.title}`, `orderId:${result.orderId.slice(0, 12)}`)
           }
@@ -678,22 +690,28 @@ async function runExitStrategy(): Promise<Record<string, number>> {
           }
           // Save as pending SELL — only resolve when fill confirmed
           if (result.orderId) {
-            savePendingOrder({
-              orderId: result.orderId,
-              conditionId: trade.conditionId,
-              title: trade.title,
-              domain: trade.domain ?? null,
-              side: trade.side,
-              entryPrice: trade.entryPrice,
-              sizeUsdc: trade.sizeUsdc,
-              sourceRef: trade.sourceRef,
-              sourceLabel: trade.sourceLabel,
-              placedAt: new Date().toISOString(),
-              orderType: 'SELL',
-              exitPrice,
-              partialFraction: null,
-              exitReason: decision.reason,
-            })
+            try {
+              savePendingOrder({
+                orderId: result.orderId,
+                conditionId: trade.conditionId,
+                title: trade.title,
+                domain: trade.domain ?? null,
+                side: trade.side,
+                entryPrice: trade.entryPrice,
+                sizeUsdc: trade.sizeUsdc,
+                sourceRef: trade.sourceRef,
+                sourceLabel: trade.sourceLabel,
+                placedAt: new Date().toISOString(),
+                orderType: 'SELL',
+                exitPrice,
+                partialFraction: null,
+                exitReason: decision.reason,
+              })
+            } catch (dbErr) {
+              console.error(`  🚨 CRITICAL: SELL order ${result.orderId} placed on CLOB but DB save failed!`)
+              console.error(dbErr)
+              logBotEvent('critical-orphan', `SELL order ${result.orderId} orphaned`, String(dbErr))
+            }
             console.log(`  📋 SELL PLACED | ${decision.reason} | ${sharesToSell.toFixed(1)} shares @ ${(exitPrice * 100).toFixed(0)}¢ | orderId:${result.orderId.slice(0, 12)} | ${trade.title.slice(0, 40)}`)
             logBotEvent('live-sell-pending', `${decision.reason} | ${sharesToSell.toFixed(1)} shares @ ${(exitPrice * 100).toFixed(0)}¢ | ${trade.title}`, `orderId:${result.orderId.slice(0, 12)}`)
           }

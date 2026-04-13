@@ -202,15 +202,20 @@ function _sendSubscription(tokenIds: string[]): void {
   console.log(`  [WS] Subscribed to ${tokenIds.length} token(s)`)
 }
 
+function safeParseFloat(v: string): number {
+  const n = parseFloat(v)
+  return Number.isFinite(n) ? n : 0
+}
+
 function _handleMessage(msg: WsEvent): void {
   switch (msg.event_type) {
     case 'book': {
       const e = msg as BookEvent
       const bestBid = e.bids.length > 0
-        ? Math.max(...e.bids.map(b => parseFloat(b.price)))
+        ? Math.max(...e.bids.map(b => safeParseFloat(b.price)))
         : 0
       const bestAsk = e.asks.length > 0
-        ? Math.min(...e.asks.map(a => parseFloat(a.price)))
+        ? Math.min(...e.asks.map(a => safeParseFloat(a.price)))
         : 0
       priceCache.set(e.asset_id, { bestBid, bestAsk, updatedAt: Date.now() })
       break
@@ -222,8 +227,8 @@ function _handleMessage(msg: WsEvent): void {
         if (!pc.best_bid && !pc.best_ask) continue
         const existing = priceCache.get(pc.asset_id)
         priceCache.set(pc.asset_id, {
-          bestBid: pc.best_bid ? parseFloat(pc.best_bid) : (existing?.bestBid ?? 0),
-          bestAsk: pc.best_ask ? parseFloat(pc.best_ask) : (existing?.bestAsk ?? 0),
+          bestBid: pc.best_bid ? safeParseFloat(pc.best_bid) : (existing?.bestBid ?? 0),
+          bestAsk: pc.best_ask ? safeParseFloat(pc.best_ask) : (existing?.bestAsk ?? 0),
           updatedAt: Date.now(),
         })
       }
@@ -233,8 +238,8 @@ function _handleMessage(msg: WsEvent): void {
     case 'best_bid_ask': {
       const e = msg as BestBidAskEvent
       priceCache.set(e.asset_id, {
-        bestBid: parseFloat(e.best_bid),
-        bestAsk: parseFloat(e.best_ask),
+        bestBid: safeParseFloat(e.best_bid),
+        bestAsk: safeParseFloat(e.best_ask),
         updatedAt: Date.now(),
       })
       break

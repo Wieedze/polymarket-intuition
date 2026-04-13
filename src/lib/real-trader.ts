@@ -14,6 +14,15 @@
  *   npx tsx scripts/init-polymarket-creds.ts
  */
 
+// ── Helpers ───────────────────────────────────────────────────────
+
+function sanitizeError(msg: string): string {
+  return msg
+    .replace(/(?:key|secret|passphrase|authorization|bearer)[=:]\s*\S+/gi, '[REDACTED]')
+    .replace(/\b[0-9a-fA-F]{24,}\b/g, '[HEX_REDACTED]')
+    .slice(0, 200)
+}
+
 // ── Types ─────────────────────────────────────────────────────────
 
 export type RealOrder = {
@@ -201,12 +210,12 @@ export async function placeOrder(order: RealOrder): Promise<RealOrderResult> {
     const errorMsg = orderInfo.errorMsg || orderInfo.error || JSON.stringify(result)
     return {
       success: false,
-      error: errorMsg,
+      error: sanitizeError(errorMsg),
     }
   } catch (err) {
     return {
       success: false,
-      error: err instanceof Error ? err.message : String(err),
+      error: sanitizeError(err instanceof Error ? err.message : String(err)),
     }
   }
 }
@@ -371,17 +380,17 @@ export async function closePosition(
     }
 
     const success = !!(orderInfo.success || orderInfo.successOrdering || orderInfo.orderID)
-    const error = orderInfo.errorMsg || orderInfo.error || (!success ? JSON.stringify(result) : undefined)
+    const rawError = orderInfo.errorMsg || orderInfo.error || (!success ? JSON.stringify(result) : undefined)
 
     return {
       success,
       orderId: orderInfo.orderID,
-      error,
+      error: rawError ? sanitizeError(rawError) : undefined,
     }
   } catch (err) {
     return {
       success: false,
-      error: err instanceof Error ? err.message : String(err),
+      error: sanitizeError(err instanceof Error ? err.message : String(err)),
     }
   }
 }
