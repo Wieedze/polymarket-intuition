@@ -939,50 +939,32 @@ async function main(): Promise<void> {
   // from the Data API so the dashboard and exit logic can track them.
   if (!DRY_RUN) {
     try {
-      // Ensure wallet is initialized before fetching positions
-      const { getWalletAddress } = await import('../src/lib/real-trader')
-      const addr = getWalletAddress()
-      if (!addr) {
-        await getRealBalance()  // triggers getClient() → sets _walletAddress
+      // Use getRealPositions() which handles wallet init internally
+      const positions = await getRealPositions()
+      const dbOpenTrades = getOpenLiveTrades()
+      const dbConditionIds = new Set(dbOpenTrades.map(t => t.conditionId))
+
+      for (const p of positions) {
+        cacheTokenId(p.conditionId, p.side, p.tokenId, false)
+
+        // Create position record if not in DB (startup sync after DB wipe or first run)
+        if (!dbConditionIds.has(p.conditionId)) {
+          openPaperTrade({
+            conditionId: p.conditionId,
+            title: p.title,
+            domain: keywordClassify(p.title)?.domain ?? null,
+            side: p.side,
+            entryPrice: p.avgPrice,
+            sizeUsdc: p.size * p.avgPrice,
+            sourceRef: 'on-chain-sync',
+            sourceLabel: '[LIVE] synced from on-chain',
+          })
+          updatePaperTradePrice(p.conditionId, p.curPrice)
+          console.log(`  📥 SYNCED | ${p.side} ${p.size.toFixed(1)} shares @ ${(p.avgPrice * 100).toFixed(0)}¢ → ${(p.curPrice * 100).toFixed(0)}¢ | ${p.title.slice(0, 50)}`)
+        }
       }
-      const walletAddr = getWalletAddress().toLowerCase()
-      if (!walletAddr) throw new Error('Wallet address not available')
-
-      const res = await fetch(
-        `https://data-api.polymarket.com/positions?user=${walletAddr}&sizeThreshold=0`
-      )
-      if (res.ok) {
-        const positions = await res.json() as Array<{
-          conditionId: string; title: string; outcomeIndex: number
-          size: number; avgPrice: number; curPrice: number; asset: string; negativeRisk: boolean
-        }>
-        const openPositions = positions.filter(p => p.size > 0)
-        const dbOpenTrades = getOpenLiveTrades()
-        const dbConditionIds = new Set(dbOpenTrades.map(t => t.conditionId))
-
-        for (const p of openPositions) {
-          const side = p.outcomeIndex === 0 ? 'YES' : 'NO'
-          cacheTokenId(p.conditionId, side, p.asset, p.negativeRisk ?? false)
-
-          // Create paper trade if not in DB (startup sync after DB wipe or first run)
-          if (!dbConditionIds.has(p.conditionId)) {
-            openPaperTrade({
-              conditionId: p.conditionId,
-              title: p.title,
-              domain: keywordClassify(p.title)?.domain ?? null,
-              side,
-              entryPrice: p.avgPrice,
-              sizeUsdc: p.size * p.avgPrice,
-              sourceRef: 'on-chain-sync',
-              sourceLabel: '[LIVE] synced from on-chain',
-            })
-            updatePaperTradePrice(p.conditionId, p.curPrice)
-            console.log(`  📥 SYNCED | ${side} ${p.size.toFixed(1)} shares @ ${(p.avgPrice * 100).toFixed(0)}¢ → ${(p.curPrice * 100).toFixed(0)}¢ | ${p.title.slice(0, 50)}`)
-          }
-        }
-        if (openPositions.length > 0) {
-          console.log(`  📥 Cached ${openPositions.length} on-chain token IDs`)
-        }
+      if (positions.length > 0) {
+        console.log(`  📥 Cached ${positions.length} on-chain token IDs`)
       }
     } catch (err) {
       console.log(`  ⚠️  Position sync failed: ${err instanceof Error ? err.message : String(err)}`)
