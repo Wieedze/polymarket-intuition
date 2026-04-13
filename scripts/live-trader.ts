@@ -87,6 +87,7 @@ function setOnChainState(balance: number, positions: RealPosition[]): void {
   _cachedPositions = positions
 }
 
+
 function getCurrentEquity(): number {
   // On-chain USDC + on-chain position values (NOT from DB)
   const posValue = _cachedPositions.reduce((s, p) => s + p.size * p.curPrice, 0)
@@ -619,7 +620,7 @@ async function runExitStrategy(): Promise<Record<string, number>> {
 
     try {
       if ((decision.reason === 'partial-exit-100' || decision.reason === 'partial-exit-150') && decision.partialFraction) {
-        // Partial exit — sell a fraction
+        // Partial exit — sell a fraction, capped to on-chain balance
         const sharesRemaining = trade.sharesRemaining ?? trade.shares
         const sharesToSell = sharesRemaining * decision.partialFraction
 
@@ -668,7 +669,7 @@ async function runExitStrategy(): Promise<Record<string, number>> {
           }
         }
       } else {
-        // Full exit
+        // Full exit — cap to on-chain balance
         const sharesToSell = trade.sharesRemaining ?? trade.shares
 
         // Polymarket minimum sell: 5 shares

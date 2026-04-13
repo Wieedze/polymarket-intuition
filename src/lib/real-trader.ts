@@ -312,6 +312,29 @@ export async function getRealPositions(): Promise<RealPosition[]> {
 }
 
 /**
+ * Get the actual on-chain share count for a specific token.
+ * Used before selling to avoid "not enough balance" errors.
+ */
+async function getRealShareCount(tokenId: string): Promise<number> {
+  if (!_walletAddress) await getClient()
+  if (!_walletAddress) return 0
+
+  try {
+    const address = _walletAddress.toLowerCase()
+    const res = await fetch(
+      `https://data-api.polymarket.com/positions?user=${address}&sizeThreshold=0`,
+      { cache: 'no-store' }
+    )
+    if (!res.ok) return 0
+    const positions = await res.json() as Array<{ asset: string; size: number }>
+    const match = positions.find(p => p.asset === tokenId)
+    return match?.size ?? 0
+  } catch {
+    return 0
+  }
+}
+
+/**
  * Get real wallet balance (USDC on Polygon).
  */
 export async function getRealBalance(): Promise<number> {
@@ -358,8 +381,12 @@ export async function closePosition(
     // Round price down to tick size 0.01
     const roundedPrice = parseFloat((Math.floor(curPrice * 100) / 100).toFixed(2))
 
+    // Get actual on-chain share count and cap to it
+    const realShares = await getRealShareCount(tokenId)
+    const cappedSize = realShares > 0 ? Math.min(size, realShares) : size
+
     // Floor size to 2 decimals — never try to sell more shares than we hold
-    const flooredSize = parseFloat((Math.floor(size * 100) / 100).toFixed(2))
+    const flooredSize = parseFloat((Math.floor(cappedSize * 100) / 100).toFixed(2))
 
     // GTC for sells — FOK is too strict, often rejected
     const result = await client.createAndPostOrder(
