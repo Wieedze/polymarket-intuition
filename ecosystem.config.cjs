@@ -65,7 +65,6 @@ module.exports = {
       env: {
         DB_PATH: '/opt/polymarket-intuition/data/live.db',
         SHARED_DB_PATH: '/opt/polymarket-intuition/data/polymarket.db',
-        STARTING_BALANCE: '9',
         POLL_INTERVAL_MS: '15000',       // 15s — fast signal pickup + exit checks
         MIN_SIGNAL_SCORE_LIVE: '40',
         DRY_RUN: 'false',               // REAL orders

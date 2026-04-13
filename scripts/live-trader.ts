@@ -868,17 +868,7 @@ async function main(): Promise<void> {
     }
   }
 
-  // Init portfolio settings — use STARTING_BALANCE env var or default to $9
-  if (getPortfolioSetting('starting_balance', '') === '') {
-    const startBal = process.env.STARTING_BALANCE ?? '9'
-    setPortfolioSetting('starting_balance', startBal)
-    console.log(`  💰 Starting balance: $${startBal}`)
-  }
-
-  const startBal = parseFloat(getPortfolioSetting('starting_balance', '9'))
-  const scale = getBankrollScale()
-
-  // Startup balance check
+  // On-chain state first — this is the source of truth
   if (!DRY_RUN) {
     const [realBalance, realPositions] = await Promise.all([getRealBalance(), getRealPositions()])
     setOnChainState(realBalance, realPositions)
@@ -888,15 +878,25 @@ async function main(): Promise<void> {
     }
   }
 
-  // HWM = current on-chain equity at startup (no DB memory of phantom peaks)
+  // Starting balance = on-chain equity at startup (auto-detected, not hardcoded)
   const eq = getCurrentEquity()
+  const existingStartBal = getPortfolioSetting('starting_balance', '')
+  if (existingStartBal === '' || existingStartBal === '9') {
+    // First run or legacy value — set to current on-chain equity
+    setPortfolioSetting('starting_balance', eq.toFixed(2))
+    console.log(`  💰 Starting balance set from on-chain: $${eq.toFixed(2)}`)
+  }
+  const startBal = parseFloat(getPortfolioSetting('starting_balance', eq.toFixed(2)))
+  const scale = getBankrollScale()
+
+  // HWM = current on-chain equity (reset every restart, no phantom peaks)
   highWaterMark = eq
 
   console.log('═══════════════════════════════════════════════')
   console.log(`  ${mode} LIVE TRADER`)
   console.log('═══════════════════════════════════════════════')
-  console.log(`  Bankroll:    $${startBal} (scale: ${scale.toFixed(3)})`)
-  console.log(`  Equity:      $${eq.toFixed(2)}`)
+  console.log(`  Equity:      $${eq.toFixed(2)} (on-chain)`)
+  console.log(`  Start bal:   $${startBal.toFixed(2)} (scale: ${scale.toFixed(3)})`)
   console.log(`  Source:      signals table (from scanners)`)
   console.log(`  Bet sizing:  ${(BET_PCT * 100).toFixed(0)}% of cash ($${getMinBet(eq).toFixed(2)}-$${getMaxBet(eq).toFixed(2)})`)
   console.log(`  Entry range: ${(MIN_ENTRY * 100).toFixed(0)}¢ - ${(MAX_ENTRY * 100).toFixed(0)}¢`)
