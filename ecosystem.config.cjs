@@ -27,6 +27,7 @@ module.exports = {
         SHARED_DB_PATH: '/opt/polymarket-intuition/data/polymarket.db',
         POLL_INTERVAL_MS: '60000',       // 1 min — detect new expert positions
         MIN_SIGNAL_SCORE_LIVE: '50',     // emit signals >= 50 (aligned with paper trading)
+        MAX_ENTRY_PRICE: '0.35',        // only emit signals <= 35¢ (2:1+ payoff)
         BOT_SCRIPT: 'scripts/expert-scanner.ts',
       },
       restart_delay: 10000,
@@ -68,6 +69,7 @@ module.exports = {
         SHARED_DB_PATH: '/opt/polymarket-intuition/data/polymarket.db',
         POLL_INTERVAL_MS: '15000',       // 15s — fast signal pickup + exit checks
         MIN_SIGNAL_SCORE_LIVE: '50',     // aligned with paper trading
+        MAX_ENTRY_PRICE: '0.35',        // force 2:1+ payoff ratio (was 0.50)
         STOP_LOSS: '0.50',              // -50% stop-loss (was -40%)
         DRY_RUN: 'false',               // REAL orders
         BOT_SCRIPT: 'scripts/live-trader.ts',
