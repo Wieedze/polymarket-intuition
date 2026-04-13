@@ -406,6 +406,11 @@ export async function closePosition(
  *
  * Returns list of { conditionId, exitPrice } — only after on-chain tx confirmed.
  */
+
+// Cooldown: skip conditionIds that failed recently (30 min backoff)
+const _redeemCooldown = new Map<string, number>()
+const REDEEM_COOLDOWN_MS = 30 * 60 * 1000
+
 export async function redeemAllResolved(): Promise<Array<{ conditionId: string; exitPrice: number }>> {
   if (!_walletAddress) await getClient()
   if (!_walletAddress) return []
@@ -428,8 +433,14 @@ export async function redeemAllResolved(): Promise<Array<{ conditionId: string; 
       negativeRisk: boolean
     }>
 
-    // Resolved = price > 95¢ (winner) or < 5¢ (loser)
-    const resolved = positions.filter(p => p.size > 0 && (p.curPrice > 0.95 || p.curPrice < 0.05))
+    // Resolved = price > 95¢ (winner) or < 5¢ (loser), skip cooldown
+    const now = Date.now()
+    const resolved = positions.filter(p => {
+      if (p.size <= 0 || (p.curPrice <= 0.95 && p.curPrice >= 0.05)) return false
+      const cooldownUntil = _redeemCooldown.get(p.conditionId) ?? 0
+      if (now < cooldownUntil) return false
+      return true
+    })
     if (resolved.length === 0) return []
 
     const { createPublicClient, createWalletClient, http, parseAbi } = await import('viem')
@@ -489,14 +500,16 @@ export async function redeemAllResolved(): Promise<Array<{ conditionId: string; 
           await publicClient.waitForTransactionReceipt({ hash })
         }
 
-        // On-chain tx confirmed — now safe to report
+        // On-chain tx confirmed — clear cooldown and report
+        _redeemCooldown.delete(pos.conditionId)
         const exitPrice = pos.curPrice > 0.95 ? 1.0 : 0.0
         const status = exitPrice > 0 ? 'WON' : 'LOST'
         const value = (pos.size * exitPrice).toFixed(2)
         console.log(`  💰 REDEEMED | ${status} | ${pos.size.toFixed(1)} shares → $${value} | ${pos.title.slice(0, 50)}`)
         redeemed.push({ conditionId: pos.conditionId, exitPrice })
       } catch (err) {
-        console.log(`  ⚠️  REDEEM FAILED | ${pos.title.slice(0, 40)} | ${err instanceof Error ? err.message : String(err)}`)
+        _redeemCooldown.set(pos.conditionId, Date.now() + REDEEM_COOLDOWN_MS)
+        console.log(`  ⚠️  REDEEM FAILED (retry in 30min) | ${pos.title.slice(0, 40)} | ${err instanceof Error ? err.message : String(err)}`)
       }
     }
 

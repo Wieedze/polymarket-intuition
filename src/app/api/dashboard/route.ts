@@ -1,128 +1,96 @@
 import { NextResponse } from 'next/server'
-import { getAllPaperTrades, getPortfolioSetting, getRecentBotEvents } from '@/lib/db'
+import { fetchWalletEquity } from '@/lib/on-chain'
+import { classifyMarket } from '@/lib/classifier'
 
 export const dynamic = 'force-dynamic'
 
 export async function GET(): Promise<NextResponse> {
   try {
-    const all = getAllPaperTrades()
-    const open = all.filter((t) => t.status === 'open')
-    const closed = all.filter((t) => t.status !== 'open')
-    const won = closed.filter((t) => t.status === 'won')
-    const lost = closed.filter((t) => t.status === 'lost')
+    const w = await fetchWalletEquity()
 
-    const startBal = parseFloat(getPortfolioSetting('starting_balance', '10000'))
-    const POLYMARKET_FEE_RATE = 0.02
+    const startingBalance = parseFloat(process.env.STARTING_BALANCE ?? '9')
 
-    const partialExitsPnl = open.reduce((s, t) =>
-      s + t.partialExits.reduce((ps, e) => ps + e.pnl, 0), 0)
-    const realizedPnl = closed.reduce((s, t) => s + (t.pnl ?? 0), 0) + partialExitsPnl
-
-    // Remaining cost basis — partial exits return capital so reduce proportionally
-    const totalInvested = open.reduce((s, t) => {
-      const fraction = t.sharesRemaining != null && t.shares > 0 ? t.sharesRemaining / t.shares : 1
-      return s + t.sizeUsdc * fraction
-    }, 0)
-
-    // True unrealized: proceeds if sold now (after 2% exit fee) minus remaining cost basis
-    const unrealizedPnl = open.reduce((s, t) => {
-      if (t.curPrice == null) return s
-      const sharesNow = t.sharesRemaining ?? t.shares
-      const fraction = t.shares > 0 ? sharesNow / t.shares : 1
-      return s + sharesNow * t.curPrice * (1 - POLYMARKET_FEE_RATE) - t.sizeUsdc * fraction
-    }, 0)
-
-    // ── Chart data: daily metrics ────────────────────────────────
-    const dailyMap = new Map<string, { pnl: number; trades: number; wins: number }>()
-
-    for (const t of closed) {
-      if (!t.resolvedAt) continue
-      const date = t.resolvedAt.slice(0, 10)
-      const existing = dailyMap.get(date) ?? { pnl: 0, trades: 0, wins: 0 }
-      existing.pnl += t.pnl ?? 0
+    // ── Domain breakdown from closed trades (classify titles) ────
+    const domainMap = new Map<string, { pnl: number; trades: number; won: number }>()
+    for (const t of w.closedTrades) {
+      const cls = await classifyMarket(t.title)
+      const domain = cls?.domain?.replace('pm-domain/', '') ?? 'unknown'
+      const existing = domainMap.get(domain) ?? { pnl: 0, trades: 0, won: 0 }
+      existing.pnl += t.pnl
       existing.trades++
-      if (t.status === 'won') existing.wins++
-      dailyMap.set(date, existing)
+      if (t.result === 'won') existing.won++
+      domainMap.set(domain, existing)
     }
-
-    const sortedDays = [...dailyMap.entries()].sort((a, b) => a[0].localeCompare(b[0]))
-
-    // Build chart data: equity curve + daily PnL + rolling win rate
-    let cumPnl = 0
-    let rollingWins = 0
-    let rollingTotal = 0
-    const chartData = sortedDays.map(([date, day], i) => {
-      cumPnl += day.pnl
-      rollingWins += day.wins
-      rollingTotal += day.trades
-
-      // Rolling win rate (all trades up to this point, or last 20 days)
-      const lookback = sortedDays.slice(Math.max(0, i - 19), i + 1)
-      const lbWins = lookback.reduce((s, [, d]) => s + d.wins, 0)
-      const lbTotal = lookback.reduce((s, [, d]) => s + d.trades, 0)
-
-      return {
-        date,
-        equity: startBal + cumPnl,      // equity curve
-        dailyPnl: day.pnl,              // daily P&L (bars)
-        cumPnl,                          // cumulative P&L
-        trades: day.trades,              // trades resolved that day
-        winRate: lbTotal > 0 ? Math.round((lbWins / lbTotal) * 100) : 0,  // rolling WR %
-      }
-    })
-
-    // Recent events
-    const events = getRecentBotEvents(20)
-
-    // Top domains
-    const domainPnl = new Map<string, { pnl: number; trades: number; won: number }>()
-    for (const t of closed) {
-      const d = t.domain ?? 'unknown'
-      const existing = domainPnl.get(d) ?? { pnl: 0, trades: 0, won: 0 }
-      existing.pnl += t.pnl ?? 0
-      existing.trades++
-      if (t.status === 'won') existing.won++
-      domainPnl.set(d, existing)
-    }
-    const domains = [...domainPnl.entries()]
+    const domains = [...domainMap.entries()]
       .map(([domain, stats]) => ({
-        domain: domain.replace('pm-domain/', ''),
+        domain,
         ...stats,
         winRate: stats.trades > 0 ? stats.won / stats.trades : 0,
+        avgPnl: stats.trades > 0 ? stats.pnl / stats.trades : 0,
       }))
       .sort((a, b) => b.pnl - a.pnl)
 
-    const allDates = all.map((t) => new Date(t.openedAt).getTime())
-    const firstTradeAt = allDates.length > 0 ? Math.min(...allDates) : Date.now()
-    const tradingDays = Math.max((Date.now() - firstTradeAt) / (1000 * 60 * 60 * 24), 1)
-    const tradesWithHold = closed.filter((t) => t.resolvedAt != null)
-    const avgHoldDays = tradesWithHold.length > 0
-      ? tradesWithHold.reduce((s, t) => s + (new Date(t.resolvedAt!).getTime() - new Date(t.openedAt).getTime()) / (1000 * 60 * 60 * 24), 0) / tradesWithHold.length
+    // ── Side breakdown ──────────────────────────────────────────
+    const bySide = {
+      yes: { trades: 0, won: 0, winRate: 0, pnl: 0 },
+      no: { trades: 0, won: 0, winRate: 0, pnl: 0 },
+    }
+    for (const t of w.closedTrades) {
+      const s = t.side === 'YES' ? bySide.yes : bySide.no
+      s.trades++
+      s.pnl += t.pnl
+      if (t.result === 'won') s.won++
+    }
+    bySide.yes.winRate = bySide.yes.trades > 0 ? bySide.yes.won / bySide.yes.trades : 0
+    bySide.no.winRate = bySide.no.trades > 0 ? bySide.no.won / bySide.no.trades : 0
+
+    // ── Best / Worst trades ─────────────────────────────────────
+    const sorted = [...w.closedTrades].sort((a, b) => b.pnl - a.pnl)
+    const bestTrades = sorted.slice(0, 5)
+    const worstTrades = sorted.slice(-5).reverse()
+
+    // ── Risk metrics (from current state) ───────────────────────
+    const topPos = w.openPositions.length > 0
+      ? Math.max(...w.openPositions.map(p => p.value)) / (w.totalEquity || 1)
       : 0
+    const top3 = w.openPositions.length >= 3
+      ? w.openPositions.map(p => p.value).sort((a, b) => b - a).slice(0, 3).reduce((s, v) => s + v, 0) / (w.totalEquity || 1)
+      : topPos
+    const cashPct = w.totalEquity > 0 ? w.usdc / w.totalEquity : 1
 
     return NextResponse.json({
-      balance: startBal + realizedPnl,
-      startingBalance: startBal,
-      realizedPnl,
-      partialExitsPnl,
-      unrealizedPnl,
-      tradingDays: Math.round(tradingDays * 10) / 10,
-      avgHoldDays: Math.round(avgHoldDays * 10) / 10,
-      totalInvested,
-      totalEquity: startBal + realizedPnl - totalInvested + open.reduce((s, t) => {
-        if (t.curPrice == null) return s
-        const sharesNow = t.sharesRemaining ?? t.shares
-        return s + sharesNow * t.curPrice * (1 - POLYMARKET_FEE_RATE)
-      }, 0),
-      winRate: closed.length > 0 ? won.length / closed.length : 0,
-      wins: won.length,
-      losses: lost.length,
-      openTrades: open.length,
-      totalTrades: all.length,
-      roi: startBal > 0 ? realizedPnl / startBal : 0,
-      chartData,
-      events,
+      // Core metrics (on-chain)
+      totalEquity: w.totalEquity,
+      usdc: w.usdc,
+      positionsValue: w.positionsValue,
+      realizedPnl: w.realizedPnl,
+      unrealizedPnl: w.unrealizedPnl,
+      wins: w.wins,
+      losses: w.losses,
+      winRate: w.winRate,
+      totalTrades: w.totalTrades,
+      startingBalance,
+      roi: startingBalance > 0 ? (w.totalEquity - startingBalance) / startingBalance : 0,
+
+      // Positions
+      openPositions: w.openPositions,
+      pendingRedeem: w.pendingRedeem,
+      pendingRedeemValue: w.pendingRedeemValue,
+      closedTrades: w.closedTrades,
+
+      // Analytics (computed from on-chain data)
       domains,
+      bySide,
+      bestTrades,
+      worstTrades,
+      risk: {
+        topConcentration: topPos,
+        top3Concentration: top3,
+        openCount: w.openPositions.length,
+        cashPct,
+      },
+
+      fetchedAt: w.fetchedAt,
     })
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
