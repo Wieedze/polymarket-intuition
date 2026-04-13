@@ -295,7 +295,7 @@ export async function getRealPositions(): Promise<RealPosition[]> {
     }>
 
     return positions
-      .filter((p) => p.size > 0 && p.curPrice >= 0.05 && p.curPrice <= 0.95)
+      .filter((p) => p.size > 0)
       .map((p) => ({
         conditionId: p.conditionId,
         tokenId: p.asset ?? p.conditionId,  // asset field = real CLOB token ID
@@ -358,12 +358,15 @@ export async function closePosition(
     // Round price down to tick size 0.01
     const roundedPrice = parseFloat((Math.floor(curPrice * 100) / 100).toFixed(2))
 
+    // Floor size to 2 decimals — never try to sell more shares than we hold
+    const flooredSize = parseFloat((Math.floor(size * 100) / 100).toFixed(2))
+
     // GTC for sells — FOK is too strict, often rejected
     const result = await client.createAndPostOrder(
       {
         tokenID: tokenId,
         price: roundedPrice,
-        size,
+        size: flooredSize,
         side: Side.SELL,
       },
       { tickSize: '0.01', negRisk },
