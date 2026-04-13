@@ -106,7 +106,7 @@ export async function getUsdcBalance(address: string): Promise<number> {
 
 export async function getPositions(address: string): Promise<RawPosition[]> {
   try {
-    const res = await fetch(`${DATA_API}/positions?user=${address}&sizeThreshold=0`)
+    const res = await fetch(`${DATA_API}/positions?user=${address}&sizeThreshold=0`, { cache: 'no-store' })
     if (!res.ok) return []
     return await res.json() as RawPosition[]
   } catch {
@@ -116,7 +116,7 @@ export async function getPositions(address: string): Promise<RawPosition[]> {
 
 export async function getActivity(address: string): Promise<ActivityResult> {
   try {
-    const res = await fetch(`${DATA_API}/activity?user=${address}&limit=500&offset=0`)
+    const res = await fetch(`${DATA_API}/activity?user=${address}&limit=500&offset=0`, { cache: 'no-store' })
     const empty: ActivityResult = { trades: [], totalBoughtUsdc: 0, totalSoldUsdc: 0 }
     if (!res.ok) return empty
     const data = await res.json()
