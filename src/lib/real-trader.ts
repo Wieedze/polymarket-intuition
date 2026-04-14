@@ -489,14 +489,10 @@ export async function redeemAllResolved(): Promise<Array<{ conditionId: string; 
     })
 
     const CTF_ADDRESS = '0x4D97DCd97eC945f40cF65F87097ACe5EA0476045' as `0x${string}`
-    const NEG_RISK_ADAPTER = '0xC5d563A36AE78145C45a50134d48A1215220f80a' as `0x${string}`
     const USDC_E = '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174' as `0x${string}`
 
     const ctfAbi = parseAbi([
       'function redeemPositions(address collateralToken, bytes32 parentCollectionId, bytes32 conditionId, uint256[] indexSets) external',
-    ])
-    const negRiskAbi = parseAbi([
-      'function redeemPositions(bytes32 conditionId, uint256[] indexSets) external',
     ])
 
     const redeemed: Array<{ conditionId: string; exitPrice: number }> = []
@@ -506,50 +502,32 @@ export async function redeemAllResolved(): Promise<Array<{ conditionId: string; 
         const conditionIdBytes = pos.conditionId as `0x${string}`
         const indexSets = [1n << BigInt(pos.outcomeIndex)]
 
-        // Simulate the redeem call first (free, no gas) to check if it would succeed
+        // Always redeem via CTF direct — NegRiskAdapter redeemPositions reverts
+        // even when conditions are resolved on-chain (tokens are on EOA, not adapter)
+        const parentCollectionId = '0x0000000000000000000000000000000000000000000000000000000000000000' as `0x${string}`
+
+        // Simulate first (free, no gas) to check if condition is resolved
         try {
-          if (pos.negativeRisk) {
-            await publicClient.simulateContract({
-              address: NEG_RISK_ADAPTER,
-              abi: negRiskAbi,
-              functionName: 'redeemPositions',
-              args: [conditionIdBytes, indexSets],
-              account: account.address,
-            })
-          } else {
-            const parentCollectionId = '0x0000000000000000000000000000000000000000000000000000000000000000' as `0x${string}`
-            await publicClient.simulateContract({
-              address: CTF_ADDRESS,
-              abi: ctfAbi,
-              functionName: 'redeemPositions',
-              args: [USDC_E, parentCollectionId, conditionIdBytes, indexSets],
-              account: account.address,
-            })
-          }
+          await publicClient.simulateContract({
+            address: CTF_ADDRESS,
+            abi: ctfAbi,
+            functionName: 'redeemPositions',
+            args: [USDC_E, parentCollectionId, conditionIdBytes, indexSets],
+            account: account.address,
+          })
         } catch {
           // Simulation reverted — condition not resolved on-chain yet, skip silently
           continue
         }
 
         // Simulation passed — actually send the tx
-        if (pos.negativeRisk) {
-          const hash = await walletClient.writeContract({
-            address: NEG_RISK_ADAPTER,
-            abi: negRiskAbi,
-            functionName: 'redeemPositions',
-            args: [conditionIdBytes, indexSets],
-          })
-          await publicClient.waitForTransactionReceipt({ hash })
-        } else {
-          const parentCollectionId = '0x0000000000000000000000000000000000000000000000000000000000000000' as `0x${string}`
-          const hash = await walletClient.writeContract({
-            address: CTF_ADDRESS,
-            abi: ctfAbi,
-            functionName: 'redeemPositions',
-            args: [USDC_E, parentCollectionId, conditionIdBytes, indexSets],
-          })
-          await publicClient.waitForTransactionReceipt({ hash })
-        }
+        const hash = await walletClient.writeContract({
+          address: CTF_ADDRESS,
+          abi: ctfAbi,
+          functionName: 'redeemPositions',
+          args: [USDC_E, parentCollectionId, conditionIdBytes, indexSets],
+        })
+        await publicClient.waitForTransactionReceipt({ hash })
 
         // On-chain tx confirmed — clear cooldown and report
         _redeemCooldown.delete(pos.conditionId)

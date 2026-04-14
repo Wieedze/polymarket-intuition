@@ -478,17 +478,26 @@ async function refreshOpenPrices(): Promise<number> {
   let updated = 0
 
   // 1. WS best bid — real-time, works for ALL trades (including on-chain-sync)
+  const wsUpdatedConditions = new Set<string>()
   for (const trade of openTrades) {
     const meta = await getTokenId(trade.conditionId, trade.side)
     if (!meta) continue
     const wsBid = getWsBestBid(meta.tokenId)
     if (wsBid && wsBid > 0) {
       updatePaperTradePrice(trade.conditionId, wsBid)
+      wsUpdatedConditions.add(trade.conditionId)
       updated++
     }
   }
 
-  // 2. Expert positions fallback — for trades where WS has no data
+  // 2. Data API fallback — _cachedPositions has curPrice for positions without WS data
+  for (const pos of _cachedPositions) {
+    if (wsUpdatedConditions.has(pos.conditionId)) continue
+    updatePaperTradePrice(pos.conditionId, pos.curPrice)
+    updated++
+  }
+
+  // 3. Expert positions fallback — for trades where WS has no data
   const tradesWithoutPrice = openTrades.filter((t) => {
     // Skip if WS already updated this trade
     return !updated || t.sourceRef === 'on-chain-sync'
@@ -600,13 +609,14 @@ async function runExitStrategy(): Promise<Record<string, number>> {
   )
 
   for (const trade of openTrades) {
-    // Skip on-chain-sync positions — bot didn't place these, don't manage exits
-    // (avgPrice from API is unreliable, would cause false stop-loss)
-    if (trade.sourceRef === 'on-chain-sync') continue
-
-    // Don't block exit strategy for near-resolved positions — sell on CLOB
-    // redeemAllResolved() handles on-chain redemption, but markets can sit at 95¢+
-    // for days before oracle resolves. Let near-resolution exit sell them.
+    // For on-chain-sync positions, only allow near-resolution exits
+    // (avgPrice from API is unreliable — stop-loss/take-profit would be wrong)
+    const isOnChainSync = trade.sourceRef === 'on-chain-sync'
+    if (isOnChainSync) {
+      const cp = trade.curPrice
+      if (cp == null || (cp < 0.85 && cp > 0.15)) continue
+      // Price is near-resolved (85¢+ or 15¢-) — let it through to exit strategy
+    }
 
     // Don't place another sell if one is already pending
     if (pendingSellConditions.has(trade.conditionId)) continue
