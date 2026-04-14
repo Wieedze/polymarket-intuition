@@ -494,7 +494,6 @@ export async function redeemAllResolved(): Promise<Array<{ conditionId: string; 
 
     const ctfAbi = parseAbi([
       'function redeemPositions(address collateralToken, bytes32 parentCollectionId, bytes32 conditionId, uint256[] indexSets) external',
-      'function payoutDenominator(bytes32 conditionId) view returns (uint256)',
     ])
     const negRiskAbi = parseAbi([
       'function redeemPositions(bytes32 conditionId, uint256[] indexSets) external',
@@ -505,24 +504,34 @@ export async function redeemAllResolved(): Promise<Array<{ conditionId: string; 
     for (const pos of resolved) {
       try {
         const conditionIdBytes = pos.conditionId as `0x${string}`
+        const indexSets = [1n << BigInt(pos.outcomeIndex)]
 
-        // Check if condition is actually resolved on-chain before attempting redeem
-        // payoutDenominator > 0 means oracle has reported payouts
-        const payoutDenom = await publicClient.readContract({
-          address: CTF_ADDRESS,
-          abi: ctfAbi,
-          functionName: 'payoutDenominator',
-          args: [conditionIdBytes],
-        })
-        if (payoutDenom === 0n) {
-          // Not resolved on-chain yet — skip silently, no cooldown
+        // Simulate the redeem call first (free, no gas) to check if it would succeed
+        try {
+          if (pos.negativeRisk) {
+            await publicClient.simulateContract({
+              address: NEG_RISK_ADAPTER,
+              abi: negRiskAbi,
+              functionName: 'redeemPositions',
+              args: [conditionIdBytes, indexSets],
+              account: account.address,
+            })
+          } else {
+            const parentCollectionId = '0x0000000000000000000000000000000000000000000000000000000000000000' as `0x${string}`
+            await publicClient.simulateContract({
+              address: CTF_ADDRESS,
+              abi: ctfAbi,
+              functionName: 'redeemPositions',
+              args: [USDC_E, parentCollectionId, conditionIdBytes, indexSets],
+              account: account.address,
+            })
+          }
+        } catch {
+          // Simulation reverted — condition not resolved on-chain yet, skip silently
           continue
         }
 
-        // Correct bitmask: YES (index 0) = 1n, NO (index 1) = 2n
-        const indexSets = [1n << BigInt(pos.outcomeIndex)]
-
-        // On-chain redemption FIRST — only update DB after tx confirmed
+        // Simulation passed — actually send the tx
         if (pos.negativeRisk) {
           const hash = await walletClient.writeContract({
             address: NEG_RISK_ADAPTER,
