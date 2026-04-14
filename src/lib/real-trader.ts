@@ -494,6 +494,7 @@ export async function redeemAllResolved(): Promise<Array<{ conditionId: string; 
 
     const ctfAbi = parseAbi([
       'function redeemPositions(address collateralToken, bytes32 parentCollectionId, bytes32 conditionId, uint256[] indexSets) external',
+      'function payoutDenominator(bytes32 conditionId) view returns (uint256)',
     ])
     const negRiskAbi = parseAbi([
       'function redeemPositions(bytes32 conditionId, uint256[] indexSets) external',
@@ -503,9 +504,23 @@ export async function redeemAllResolved(): Promise<Array<{ conditionId: string; 
 
     for (const pos of resolved) {
       try {
+        const conditionIdBytes = pos.conditionId as `0x${string}`
+
+        // Check if condition is actually resolved on-chain before attempting redeem
+        // payoutDenominator > 0 means oracle has reported payouts
+        const payoutDenom = await publicClient.readContract({
+          address: CTF_ADDRESS,
+          abi: ctfAbi,
+          functionName: 'payoutDenominator',
+          args: [conditionIdBytes],
+        })
+        if (payoutDenom === 0n) {
+          // Not resolved on-chain yet — skip silently, no cooldown
+          continue
+        }
+
         // Correct bitmask: YES (index 0) = 1n, NO (index 1) = 2n
         const indexSets = [1n << BigInt(pos.outcomeIndex)]
-        const conditionIdBytes = pos.conditionId as `0x${string}`
 
         // On-chain redemption FIRST — only update DB after tx confirmed
         if (pos.negativeRisk) {

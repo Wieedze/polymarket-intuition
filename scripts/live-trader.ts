@@ -604,8 +604,9 @@ async function runExitStrategy(): Promise<Record<string, number>> {
     // (avgPrice from API is unreliable, would cause false stop-loss)
     if (trade.sourceRef === 'on-chain-sync') continue
 
-    // Skip resolved positions — these are handled by redeemAllResolved(), not exit strategy
-    if (trade.curPrice != null && (trade.curPrice >= 0.95 || trade.curPrice <= 0.05)) continue
+    // Don't block exit strategy for near-resolved positions — sell on CLOB
+    // redeemAllResolved() handles on-chain redemption, but markets can sit at 95¢+
+    // for days before oracle resolves. Let near-resolution exit sell them.
 
     // Don't place another sell if one is already pending
     if (pendingSellConditions.has(trade.conditionId)) continue
