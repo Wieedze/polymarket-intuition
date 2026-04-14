@@ -84,7 +84,13 @@ let _cachedPositions: RealPosition[] = []  // on-chain positions, updated every 
 
 function setOnChainState(balance: number, positions: RealPosition[]): void {
   _cachedOnChainBalance = balance
-  _cachedPositions = positions
+  // Don't overwrite cached positions with empty result if we had positions before
+  // (API timeout/error returns [] — would make equity = cash only → false drawdown)
+  if (positions.length > 0 || _cachedPositions.length === 0) {
+    _cachedPositions = positions
+  } else {
+    console.log(`  ⚠️  Positions API returned empty but had ${_cachedPositions.length} cached — keeping cache`)
+  }
 }
 
 
@@ -198,7 +204,7 @@ function checkDrawdownBreaker(): boolean {
 
   const drawdown = (highWaterMark - totalEquity) / highWaterMark
   if (drawdown >= DRAWDOWN_LIMIT_PCT) {
-    console.log(`  🚨 DRAWDOWN BREAKER | Equity $${totalEquity.toFixed(2)} is -${(drawdown * 100).toFixed(1)}% from peak $${highWaterMark.toFixed(2)} | Closing all positions`)
+    console.log(`  🚨 DRAWDOWN BREAKER | Equity $${totalEquity.toFixed(2)} is -${(drawdown * 100).toFixed(1)}% from peak $${highWaterMark.toFixed(2)} | Pausing new entries`)
     logBotEvent('safety', `DRAWDOWN BREAKER -${(drawdown * 100).toFixed(1)}%`, `Peak: $${highWaterMark.toFixed(2)}, Now: $${totalEquity.toFixed(2)}`)
     return true
   }
@@ -785,14 +791,10 @@ function printStats(): void {
 async function pollOnce(): Promise<void> {
   const time = new Date().toISOString().slice(11, 19)
 
-  // Safety checks
-  if (checkDailyLossLimit()) return
-  if (checkDrawdownBreaker()) return
-
   // Check pending GTC orders (BUY fills + SELL fills)
   if (!DRY_RUN) await checkPendingOrders()
 
-  // On-chain state (source of truth)
+  // On-chain state (source of truth) — MUST run before safety checks
   if (!DRY_RUN) {
     const [realBalance, realPositions] = await Promise.all([getRealBalance(), getRealPositions()])
     setOnChainState(realBalance, realPositions)
@@ -801,10 +803,13 @@ async function pollOnce(): Promise<void> {
     console.log(`[${time}] 🏜️ DRY-RUN`)
   }
 
-  // ── Phase 1: Process signals from scanners ──
-  const placed = await processSignals()
+  // Safety checks — block new entries only, never block exits/redemptions
+  const safetyBlock = checkDailyLossLimit() || checkDrawdownBreaker()
 
-  // ── Phase 2: Manage existing positions (exits) ──
+  // ── Phase 1: Process signals from scanners (skip if safety triggered) ──
+  const placed = safetyBlock ? 0 : await processSignals()
+
+  // ── Phase 2: Manage existing positions (exits) — ALWAYS runs ──
   const pricesUpdated = await refreshOpenPrices()
   const exits = await runExitStrategy()
   const totalExits = Object.values(exits).reduce((s, n) => s + n, 0)
