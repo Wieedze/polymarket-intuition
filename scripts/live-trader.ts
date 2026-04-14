@@ -618,6 +618,11 @@ async function runExitStrategy(): Promise<Record<string, number>> {
       // Price is near-resolved (85¢+ or 15¢-) — let it through to exit strategy
     }
 
+    // Skip positions at extreme prices — CLOB rejects prices outside 1¢-99¢
+    // Let redeemAllResolved() handle these via on-chain redemption
+    const cp = trade.curPrice
+    if (cp != null && (cp >= 0.99 || cp <= 0.01)) continue
+
     // Don't place another sell if one is already pending
     if (pendingSellConditions.has(trade.conditionId)) continue
 
@@ -859,10 +864,12 @@ async function pollOnce(): Promise<void> {
     }
 
     // 2. Add missing: on-chain exists but not in DB → import from Polymarket
+    //    Skip positions that were just redeemed (data API may be stale)
     let positionsAdded = 0
     for (const pos of _cachedPositions) {
       if (dbConditionIds.has(pos.conditionId)) continue
       if (pendingConditionIds.has(pos.conditionId)) continue
+      if (redeemedConditionIds.has(pos.conditionId)) continue
       // Real on-chain position not tracked in DB → add it
       const side = pos.side
       cacheTokenId(pos.conditionId, side, pos.tokenId, false)
