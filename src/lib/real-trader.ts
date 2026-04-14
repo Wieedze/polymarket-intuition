@@ -489,15 +489,16 @@ export async function redeemAllResolved(): Promise<Array<{ conditionId: string; 
     })
 
     const CTF_ADDRESS = '0x4D97DCd97eC945f40cF65F87097ACe5EA0476045' as `0x${string}`
-    const NEG_RISK_ADAPTER = '0xC5d563A36AE78145C45a50134d48A1215220f80a' as `0x${string}`
+    const NEG_RISK_ADAPTER = '0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296' as `0x${string}` // REDEEM contract (not the Exchange!)
     const USDC_E = '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174' as `0x${string}`
 
     const ctfAbi = parseAbi([
       'function redeemPositions(address collateralToken, bytes32 parentCollectionId, bytes32 conditionId, uint256[] indexSets) external',
       'function balanceOf(address account, uint256 id) view returns (uint256)',
     ])
+    // NegRiskAdapter takes amounts (actual balances), not indexSets
     const negRiskAbi = parseAbi([
-      'function redeemPositions(bytes32 conditionId, uint256[] indexSets) external',
+      'function redeemPositions(bytes32 conditionId, uint256[] amounts) external',
     ])
 
     const redeemed: Array<{ conditionId: string; exitPrice: number }> = []
@@ -505,7 +506,6 @@ export async function redeemAllResolved(): Promise<Array<{ conditionId: string; 
     for (const pos of resolved) {
       try {
         const conditionIdBytes = pos.conditionId as `0x${string}`
-        const indexSets = [1n << BigInt(pos.outcomeIndex)]
         const tokenId = BigInt(pos.asset)
 
         // Check actual on-chain token balance — skip if already redeemed (balance 0)
@@ -519,17 +519,36 @@ export async function redeemAllResolved(): Promise<Array<{ conditionId: string; 
 
         const parentCollectionId = '0x0000000000000000000000000000000000000000000000000000000000000000' as `0x${string}`
 
-        // Simulate first — use NegRiskAdapter for neg_risk, CTF direct for standard
-        try {
-          if (pos.negativeRisk) {
+        if (pos.negativeRisk) {
+          // NegRiskAdapter: amounts = [outcome0_balance, outcome1_balance]
+          const amounts: bigint[] = [0n, 0n]
+          amounts[pos.outcomeIndex] = balance
+
+          // Simulate first
+          try {
             await publicClient.simulateContract({
               address: NEG_RISK_ADAPTER,
               abi: negRiskAbi,
               functionName: 'redeemPositions',
-              args: [conditionIdBytes, indexSets],
+              args: [conditionIdBytes, amounts],
               account: account.address,
             })
-          } else {
+          } catch {
+            continue
+          }
+
+          const hash = await walletClient.writeContract({
+            address: NEG_RISK_ADAPTER,
+            abi: negRiskAbi,
+            functionName: 'redeemPositions',
+            args: [conditionIdBytes, amounts],
+          })
+          await publicClient.waitForTransactionReceipt({ hash })
+        } else {
+          // Standard CTF: indexSets
+          const indexSets = [1n, 2n]
+
+          try {
             await publicClient.simulateContract({
               address: CTF_ADDRESS,
               abi: ctfAbi,
@@ -537,22 +556,10 @@ export async function redeemAllResolved(): Promise<Array<{ conditionId: string; 
               args: [USDC_E, parentCollectionId, conditionIdBytes, indexSets],
               account: account.address,
             })
+          } catch {
+            continue
           }
-        } catch {
-          // Simulation reverted — not redeemable yet, skip silently
-          continue
-        }
 
-        // Simulation passed — send the actual tx
-        if (pos.negativeRisk) {
-          const hash = await walletClient.writeContract({
-            address: NEG_RISK_ADAPTER,
-            abi: negRiskAbi,
-            functionName: 'redeemPositions',
-            args: [conditionIdBytes, indexSets],
-          })
-          await publicClient.waitForTransactionReceipt({ hash })
-        } else {
           const hash = await walletClient.writeContract({
             address: CTF_ADDRESS,
             abi: ctfAbi,
