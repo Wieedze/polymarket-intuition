@@ -72,8 +72,8 @@ const ODDS_API_KEY = process.env.ODDS_API_KEY ?? ''
 const POLY_MIN_ORDER_SHARES = 15   // minimum shares to place a buy order
 const POLY_MIN_SELL_SHARES = 5     // minimum shares to sell (exit)
 const DRY_RUN = process.env.DRY_RUN === 'true'
-const DAILY_LOSS_LIMIT_PCT = 0.50  // 50% of bankroll — catastrophe safety net
-const DRAWDOWN_LIMIT_PCT = parseFloat(process.env.DRAWDOWN_LIMIT ?? '0.20')  // 20% from peak — close all, protect gains
+const DAILY_LOSS_LIMIT_PCT = parseFloat(process.env.DAILY_LOSS_LIMIT ?? '0.10')  // 10% of day-start equity — pause entries for the day
+const DRAWDOWN_LIMIT_PCT = parseFloat(process.env.DRAWDOWN_LIMIT ?? '0.15')  // 15% from session peak — pause entries
 
 // ── On-chain equity (single source of truth) ────────────────────
 // The wallet balance is the ONLY source of truth for equity.
@@ -175,10 +175,10 @@ function checkDailyLossLimit(): boolean {
   }
 
   const dailyLoss = dailyPnlStart - currentEquity
-  const limitAmount = currentEquity * DAILY_LOSS_LIMIT_PCT
+  const limitAmount = dailyPnlStart * DAILY_LOSS_LIMIT_PCT  // % of day-start equity
 
   if (dailyLoss >= limitAmount) {
-    console.log(`  🚨 DAILY LOSS LIMIT HIT | -$${dailyLoss.toFixed(2)} today (limit: -$${limitAmount.toFixed(2)}) | Bot paused until tomorrow`)
+    console.log(`  🚨 DAILY LOSS LIMIT HIT | -$${dailyLoss.toFixed(2)} today (limit: -$${limitAmount.toFixed(2)}) | Pausing entries until tomorrow`)
     logBotEvent('safety', `DAILY LOSS LIMIT -$${dailyLoss.toFixed(2)}`, `Limit: -$${limitAmount.toFixed(2)}`)
     return true
   }
@@ -199,9 +199,7 @@ function checkDrawdownBreaker(): boolean {
     highWaterMark = totalEquity
   }
 
-  // Only check if we've had meaningful gains (at least +10% from on-chain start)
-  if (highWaterMark < _cachedOnChainBalance * 1.10) return false
-
+  // Always active — protects against drawdown from session peak
   const drawdown = (highWaterMark - totalEquity) / highWaterMark
   if (drawdown >= DRAWDOWN_LIMIT_PCT) {
     console.log(`  🚨 DRAWDOWN BREAKER | Equity $${totalEquity.toFixed(2)} is -${(drawdown * 100).toFixed(1)}% from peak $${highWaterMark.toFixed(2)} | Pausing new entries`)
@@ -927,18 +925,14 @@ async function main(): Promise<void> {
     }
   }
 
-  // Starting balance = on-chain equity at startup (auto-detected, not hardcoded)
+  // Starting balance = always sync to on-chain equity at startup
+  // This is the reference point for daily loss limit and bankroll scaling
   const eq = getCurrentEquity()
-  const existingStartBal = getPortfolioSetting('starting_balance', '')
-  if (existingStartBal === '' || existingStartBal === '9') {
-    // First run or legacy value — set to current on-chain equity
-    setPortfolioSetting('starting_balance', eq.toFixed(2))
-    console.log(`  💰 Starting balance set from on-chain: $${eq.toFixed(2)}`)
-  }
-  const startBal = parseFloat(getPortfolioSetting('starting_balance', eq.toFixed(2)))
+  setPortfolioSetting('starting_balance', eq.toFixed(2))
+  const startBal = eq
   const scale = getBankrollScale()
 
-  // HWM = current on-chain equity (reset every restart, no phantom peaks)
+  // HWM = current on-chain equity (session peak tracker)
   highWaterMark = eq
 
   console.log('═══════════════════════════════════════════════')
@@ -958,7 +952,8 @@ async function main(): Promise<void> {
   console.log(`  Stale exit:  ${EXIT_CONFIG.staleDays}d < ${(EXIT_CONFIG.staleThreshold * 100).toFixed(0)}¢ move`)
   console.log(`  Expert exit: ${EXIT_CONFIG.followExpertExit ? 'ON' : 'OFF'}`)
   console.log(`  Consensus:   1x=1.0 | 2x=0.7 | 3x=0.5 | 5x=0.3 (inverted)`)
-  console.log(`  Daily limit: -${(DAILY_LOSS_LIMIT_PCT * 100).toFixed(0)}% ($${(startBal * DAILY_LOSS_LIMIT_PCT).toFixed(0)})`)
+  console.log(`  Daily limit: -${(DAILY_LOSS_LIMIT_PCT * 100).toFixed(0)}% ($${(eq * DAILY_LOSS_LIMIT_PCT).toFixed(0)})`)
+  console.log(`  Drawdown:    -${(DRAWDOWN_LIMIT_PCT * 100).toFixed(0)}% from session peak`)
   console.log(`  Poll every:  ${POLL_INTERVAL_MS / 1000}s`)
   console.log('═══════════════════════════════════════════════')
 
