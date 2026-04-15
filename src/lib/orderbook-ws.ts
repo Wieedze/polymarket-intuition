@@ -129,6 +129,14 @@ export function getWsBestBid(tokenId: string): number | null {
   return entry.bestBid > 0 ? entry.bestBid : null
 }
 
+export function getWsSpread(tokenId: string): { bid: number; ask: number; spread: number } | null {
+  const entry = priceCache.get(tokenId)
+  if (!entry) return null
+  if (Date.now() - entry.updatedAt > STALE_MS) return null
+  if (entry.bestBid <= 0 || entry.bestAsk <= 0) return null
+  return { bid: entry.bestBid, ask: entry.bestAsk, spread: entry.bestAsk - entry.bestBid }
+}
+
 export function getSubscribedCount(): number {
   return subscribedTokens.size
 }
