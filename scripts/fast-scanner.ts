@@ -25,14 +25,13 @@ import {
   getWsSpread,
   isWsConnected,
 } from '../src/lib/orderbook-ws'
-import { fetchMarketMetadata } from '../src/lib/polymarket'
 import { keywordClassify } from '../src/lib/classifier'
 
 // ── Config ───────────────────────────────────────────────────────
 
 const MIN_ENTRY = 0.05
 const MAX_ENTRY = 0.35
-const MIN_SHARES = 10           // ignore tiny trades (dust)
+const MIN_SHARES = 15           // ignore tiny trades (dust)
 const PAPER_BET_SIZE = 5        // $5 per paper trade
 const MAX_PAPER_POSITIONS = 20
 const STATS_INTERVAL_MS = 60_000  // print stats every minute

@@ -25,7 +25,7 @@ module.exports = {
       env: {
         DB_PATH: '/opt/polymarket-intuition/data/live.db',
         SHARED_DB_PATH: '/opt/polymarket-intuition/data/polymarket.db',
-        POLL_INTERVAL_MS: '60000',       // 1 min — detect new expert positions
+        POLL_INTERVAL_MS: '15000',       // 15s — fast expert position detection
         MIN_SIGNAL_SCORE_LIVE: '50',     // emit signals >= 50 (aligned with paper trading)
         MAX_ENTRY_PRICE: '0.35',        // only emit signals <= 35¢ (2:1+ payoff)
         BOT_SCRIPT: 'scripts/expert-scanner.ts',
