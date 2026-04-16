@@ -76,6 +76,7 @@ type TokenMapping = {
 const paperTrades: PaperTrade[] = []
 const tokenMap = new Map<string, TokenMapping>()       // tokenId → market info
 const pendingLookups = new Set<string>()               // tokenIds being looked up
+let debugLookups = 0                                    // cap debug logs
 const cooldowns = new Map<string, number>()            // conditionId → cooldown until
 const seenTxs = new Set<string>()                      // dedup
 
@@ -115,9 +116,15 @@ async function resolveTokenId(tokenId: string): Promise<TokenMapping | null> {
   try {
     // Try CLOB API to find which market this token belongs to
     const res = await fetch(`https://clob.polymarket.com/markets?token_id=${tokenId}`)
-    if (!res.ok) return null
+    if (!res.ok) {
+      if (debugLookups < 5) console.log(`  [DEBUG] CLOB API ${res.status} for token ${tokenId.slice(0, 20)}...`)
+      debugLookups++
+      return null
+    }
 
-    const data = await res.json() as Array<{
+    const raw = await res.json()
+    // CLOB API may return object or array depending on endpoint
+    const data = Array.isArray(raw) ? raw : (raw ? [raw] : []) as Array<{
       condition_id: string
       question: string
       tokens: Array<{ token_id: string; outcome: string }>
@@ -125,12 +132,20 @@ async function resolveTokenId(tokenId: string): Promise<TokenMapping | null> {
       active: boolean
     }>
 
-    if (!data || data.length === 0) return null
+    if (!data || data.length === 0) {
+      if (debugLookups < 5) console.log(`  [DEBUG] CLOB empty for token ${tokenId.slice(0, 20)}...`)
+      debugLookups++
+      return null
+    }
     const market = data[0]!
-    if (!market.active) return null
+    if (!market.active) {
+      if (debugLookups < 5) console.log(`  [DEBUG] Market inactive: ${market.question?.slice(0, 40)}`)
+      debugLookups++
+      return null
+    }
 
-    const yesToken = market.tokens.find(t => t.outcome === 'Yes')
-    const noToken = market.tokens.find(t => t.outcome === 'No')
+    const yesToken = market.tokens.find((t: { token_id: string; outcome: string }) => t.outcome === 'Yes')
+    const noToken = market.tokens.find((t: { token_id: string; outcome: string }) => t.outcome === 'No')
     if (!yesToken || !noToken) return null
 
     const side = tokenId === yesToken.token_id ? 'YES' : 'NO'
