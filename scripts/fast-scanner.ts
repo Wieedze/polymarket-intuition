@@ -84,6 +84,10 @@ let totalWins = 0
 let totalLosses = 0
 let tradesDetected = 0
 let tradesSkipped = 0
+const skipReasons: Record<string, number> = {
+  'tiny': 0, 'no-mapping': 0, 'blocked-domain': 0,
+  'no-ws-price': 0, 'price-range': 0, 'spread': 0, 'other': 0,
+}
 
 // ── Expert wallets ──────────────────────────────────────────────
 
@@ -173,28 +177,28 @@ async function handleExpertTrade(trade: ExpertTrade): Promise<void> {
   // Ignore tiny trades
   const shares = Number(trade.amount) / 1e6  // CTF uses 6 decimals
   if (shares < MIN_SHARES) {
-    tradesSkipped++
+    tradesSkipped++; skipReasons['tiny']++
     return
   }
 
   // Resolve token → market
   const mapping = await resolveTokenId(trade.tokenId)
   if (!mapping) {
-    tradesSkipped++
+    tradesSkipped++; skipReasons['no-mapping']++
     return
   }
 
   // Domain filter
   const classification = keywordClassify(mapping.title)
   if (classification && BLOCKED_DOMAINS.has(classification.domain)) {
-    tradesSkipped++
+    tradesSkipped++; skipReasons['blocked-domain']++
     return
   }
 
   // Get current price from WS
   const bid = getWsBestBid(mapping.yesTokenId)
   if (bid == null) {
-    tradesSkipped++
+    tradesSkipped++; skipReasons['no-ws-price']++
     return
   }
 
@@ -202,8 +206,7 @@ async function handleExpertTrade(trade: ExpertTrade): Promise<void> {
 
   // Price filter
   if (curPrice < MIN_ENTRY || curPrice > MAX_ENTRY) {
-    console.log(`  [FAST] SKIP ${(curPrice * 100).toFixed(0)}c > ${(MAX_ENTRY * 100).toFixed(0)}c | ${mapping.title.slice(0, 45)}`)
-    tradesSkipped++
+    tradesSkipped++; skipReasons['price-range']++
     return
   }
 
@@ -211,8 +214,7 @@ async function handleExpertTrade(trade: ExpertTrade): Promise<void> {
   const wsData = getWsSpread(mapping.yesTokenId)
   const spread = wsData?.spread ?? null
   if (spread != null && spread > 0.03) {
-    console.log(`  [FAST] SKIP spread ${(spread * 100).toFixed(1)}c > 3c | ${mapping.title.slice(0, 45)}`)
-    tradesSkipped++
+    tradesSkipped++; skipReasons['spread']++
     return
   }
 
@@ -328,11 +330,13 @@ function printStats(): void {
   const total = totalWins + totalLosses
   const winRate = total > 0 ? `${((totalWins / total) * 100).toFixed(0)}%` : '-'
 
+  const skips = Object.entries(skipReasons).filter(([, v]) => v > 0).map(([k, v]) => `${k}:${v}`).join(' ')
   console.log(
     `\n[${now}] Chain ${chain} | WS ${ws} | ${getWatchedCount()} experts | ` +
     `${tradesDetected} detected | ${tradesSkipped} skipped | ` +
     `${open.length} open | ${totalWins}W/${totalLosses}L (${winRate}) | PnL: ${totalPnl >= 0 ? '+' : ''}$${totalPnl.toFixed(2)}`
   )
+  if (skips) console.log(`  skips: ${skips}`)
 
   if (open.length > 0) {
     console.log('  ── positions ──')
