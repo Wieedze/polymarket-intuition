@@ -1,14 +1,16 @@
 /**
  * Chain Listener — Real-time ERC1155 TransferSingle events on Polymarket CTF
  *
- * Watches the CTF contract on Polygon for token transfers TO watched wallets.
- * When an expert receives conditional tokens, we detect it in <10 seconds
- * instead of 60s+ with data API polling.
+ * Uses WebSocket (wss://) for instant event streaming — <1 second latency.
+ * Falls back to HTTP polling if WSS is not available.
+ *
+ * Subscribes to ALL TransferSingle on the CTF contract, filters watched
+ * wallets in code (RPC can't handle 75 address filters).
  *
  * Standalone module. No DB dependency, no side effects.
  */
 
-import { createPublicClient, http, parseAbiItem, type Log } from 'viem'
+import { createPublicClient, http, webSocket, parseAbiItem, type Log, type Transport } from 'viem'
 import { polygon } from 'viem/chains'
 
 // ── Config ───────────────────────────────────────────────────────
@@ -16,7 +18,6 @@ import { polygon } from 'viem/chains'
 const POLYGON_RPC = process.env.POLYGON_RPC_URL ?? 'https://polygon-bor-rpc.publicnode.com'
 const CTF_ADDRESS = '0x4D97DCd97eC945f40cF65F87097ACe5EA0476045' as `0x${string}`
 
-// ERC1155 TransferSingle event
 const TRANSFER_SINGLE_EVENT = parseAbiItem(
   'event TransferSingle(address indexed operator, address indexed from, address indexed to, uint256 id, uint256 value)'
 )
@@ -24,24 +25,25 @@ const TRANSFER_SINGLE_EVENT = parseAbiItem(
 // ── Types ────────────────────────────────────────────────────────
 
 export type ExpertTrade = {
-  wallet: string          // expert address (to)
-  tokenId: string         // conditional token ID
-  amount: bigint          // number of shares
-  operator: string        // who executed (exchange contract)
-  from: string            // sender (exchange or 0x0 for mint)
+  wallet: string
+  tokenId: string
+  amount: bigint
+  operator: string
+  from: string
   blockNumber: bigint
   transactionHash: string
-  detectedAt: number      // timestamp ms
+  detectedAt: number
 }
 
 export type TradeCallback = (trade: ExpertTrade) => void
 
 // ── State ────────────────────────────────────────────────────────
 
-const watchedAddresses = new Set<string>()  // lowercase expert addresses
+const watchedAddresses = new Set<string>()
 let unwatch: (() => void) | null = null
 let tradeCallback: TradeCallback | null = null
 let isListening = false
+let mode: 'ws' | 'http' = 'http'
 
 // ── Public API ───────────────────────────────────────────────────
 
@@ -50,9 +52,7 @@ export function addWatchedAddress(address: string): void {
 }
 
 export function addWatchedAddresses(addresses: string[]): void {
-  for (const addr of addresses) {
-    watchedAddresses.add(addr.toLowerCase())
-  }
+  for (const addr of addresses) watchedAddresses.add(addr.toLowerCase())
 }
 
 export function getWatchedCount(): number {
@@ -63,34 +63,49 @@ export function isChainListening(): boolean {
   return isListening
 }
 
+export function getListenerMode(): string {
+  return mode
+}
+
 export function startChainListener(onTrade: TradeCallback): void {
   if (isListening) return
   tradeCallback = onTrade
 
+  // Determine transport: WSS if Alchemy/Infura URL, else HTTP polling
+  let transport: Transport
+  const wssUrl = POLYGON_RPC.replace('https://', 'wss://').replace('http://', 'ws://')
+
+  if (POLYGON_RPC.includes('alchemy.com') || POLYGON_RPC.includes('infura.io') || POLYGON_RPC.includes('quiknode')) {
+    transport = webSocket(wssUrl)
+    mode = 'ws'
+  } else {
+    transport = http(POLYGON_RPC)
+    mode = 'http'
+  }
+
   const client = createPublicClient({
     chain: polygon,
-    transport: http(POLYGON_RPC),
+    transport,
   })
 
-  // Watch for TransferSingle events on the CTF contract
-  // pollingInterval = 4s (Polygon block time is ~2s, but we don't need every block)
+  // Subscribe to ALL TransferSingle events on CTF — filter watched wallets in code
   unwatch = client.watchContractEvent({
     address: CTF_ADDRESS,
     abi: [TRANSFER_SINGLE_EVENT],
     eventName: 'TransferSingle',
-    pollingInterval: 4_000,
+    pollingInterval: mode === 'http' ? 4_000 : undefined,  // only for HTTP fallback
     onLogs: (logs) => {
       for (const log of logs) {
-        handleTransferEvent(log)
+        handleTransferEvent(log as Log<bigint, number, false, typeof TRANSFER_SINGLE_EVENT, true>)
       }
     },
     onError: (error) => {
-      console.log(`  [CHAIN] Error: ${error.message.slice(0, 100)}`)
+      console.log(`  [CHAIN] Error: ${error.message.slice(0, 150)}`)
     },
   })
 
   isListening = true
-  console.log(`  [CHAIN] Listening for TransferSingle on CTF | ${watchedAddresses.size} wallets | poll:4s`)
+  console.log(`  [CHAIN] Listening on CTF | mode:${mode.toUpperCase()} | ${watchedAddresses.size} wallets`)
 }
 
 export function stopChainListener(): void {
@@ -115,7 +130,7 @@ function handleTransferEvent(log: Log<bigint, number, false, typeof TRANSFER_SIN
   // Ignore zero-value transfers
   if (args.value === 0n) return
 
-  // Ignore transfers FROM the expert (they're selling, not buying)
+  // Ignore self-transfers
   const from = (args.from ?? '').toLowerCase()
   if (from === to) return
 
@@ -130,7 +145,5 @@ function handleTransferEvent(log: Log<bigint, number, false, typeof TRANSFER_SIN
     detectedAt: Date.now(),
   }
 
-  if (tradeCallback) {
-    tradeCallback(trade)
-  }
+  if (tradeCallback) tradeCallback(trade)
 }
