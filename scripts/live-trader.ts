@@ -336,31 +336,36 @@ async function processSignals(): Promise<number> {
       continue
     }
 
-    // Kelly-based sizing using on-chain equity
+    // Share-based sizing — the right metric on Polymarket
+    // Base shares: scaled by signal score (conviction)
+    // Consensus bonus: +10 shares per extra expert
     const currentBankroll = getCurrentEquity()
     const availCash = getAvailableCash()
-    const kellyFraction = signal.kellyFraction ?? 0
-    const minBet = getMinBet(currentBankroll)
-    const maxBet = getMaxBet(currentBankroll)
 
-    const baseBet = kellyFraction > 0
-      ? Math.min(Math.max(currentBankroll * kellyFraction, minBet), maxBet)
-      : minBet
+    let baseShares = signal.signalScore >= 80 ? 40
+      : signal.signalScore >= 65 ? 25
+      : POLY_MIN_ORDER_SHARES  // 15
 
-    // Consensus multiplier (from signal metadata)
     const consensusCount = signal.consensusCount ?? 1
-    const consensusMulti = consensusCount >= 5 ? 0.3
-      : consensusCount >= 3 ? 0.5
-      : consensusCount >= 2 ? 0.7
-      : 1
+    const consensusBonus = Math.min((consensusCount - 1) * 10, 30)
+    baseShares += consensusBonus
 
-    const signalMulti = signal.signalScore >= 80 ? 1.5 : 1.0
+    // Expert trust multiplier (0.5-1.5x on share count)
     const trustMulti = signal.expertTrustLevel ?? 1.0
-    let betAmount = Math.min(baseBet * signalMulti * consensusMulti * trustMulti, maxBet)
+    let targetShares = Math.max(POLY_MIN_ORDER_SHARES, Math.round(baseShares * trustMulti))
 
-    // Polymarket minimum shares
-    const minBetForShares = POLY_MIN_ORDER_SHARES * signal.entryPrice
-    if (betAmount < minBetForShares) betAmount = minBetForShares
+    let betAmount = parseFloat((targetShares * signal.entryPrice).toFixed(2))
+
+    // Cap at 30% of cash (single trade risk limit)
+    if (betAmount > availCash * 0.30) {
+      targetShares = Math.floor((availCash * 0.30) / signal.entryPrice)
+      betAmount = parseFloat((targetShares * signal.entryPrice).toFixed(2))
+      if (targetShares < POLY_MIN_ORDER_SHARES) {
+        markSignalRejected(signal.id, 'insufficient-cash')
+        continue
+      }
+    }
+
     if (betAmount > availCash * 0.95) {
       markSignalRejected(signal.id, 'insufficient-cash')
       continue
