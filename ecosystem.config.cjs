@@ -72,6 +72,7 @@ module.exports = {
         MAX_ENTRY_PRICE: '0.35',        // force 2:1+ payoff ratio (was 0.50)
         BET_PCT: '0.05',                // 5% of cash per bet (enables 15-share min at 35c)
         STOP_LOSS: '0.50',              // -50% stop-loss (was -40%)
+        FOLLOW_EXPERT_EXIT: 'false',    // don't force-sell when expert exits (they market-make too fast)
         DRY_RUN: 'false',               // REAL orders
         BOT_SCRIPT: 'scripts/live-trader.ts',
       },
