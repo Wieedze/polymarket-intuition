@@ -366,11 +366,6 @@ async function processSignals(): Promise<number> {
       }
     }
 
-    if (betAmount > availCash * 0.95) {
-      markSignalRejected(signal.id, 'insufficient-cash')
-      continue
-    }
-
     // Capital limit check
     const totalInvested = openTrades.reduce((s, t) => s + t.sizeUsdc, 0)
     if (totalInvested + betAmount > currentBankroll * getMaxCapitalPct()) {
