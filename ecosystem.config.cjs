@@ -70,6 +70,7 @@ module.exports = {
         POLL_INTERVAL_MS: '15000',       // 15s — fast signal pickup + exit checks
         MIN_SIGNAL_SCORE_LIVE: '50',     // aligned with paper trading
         MAX_ENTRY_PRICE: '0.35',        // force 2:1+ payoff ratio (was 0.50)
+        BET_PCT: '0.05',                // 5% of cash per bet (enables 15-share min at 35c)
         STOP_LOSS: '0.50',              // -50% stop-loss (was -40%)
         DRY_RUN: 'false',               // REAL orders
         BOT_SCRIPT: 'scripts/live-trader.ts',
