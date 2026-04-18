@@ -646,13 +646,25 @@ async function runExitStrategy(): Promise<Record<string, number>> {
       if ((decision.reason === 'partial-exit-100' || decision.reason === 'partial-exit-150') && decision.partialFraction) {
         // Partial exit — sell a fraction, capped to on-chain balance
         const sharesRemaining = trade.sharesRemaining ?? trade.shares
-        const sharesToSell = sharesRemaining * decision.partialFraction
+        let sharesToSell = sharesRemaining * decision.partialFraction
+        let sellsAll = false
+
+        // If remaining after partial would be dust (< 5 shares), sell everything
+        const remainingAfter = sharesRemaining - sharesToSell
+        if (remainingAfter < POLY_MIN_SELL_SHARES && sharesRemaining >= POLY_MIN_SELL_SHARES) {
+          sharesToSell = sharesRemaining
+          sellsAll = true
+          console.log(`  🔄 FULL SELL instead of partial (would leave ${remainingAfter.toFixed(1)} dust) | ${trade.title.slice(0, 40)}`)
+        }
 
         // Polymarket minimum sell: 5 shares
         if (sharesToSell < POLY_MIN_SELL_SHARES) {
           console.log(`  ⏭️  PARTIAL SKIP | ${sharesToSell.toFixed(1)} shares < ${POLY_MIN_SELL_SHARES} min | ${trade.title.slice(0, 40)}`)
           continue
         }
+
+        // If selling all, override the partial fraction to 1.0
+        if (sellsAll) decision.partialFraction = 1.0
 
         if (DRY_RUN) {
           partialExitPaperTrade(trade.conditionId, decision.partialFraction, exitPrice)
@@ -868,6 +880,8 @@ async function pollOnce(): Promise<void> {
       if (dbConditionIds.has(pos.conditionId)) continue
       if (pendingConditionIds.has(pos.conditionId)) continue
       if (redeemedConditionIds.has(pos.conditionId)) continue
+      // Skip dust positions (< 5 shares = can't sell on CLOB, just waiting for resolution)
+      if (pos.size < POLY_MIN_SELL_SHARES) continue
       // Real on-chain position not tracked in DB → add it
       const side = pos.side
       cacheTokenId(pos.conditionId, side, pos.tokenId, false)
