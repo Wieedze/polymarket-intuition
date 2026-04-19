@@ -28,8 +28,8 @@ module.exports = {
         POLL_INTERVAL_MS: '15000',       // 15s — fast expert position detection
         MIN_SIGNAL_SCORE_LIVE: '65',     // raised from 50 — 20% WR on longshot YES forced tightening
         MAX_ENTRY_PRICE: '0.35',        // YES cap — only emit YES signals <= 35¢ (2:1+ payoff)
-        NO_MAX_ENTRY_PRICE: '0.70',     // NO cap — fade-favorite plays allowed up to 70¢ if score ≥ NO_HIGH_PRICE_MIN_SCORE
-        NO_HIGH_PRICE_MIN_SCORE: '70',  // NO signals above MAX_ENTRY_PRICE require score >= 70
+        NO_MAX_ENTRY_PRICE: '0.80',     // NO cap — widened from 0.70 to capture high-WR fade-favorite plays (e.g. swisstony 87% WR @ 70¢+ NO)
+        NO_HIGH_PRICE_MIN_SCORE: '65',  // lowered from 70 — catch more 50-70¢ NO signals from calibrated experts
         BOT_SCRIPT: 'scripts/expert-scanner.ts',
       },
       restart_delay: 10000,
@@ -72,7 +72,7 @@ module.exports = {
         POLL_INTERVAL_MS: '15000',       // 15s — fast signal pickup + exit checks
         MIN_SIGNAL_SCORE_LIVE: '65',     // raised from 50 — filter longshot YES losers
         MAX_ENTRY_PRICE: '0.35',        // YES cap — force 2:1+ payoff ratio
-        NO_MAX_ENTRY_PRICE: '0.70',     // NO cap — allow fade-favorite plays up to 70¢
+        NO_MAX_ENTRY_PRICE: '0.80',     // NO cap — widened from 0.70 to match scanner
         BET_PCT: '0.05',                // 5% of cash per bet (enables 15-share min at 35c)
         STOP_LOSS: '0.50',              // -50% stop-loss (was -40%)
         FOLLOW_EXPERT_EXIT: 'false',    // don't force-sell when expert exits (they market-make too fast)
