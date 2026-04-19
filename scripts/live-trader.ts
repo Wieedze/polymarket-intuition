@@ -101,7 +101,15 @@ function getCurrentEquity(): number {
 }
 
 function getAvailableCash(): number {
-  return _cachedOnChainBalance  // what's actually available to spend
+  // Subtract cash reserved by GTC BUY orders already placed but not yet filled on-chain.
+  // Without this, a burst of signals in a single poll cycle over-commits the wallet:
+  // each order sees the full on-chain balance and sizes against it, but Polymarket
+  // rejects later orders with "sum of matched orders exceeds balance".
+  const pending = getPendingOrders()
+  const reserved = pending
+    .filter((po) => po.orderType === 'BUY')
+    .reduce((s, po) => s + po.sizeUsdc, 0)
+  return Math.max(0, _cachedOnChainBalance - reserved)
 }
 
 function getMaxOpen(): number {
