@@ -80,10 +80,15 @@ export function scoreSignal(params: {
   marketTitle: string
   entryPrice: number
   positionSize: number   // shares held by expert
+  side?: 'YES' | 'NO'             // fading (NO > 50¢) maps to YES-equivalent probability
   bookmakerEdgeBonus?: number     // pre-computed odds bonus, 0 if not sports
   bookmakerNoVigProb?: number     // bookmaker fair prob for logging
 }): SignalScore {
   const { expertWallet, marketTitle, entryPrice, positionSize } = params
+  const side = params.side ?? 'YES'
+  // Effective price in YES-probability space: for NO bets, fading YES @ (1-p) is the same risk/reward
+  // as buying YES @ (1-p). Normalize so the same entry buckets apply to both sides.
+  const effectivePrice = side === 'NO' ? 1 - entryPrice : entryPrice
   const oddsBonus = params.bookmakerEdgeBonus ?? 0
   const oddsProb = params.bookmakerNoVigProb ?? null
 
@@ -196,26 +201,28 @@ export function scoreSignal(params: {
   else if (wr >= 0.40) { winRateScore = 4 }
 
   // 4. Entry price quality (15 points max)
-  // Entry price scoring — longshots have best edge, mid-range acceptable for proven experts
+  // Scored on YES-equivalent probability (effectivePrice) so NO fades and YES longshots
+  // with the same probability distance get the same entry score.
   let entryScore = 0
-  if (entryPrice > 0.50) {
+  const displayPrice = entryPrice
+  if (effectivePrice > 0.50) {
     return {
       score: 0, domainMatch: false, expertCalibration: 0,
       expertWinRate: 0, expertTrades: 0, betSizeSignal: 0,
-      expertImplicitEdge: 0, domain, reasons: [`Entry ${(entryPrice * 100).toFixed(0)}¢ blocked — no edge above 50¢`],
+      expertImplicitEdge: 0, domain, reasons: [`Entry ${(displayPrice * 100).toFixed(0)}¢ (${side}) blocked — effective prob > 50¢`],
       bookmakerEdgeBonus: 0, bookmakerNoVigProb: null,
     }
-  } else if (entryPrice >= 0.15 && entryPrice <= 0.30) {
+  } else if (effectivePrice >= 0.15 && effectivePrice <= 0.30) {
     entryScore = 15  // longshot sweet spot — best historical edge (+$76k, +9pts)
-    reasons.push(`Longshot entry: ${(entryPrice * 100).toFixed(0)}¢`)
-  } else if (entryPrice > 0.30 && entryPrice <= 0.50) {
+    reasons.push(`${side} entry: ${(displayPrice * 100).toFixed(0)}¢ (eff ${(effectivePrice * 100).toFixed(0)}¢)`)
+  } else if (effectivePrice > 0.30 && effectivePrice <= 0.50) {
     entryScore = 10  // value zone — was profitable before scaling, needs quality filter
-    reasons.push(`Value entry: ${(entryPrice * 100).toFixed(0)}¢`)
-  } else if (entryPrice >= 0.05 && entryPrice < 0.15) {
+    reasons.push(`${side} value: ${(displayPrice * 100).toFixed(0)}¢ (eff ${(effectivePrice * 100).toFixed(0)}¢)`)
+  } else if (effectivePrice >= 0.05 && effectivePrice < 0.15) {
     entryScore = 12  // deep longshot — huge asymmetry (risk 5-15¢, gain 85-95¢)
-    reasons.push(`Deep longshot: ${(entryPrice * 100).toFixed(0)}¢`)
+    reasons.push(`${side} deep longshot: ${(displayPrice * 100).toFixed(0)}¢ (eff ${(effectivePrice * 100).toFixed(0)}¢)`)
   } else {
-    reasons.push(`Extreme longshot: ${(entryPrice * 100).toFixed(0)}¢`)
+    reasons.push(`${side} extreme longshot: ${(displayPrice * 100).toFixed(0)}¢ (eff ${(effectivePrice * 100).toFixed(0)}¢)`)
   }
 
   // 5. Bet size signal (10 points max) — bigger position = more conviction

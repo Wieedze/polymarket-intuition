@@ -397,7 +397,9 @@ async function processSignals(): Promise<number> {
     subscribeToken(tokenId)
     const PRICE_BUFFER = 0.05
     const MAX_ENTRY_PRICE = parseFloat(process.env.MAX_ENTRY_PRICE ?? '0.50')
-    const orderPrice = parseFloat(Math.min(signal.entryPrice + PRICE_BUFFER, MAX_ENTRY_PRICE).toFixed(2))
+    const NO_MAX_ENTRY_PRICE = parseFloat(process.env.NO_MAX_ENTRY_PRICE ?? '0.70')
+    const effectiveMax = signal.side === 'NO' ? NO_MAX_ENTRY_PRICE : MAX_ENTRY_PRICE
+    const orderPrice = parseFloat(Math.min(signal.entryPrice + PRICE_BUFFER, effectiveMax).toFixed(2))
     const liveBetAmount = parseFloat(Math.min(betAmount, availCash * 0.30).toFixed(2))
 
     if (liveBetAmount < POLY_MIN_ORDER_SHARES * orderPrice) {

@@ -50,6 +50,8 @@ const POLL_INTERVAL_MS = parseInt(process.env.POLL_INTERVAL_MS ?? '60000', 10)
 const MIN_SIGNAL_SCORE = parseInt(process.env.MIN_SIGNAL_SCORE_LIVE ?? '50', 10)
 const MIN_ENTRY = parseFloat(process.env.MIN_ENTRY_PRICE ?? '0.05')
 const MAX_ENTRY = parseFloat(process.env.MAX_ENTRY_PRICE ?? '0.50')
+const NO_MAX_ENTRY = parseFloat(process.env.NO_MAX_ENTRY_PRICE ?? '0.70')
+const NO_HIGH_PRICE_MIN_SCORE = parseInt(process.env.NO_HIGH_PRICE_MIN_SCORE ?? '70', 10)
 const ODDS_API_KEY = process.env.ODDS_API_KEY ?? ''
 
 // ── Consensus tracking ───────────────────────────────────────────
@@ -93,8 +95,10 @@ function shouldEmitSignal(alert: PositionAlert): boolean {
   if (alert.type !== 'NEW_POSITION') return false
 
   const price = alert.position.curPrice
-  if (price < MIN_ENTRY || price > MAX_ENTRY) {
-    console.log(`  [SCANNER] SKIP price ${(price * 100).toFixed(0)}¢ out of ${(MIN_ENTRY * 100).toFixed(0)}-${(MAX_ENTRY * 100).toFixed(0)}¢ | ${alert.position.title.slice(0, 40)}`)
+  const side = alert.position.outcomeIndex === 0 ? 'YES' : 'NO'
+  const maxAllowed = side === 'NO' ? NO_MAX_ENTRY : MAX_ENTRY
+  if (price < MIN_ENTRY || price > maxAllowed) {
+    console.log(`  [SCANNER] SKIP ${side} @ ${(price * 100).toFixed(0)}¢ out of ${(MIN_ENTRY * 100).toFixed(0)}-${(maxAllowed * 100).toFixed(0)}¢ | ${alert.position.title.slice(0, 40)}`)
     return false
   }
 
@@ -171,11 +175,13 @@ async function scoreAndEmitSignal(alert: PositionAlert): Promise<boolean> {
     await getBookmakerEdgeBonus(alert.position.title, alert.position.curPrice, alert.position.outcomeIndex)
 
   // Score signal
+  const scoringSide = alert.position.outcomeIndex === 0 ? 'YES' : 'NO'
   const signal = scoreSignal({
     expertWallet: alert.wallet,
     marketTitle: alert.position.title,
     entryPrice: alert.position.curPrice,
     positionSize: alert.position.size,
+    side: scoringSide,
     bookmakerEdgeBonus,
     bookmakerNoVigProb: bookmakerNoVigProb ?? undefined,
   })
@@ -185,6 +191,13 @@ async function scoreAndEmitSignal(alert: PositionAlert): Promise<boolean> {
       const oddsTag = bookmakerEdgeBonus > 0 ? ` | book:+${bookmakerEdgeBonus}pts` : ''
       console.log(`  [SCANNER] LOW (${signal.score}/${MIN_SIGNAL_SCORE}) | ${signal.reasons[0]}${oddsTag} | ${alert.position.title.slice(0, 50)}`)
     }
+    return false
+  }
+
+  // NO above MAX_ENTRY requires elevated conviction (fade-favorite gate)
+  const signalSide = alert.position.outcomeIndex === 0 ? 'YES' : 'NO'
+  if (signalSide === 'NO' && alert.position.curPrice > MAX_ENTRY && signal.score < NO_HIGH_PRICE_MIN_SCORE) {
+    console.log(`  [SCANNER] SKIP NO @ ${(alert.position.curPrice * 100).toFixed(0)}¢ score ${signal.score}/${NO_HIGH_PRICE_MIN_SCORE} (required for NO > ${(MAX_ENTRY * 100).toFixed(0)}¢) | ${alert.position.title.slice(0, 40)}`)
     return false
   }
 
