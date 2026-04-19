@@ -19,12 +19,12 @@ type TradeRow = {
   title: string
   side: string
   entry_price: number
-  simulated_usdc: number
+  size_usdc: number
   status: string
   pnl: number | null
   opened_at: string
-  copied_from: string
-  copied_label: string | null
+  source_ref: string
+  source_label: string | null
 }
 
 type SignalRow = {
@@ -71,10 +71,23 @@ function main(): void {
   console.log(`SIGNAL AUDIT — last ${DAYS} days (since ${SINCE.slice(0, 10)})`)
   console.log('═'.repeat(70))
 
+  // Auto-detect table name: old DBs use "paper_trades", migrated use "positions"
+  const tableName = db.prepare(
+    "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('positions','paper_trades') ORDER BY name='positions' DESC LIMIT 1"
+  ).get() as { name: string } | undefined
+  const table = tableName?.name ?? 'positions'
+
+  // Old schema used simulated_usdc/copied_from/copied_label; migrated uses size_usdc/source_ref/source_label
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>
+  const colNames = new Set(cols.map(c => c.name))
+  const sizeCol = colNames.has('size_usdc') ? 'size_usdc' : 'simulated_usdc'
+  const refCol = colNames.has('source_ref') ? 'source_ref' : 'copied_from'
+  const labelCol = colNames.has('source_label') ? 'source_label' : 'copied_label'
+
   const trades = db.prepare(`
-    SELECT condition_id, title, side, entry_price, simulated_usdc,
-           status, pnl, opened_at, copied_from, copied_label
-    FROM paper_trades
+    SELECT condition_id, title, side, entry_price, ${sizeCol} AS size_usdc,
+           status, pnl, opened_at, ${refCol} AS source_ref, ${labelCol} AS source_label
+    FROM ${table}
     WHERE opened_at >= ?
   `).all(SINCE) as TradeRow[]
 
@@ -124,7 +137,7 @@ function main(): void {
   console.log('\n┌─ TOP 10 EXPERTS (by trades taken) ─────────────────────────┐')
   const byExpert = new Map<string, TradeRow[]>()
   for (const t of trades) {
-    const k = t.copied_label ?? t.copied_from.slice(0, 12)
+    const k = t.source_label ?? t.source_ref.slice(0, 12)
     byExpert.set(k, [...(byExpert.get(k) ?? []), t])
   }
   const sortedExperts = [...byExpert.entries()]

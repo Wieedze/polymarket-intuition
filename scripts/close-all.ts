@@ -78,7 +78,7 @@ async function main(): Promise<void> {
       if (!DRY_RUN) {
         // Sell at slightly below current price to ensure fill
         const sellPrice = Math.max(pos.curPrice - 0.02, 0.01)
-        const result = await closePosition(pos.asset, pos.size, sellPrice, pos.negativeRisk ?? false)
+        const result = await closePosition(pos.asset, pos.size, sellPrice, pos.negativeRisk ?? false, pos.conditionId)
         if (result.success) {
           console.log(`    ✅ Sell order placed | orderId: ${result.orderId?.slice(0, 12)}`)
           sold++
@@ -98,7 +98,7 @@ async function main(): Promise<void> {
       if (!DRY_RUN) {
         // Sell at slightly below current price to fill faster
         const sellPrice = Math.max(pos.curPrice - 0.02, 0.01)
-        const result = await closePosition(pos.asset, pos.size, sellPrice, pos.negativeRisk ?? false)
+        const result = await closePosition(pos.asset, pos.size, sellPrice, pos.negativeRisk ?? false, pos.conditionId)
         if (result.success) {
           console.log(`    ✅ Sell order placed | orderId: ${result.orderId?.slice(0, 12)}`)
           sold++

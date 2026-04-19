@@ -681,7 +681,7 @@ async function runExitStrategy(): Promise<Record<string, number>> {
           const pnl = sharesToSell * (exitPrice - trade.entryPrice)
           console.log(`  🏜️ DRY-RUN ${exitEmoji(decision.reason)} ${decision.reason.toUpperCase()} | ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)} | ${(decision.partialFraction * 100).toFixed(0)}% sold @ ${(exitPrice * 100).toFixed(0)}¢ | ${trade.title}`)
         } else if (exitMeta) {
-          const result = await closePosition(exitMeta.tokenId, sharesToSell, exitPrice, exitMeta.negRisk)
+          const result = await closePosition(exitMeta.tokenId, sharesToSell, exitPrice, exitMeta.negRisk, trade.conditionId)
           if (!result.success) {
             console.log(`  ⚠️  PARTIAL EXIT FAILED | ${result.error} | ${trade.title.slice(0, 40)}`)
             continue
@@ -733,7 +733,7 @@ async function runExitStrategy(): Promise<Record<string, number>> {
           const pnl = sharesToSell * (exitPrice - trade.entryPrice)
           console.log(`  🏜️ DRY-RUN ${exitEmoji(decision.reason)} ${decision.reason.toUpperCase()} | ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)} | ${decision.message} | ${trade.title}`)
         } else if (exitMeta) {
-          const result = await closePosition(exitMeta.tokenId, sharesToSell, exitPrice, exitMeta.negRisk)
+          const result = await closePosition(exitMeta.tokenId, sharesToSell, exitPrice, exitMeta.negRisk, trade.conditionId)
           if (!result.success) {
             console.log(`  ⚠️  EXIT FAILED | ${result.error} | ${trade.title.slice(0, 40)}`)
             continue

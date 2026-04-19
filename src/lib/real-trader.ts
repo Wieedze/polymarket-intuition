@@ -372,14 +372,30 @@ export async function closePosition(
   tokenId: string,
   size: number,
   curPrice: number,
-  negRisk: boolean = false
+  negRisk: boolean = false,
+  conditionId?: string
 ): Promise<RealOrderResult> {
   try {
     const client = await getClient()
     const { OrderType, Side } = await import('@polymarket/clob-client')
 
-    // Round price down to tick size 0.01
-    const roundedPrice = parseFloat((Math.floor(curPrice * 100) / 100).toFixed(2))
+    // Fetch the market's minimum_tick_size — some sports markets use 0.001.
+    // Must match the server's expected tick, otherwise the signed order hash
+    // doesn't match and Polymarket returns "invalid signature".
+    let tick = 0.01
+    if (conditionId) {
+      try {
+        const marketInfo = await client.getMarket(conditionId) as Record<string, unknown>
+        const rawTickSize = parseFloat((marketInfo?.minimum_tick_size as string) ?? '0.01')
+        tick = rawTickSize > 0 ? rawTickSize : 0.01
+      } catch {
+        // If market lookup fails, fall back to 0.01 (most common)
+      }
+    }
+    const tickSize = tick.toString()
+
+    // Round price down to the nearest tick
+    const roundedPrice = parseFloat((Math.floor(curPrice / tick) * tick).toFixed(4))
 
     // Get actual on-chain share count and cap to it
     const realShares = await getRealShareCount(tokenId)
@@ -396,7 +412,7 @@ export async function closePosition(
         size: flooredSize,
         side: Side.SELL,
       },
-      { tickSize: '0.01', negRisk },
+      { tickSize, negRisk },
       OrderType.GTC
     ) as Record<string, unknown>
 
